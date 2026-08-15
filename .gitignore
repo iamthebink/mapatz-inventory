@@ -1,0 +1,6 @@
+node_modules/
+dist/
+data/
+.pnpm-store/
+*.log
+node_modules
