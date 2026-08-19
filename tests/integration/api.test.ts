@@ -8,12 +8,20 @@ import { InventoryService } from '../../src/domain/inventory.js';
 import { createApp } from '../../src/server/index.js';
 
 const cleanup: string[] = [];
-afterEach(() => { for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
+});
 
 function fixture(clock: { now: number } = { now: 1_000 }) {
   const db = openDatabase(':memory:');
   const inventory = new InventoryService(db);
-  const app = createApp({ database: db, operatorPassword: 'operator-pass', adminPassword: 'admin-pass', now: () => clock.now, serveWeb: false });
+  const app = createApp({
+    database: db,
+    operatorPassword: 'operator-pass',
+    adminPassword: 'admin-pass',
+    now: () => clock.now,
+    serveWeb: false,
+  });
   return { db, inventory, app, agent: request.agent(app), clock };
 }
 
@@ -24,17 +32,26 @@ function role(agent: ReturnType<typeof request.agent>, target: string, password?
 describe('inventory API permission and edge-case matrix', () => {
   it('requires the target password for upward roles and no password for downward roles', async () => {
     const { db, agent } = fixture();
-    await role(agent, 'operator', 'wrong').expect(401).expect(({ body }) => expect(body.message).toBe('סיסמה שגויה'));
-    await role(agent, 'operator', 'operator-pass').expect(200).expect(({ body }) => expect(body.role).toBe('operator'));
+    await role(agent, 'operator', 'wrong')
+      .expect(401)
+      .expect(({ body }) => expect(body.message).toBe('סיסמה שגויה'));
+    await role(agent, 'operator', 'operator-pass')
+      .expect(200)
+      .expect(({ body }) => expect(body.role).toBe('operator'));
     await role(agent, 'admin', 'operator-pass').expect(401);
-    await role(agent, 'admin', 'admin-pass').expect(200).expect(({ body }) => expect(body.role).toBe('admin'));
-    await role(agent, 'guest').expect(200).expect(({ body }) => expect(body.role).toBe('guest'));
+    await role(agent, 'admin', 'admin-pass')
+      .expect(200)
+      .expect(({ body }) => expect(body.role).toBe('admin'));
+    await role(agent, 'guest')
+      .expect(200)
+      .expect(({ body }) => expect(body.role).toBe('guest'));
     db.close();
   });
 
   it('enforces the same permission matrix for forbidden mutations', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'כפפה', kind: 'consumable' }); inventory.addStock(item.id, 5);
+    const item = inventory.createItem({ name: 'כפפה', kind: 'consumable' });
+    inventory.addStock(item.id, 5);
     await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(403);
     await role(agent, 'operator', 'operator-pass').expect(200);
     await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
@@ -46,11 +63,19 @@ describe('inventory API permission and edge-case matrix', () => {
 
   it('issues consumables borrower-free and rejects borrower fields, invalid quantities, and insufficient stock', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'מים', kind: 'consumable' }); inventory.addStock(item.id, 2);
+    const item = inventory.createItem({ name: 'מים', kind: 'consumable' });
+    inventory.addStock(item.id, 2);
     await role(agent, 'operator', 'operator-pass');
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1, borrowerId: 4 }).expect(400);
+    await agent
+      .post('/api/issue')
+      .send({ itemId: item.id, quantity: 1, borrowerId: 4 })
+      .expect(400);
     await agent.post('/api/issue').send({ itemId: item.id, quantity: 0 }).expect(400);
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 3 }).expect(400).expect(({ body }) => expect(body.error).toBe('insufficient_stock'));
+    await agent
+      .post('/api/issue')
+      .send({ itemId: item.id, quantity: 3 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('insufficient_stock'));
     await agent.post('/api/issue').send({ itemId: item.id, quantity: 2 }).expect(201);
     expect(inventory.listLedger().find((event) => event.kind === 'issued')?.borrower_id).toBeNull();
     db.close();
@@ -58,22 +83,47 @@ describe('inventory API permission and edge-case matrix', () => {
 
   it('checks out only to an active borrower and partially returns usable/damaged quantities atomically', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'אוהל', kind: 'non_consumable' }); inventory.addStock(item.id, 3);
-    const borrower = inventory.createBorrower({ username: 'CampA', name: 'מחנה א', type: 'camp_organization' });
+    const item = inventory.createItem({ name: 'אוהל', kind: 'non_consumable' });
+    inventory.addStock(item.id, 3);
+    const borrower = inventory.createBorrower({
+      username: 'CampA',
+      name: 'מחנה א',
+      type: 'camp_organization',
+    });
     await role(agent, 'operator', 'operator-pass');
-    const checkout = await agent.post('/api/checkout').send({ itemId: item.id, borrowerId: borrower.id, quantity: 2 }).expect(201);
-    await agent.post('/api/return').send({ checkoutId: checkout.body.eventId, usable: 1, damaged: 0 }).expect(201);
-    await agent.post('/api/return').send({ checkoutId: checkout.body.eventId, usable: 2, damaged: 0 }).expect(400).expect(({ body }) => expect(body.error).toBe('over_return'));
+    const checkout = await agent
+      .post('/api/checkout')
+      .send({ itemId: item.id, borrowerId: borrower.id, quantity: 2 })
+      .expect(201);
+    await agent
+      .post('/api/return')
+      .send({ checkoutId: checkout.body.eventId, usable: 1, damaged: 0 })
+      .expect(201);
+    await agent
+      .post('/api/return')
+      .send({ checkoutId: checkout.body.eventId, usable: 2, damaged: 0 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('over_return'));
     expect(inventory.listLoans()[0]?.outstanding).toBe(1);
     inventory.archiveBorrower(borrower.id, false);
-    const inactive = inventory.createBorrower({ username: 'old-user', name: 'ישן', type: 'individual' }); inventory.archiveBorrower(inactive.id, true);
-    await agent.post('/api/checkout').send({ itemId: item.id, borrowerId: inactive.id, quantity: 1 }).expect(400).expect(({ body }) => expect(body.error).toBe('inactive_borrower'));
+    const inactive = inventory.createBorrower({
+      username: 'old-user',
+      name: 'ישן',
+      type: 'individual',
+    });
+    inventory.archiveBorrower(inactive.id, true);
+    await agent
+      .post('/api/checkout')
+      .send({ itemId: item.id, borrowerId: inactive.id, quantity: 1 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('inactive_borrower'));
     db.close();
   });
 
   it('restricts lost/unlost to admins and rejects excessive lifecycle quantities', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'גנרטור', kind: 'non_consumable' }); inventory.addStock(item.id, 1);
+    const item = inventory.createItem({ name: 'גנרטור', kind: 'non_consumable' });
+    inventory.addStock(item.id, 1);
     const borrower = inventory.createBorrower({ username: 'power', name: 'חשמל', type: 'other' });
     const checkoutId = inventory.checkout(item.id, borrower.id, 1);
     await role(agent, 'operator', 'operator-pass');
@@ -87,48 +137,80 @@ describe('inventory API permission and edge-case matrix', () => {
   });
 
   it('expires idle privilege server-side and returns a stale mutation as forbidden', async () => {
-    const clock = { now: 1_000 }; const { db, inventory, agent } = fixture(clock);
+    const clock = { now: 1_000 };
+    const { db, inventory, agent } = fixture(clock);
     const item = inventory.createItem({ name: 'כבל', kind: 'consumable' });
-    await role(agent, 'admin', 'admin-pass').expect(200).expect(({ body }) => expect(body.deadline).toBe(61_000));
+    await role(agent, 'admin', 'admin-pass')
+      .expect(200)
+      .expect(({ body }) => expect(body.deadline).toBe(61_000));
     clock.now = 61_001;
     await agent.post('/api/stock/add').send({ itemId: item.id, quantity: 1 }).expect(403);
-    await agent.get('/api/session').expect(200).expect(({ body }) => expect(body).toMatchObject({ role: 'guest', deadline: null }));
+    await agent
+      .get('/api/session')
+      .expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'guest', deadline: null }));
     db.close();
   });
 
   it('extends an active user deadline on authenticated activity', async () => {
     const { db, agent, clock } = fixture();
-    await role(agent, 'operator', 'operator-pass').expect(200).expect(({ body }) => expect(body.deadline).toBe(301_000));
+    await role(agent, 'operator', 'operator-pass')
+      .expect(200)
+      .expect(({ body }) => expect(body.deadline).toBe(301_000));
     clock.now = 100_000;
     await agent.get('/api/items').expect(200);
-    await agent.get('/api/session').expect(200).expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: 400_000 }));
+    await agent
+      .get('/api/session')
+      .expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: 400_000 }));
     db.close();
   });
 
   it('revokes sessions for a changed role and accepts only the new password', async () => {
     const { db, app } = fixture();
-    const operator = request.agent(app); const admin = request.agent(app);
+    const operator = request.agent(app);
+    const admin = request.agent(app);
     await role(operator, 'operator', 'operator-pass').expect(200);
     await role(admin, 'admin', 'admin-pass').expect(200);
-    await admin.post('/api/password').send({ role: 'operator', password: 'new-operator-pass' }).expect(204);
-    await operator.get('/api/session').expect(200).expect(({ body }) => expect(body.role).toBe('guest'));
+    await admin
+      .post('/api/password')
+      .send({ role: 'operator', password: 'new-operator-pass' })
+      .expect(204);
+    await operator
+      .get('/api/session')
+      .expect(200)
+      .expect(({ body }) => expect(body.role).toBe('guest'));
     await role(operator, 'operator', 'operator-pass').expect(401);
     await role(operator, 'operator', 'new-operator-pass').expect(200);
     db.close();
   });
 
   it('persists changed password hashes and ignores later bootstrap values on reopen', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'mapatz-credentials-')); cleanup.push(directory);
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-credentials-'));
+    cleanup.push(directory);
     const filename = join(directory, 'inventory.sqlite');
     let db = openDatabase(filename);
-    const firstApp = createApp({ database: db, operatorPassword: 'first-operator', adminPassword: 'first-admin', serveWeb: false });
+    const firstApp = createApp({
+      database: db,
+      operatorPassword: 'first-operator',
+      adminPassword: 'first-admin',
+      serveWeb: false,
+    });
     const firstAgent = request.agent(firstApp);
     await role(firstAgent, 'admin', 'first-admin').expect(200);
-    await firstAgent.post('/api/password').send({ role: 'operator', password: 'persisted-operator' }).expect(204);
+    await firstAgent
+      .post('/api/password')
+      .send({ role: 'operator', password: 'persisted-operator' })
+      .expect(204);
     db.close();
 
     db = openDatabase(filename);
-    const app = createApp({ database: db, operatorPassword: 'replacement-operator', adminPassword: 'replacement-admin', serveWeb: false });
+    const app = createApp({
+      database: db,
+      operatorPassword: 'replacement-operator',
+      adminPassword: 'replacement-admin',
+      serveWeb: false,
+    });
     const agent = request.agent(app);
     await role(agent, 'operator', 'replacement-operator').expect(401);
     await role(agent, 'operator', 'first-operator').expect(401);
@@ -144,33 +226,70 @@ describe('inventory API permission and edge-case matrix', () => {
 
   it('returns structured errors for malformed or oversized JSON and unknown API routes', async () => {
     const { db, agent } = fixture();
-    await agent.post('/api/session/role').set('content-type', 'application/json').send('{bad').expect(400)
+    await agent
+      .post('/api/session/role')
+      .set('content-type', 'application/json')
+      .send('{bad')
+      .expect(400)
       .expect(({ body }) => expect(body).toMatchObject({ error: 'invalid_json' }));
-    await agent.post('/api/session/role').set('content-type', 'application/json').send(JSON.stringify({ role: 'guest', padding: 'x'.repeat(33_000) })).expect(400)
+    await agent
+      .post('/api/session/role')
+      .set('content-type', 'application/json')
+      .send(JSON.stringify({ role: 'guest', padding: 'x'.repeat(33_000) }))
+      .expect(400)
       .expect(({ body }) => expect(body).toMatchObject({ error: 'invalid_json' }));
-    await agent.get('/api/does-not-exist').expect('content-type', /json/).expect(404)
+    await agent
+      .get('/api/does-not-exist')
+      .expect('content-type', /json/)
+      .expect(404)
       .expect(({ body }) => expect(body).toMatchObject({ error: 'not_found' }));
     db.close();
   });
 
   it('enforces alias bounds at the API boundary', async () => {
-    const { db, agent } = fixture(); await role(agent, 'admin', 'admin-pass');
-    await agent.post('/api/items').send({ name: 'פריט', kind: 'consumable', aliases: [' '] }).expect(400);
-    await agent.post('/api/items').send({ name: 'פריט', kind: 'consumable', aliases: Array.from({ length: 21 }, (_, index) => `alias-${index}`) }).expect(400);
+    const { db, agent } = fixture();
+    await role(agent, 'admin', 'admin-pass');
+    await agent
+      .post('/api/items')
+      .send({ name: 'פריט', kind: 'consumable', aliases: [' '] })
+      .expect(400);
+    await agent
+      .post('/api/items')
+      .send({
+        name: 'פריט',
+        kind: 'consumable',
+        aliases: Array.from({ length: 21 }, (_, index) => `alias-${index}`),
+      })
+      .expect(400);
     db.close();
   });
 
   it('preserves history while hiding archived records and rejects archive with outstanding equipment', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' }); inventory.addStock(item.id, 1);
-    const borrower = inventory.createBorrower({ username: 'drill-user', name: 'קודח', type: 'individual' });
+    const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' });
+    inventory.addStock(item.id, 1);
+    const borrower = inventory.createBorrower({
+      username: 'drill-user',
+      name: 'קודח',
+      type: 'individual',
+    });
     const checkoutId = inventory.checkout(item.id, borrower.id, 1);
     await role(agent, 'admin', 'admin-pass');
-    await agent.post(`/api/items/${item.id}/archive`).send({ archived: true }).expect(400).expect(({ body }) => expect(body.error).toBe('active_loan'));
+    await agent
+      .post(`/api/items/${item.id}/archive`)
+      .send({ archived: true })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('active_loan'));
     inventory.returnCheckout(checkoutId, 1, 0);
     await agent.post(`/api/items/${item.id}/archive`).send({ archived: true }).expect(204);
-    await agent.get('/api/items').expect(200).expect(({ body }) => expect(body).toEqual([]));
-    await agent.get('/api/items?all=1').expect(200).expect(({ body }) => expect(body[0].archived).toBe(true));
+    await agent
+      .get('/api/items')
+      .expect(200)
+      .expect(({ body }) => expect(body).toEqual([]));
+    await agent
+      .get('/api/items?all=1')
+      .expect(200)
+      .expect(({ body }) => expect(body[0].archived).toBe(true));
     expect(inventory.listLedger()).toHaveLength(3);
     db.close();
   });

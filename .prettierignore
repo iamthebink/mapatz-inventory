@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+coverage/
+.vite/
+.pnpm-store/
+.agents/
+_bmad/
+_bmad-output/
+pnpm-lock.yaml
+
+*.docx
+*.xlsx
+*.xslx

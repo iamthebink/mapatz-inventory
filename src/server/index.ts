@@ -18,20 +18,35 @@ export interface AppOptions {
 
 export function createApp(options: AppOptions): Express {
   const app = express();
-  const sessions = new SessionStore(options.database, {
-    operator: options.operatorPassword,
-    admin: options.adminPassword,
-  }, options.now, options.idleMs);
+  const sessions = new SessionStore(
+    options.database,
+    {
+      operator: options.operatorPassword,
+      admin: options.adminPassword,
+    },
+    options.now,
+    options.idleMs,
+  );
   const service = new InventoryService(options.database);
   app.use(express.json({ limit: '32kb' }));
-  app.use('/api', (req, res, next) => {
-    const session = sessions.get(readCookie(req.headers.cookie, 'mapatz_session'));
-    res.cookie('mapatz_session', session.token, { httpOnly: true, sameSite: 'strict', secure: false, path: '/' });
-    res.locals.session = sessions.touch(session);
-    next();
-  }, apiRouter(service, sessions), (_req, res) => {
-    res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
-  });
+  app.use(
+    '/api',
+    (req, res, next) => {
+      const session = sessions.get(readCookie(req.headers.cookie, 'mapatz_session'));
+      res.cookie('mapatz_session', session.token, {
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: false,
+        path: '/',
+      });
+      res.locals.session = sessions.touch(session);
+      next();
+    },
+    apiRouter(service, sessions),
+    (_req, res) => {
+      res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
+    },
+  );
 
   if (options.serveWeb !== false) {
     const web = resolve(fileURLToPath(new URL('../web', import.meta.url)));
@@ -41,11 +56,26 @@ export function createApp(options: AppOptions): Express {
 
   const errors: ErrorRequestHandler = (error, _req, res, next) => {
     void next;
-    if (error instanceof DomainError) return void res.status(error.status).json({ error: error.code, message: error.message });
-    if (error && typeof error === 'object' && 'type' in error && (error.type === 'entity.parse.failed' || error.type === 'entity.too.large'))
-      return void res.status(400).json({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
-    if (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('SQLITE_CONSTRAINT'))
-      return void res.status(409).json({ error: 'conflict', message: 'הערך כבר קיים או אינו תקין' });
+    if (error instanceof DomainError)
+      return void res.status(error.status).json({ error: error.code, message: error.message });
+    if (
+      error &&
+      typeof error === 'object' &&
+      'type' in error &&
+      (error.type === 'entity.parse.failed' || error.type === 'entity.too.large')
+    )
+      return void res
+        .status(400)
+        .json({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      String(error.code).startsWith('SQLITE_CONSTRAINT')
+    )
+      return void res
+        .status(409)
+        .json({ error: 'conflict', message: 'הערך כבר קיים או אינו תקין' });
     console.error(error);
     res.status(500).json({ error: 'internal_error', message: 'אירעה שגיאה פנימית' });
   };
@@ -56,7 +86,11 @@ export function createApp(options: AppOptions): Express {
 if (process.env.NODE_ENV !== 'test') {
   const dataDir = process.env.DATA_DIR ?? './data';
   const db = openDatabase(resolve(dataDir, 'inventory.sqlite'));
-  const app = createApp({ database: db, operatorPassword: process.env.OPERATOR_PASSWORD, adminPassword: process.env.ADMIN_PASSWORD });
+  const app = createApp({
+    database: db,
+    operatorPassword: process.env.OPERATOR_PASSWORD,
+    adminPassword: process.env.ADMIN_PASSWORD,
+  });
   const port = Number(process.env.PORT ?? 3000);
   app.listen(port, () => console.log(`Mapatz inventory listening on http://localhost:${port}`));
 }

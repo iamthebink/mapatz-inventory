@@ -2,9 +2,16 @@ export type Role = 'guest' | 'operator' | 'admin';
 export type ItemKind = 'consumable' | 'non_consumable';
 export type BorrowerType = 'individual' | 'camp_organization' | 'other';
 export type EventKind =
-  | 'stock_added' | 'stock_removed' | 'issued' | 'checked_out'
-  | 'returned_usable' | 'returned_damaged' | 'marked_lost' | 'unmarked_lost'
-  | 'repaired' | 'written_off';
+  | 'stock_added'
+  | 'stock_removed'
+  | 'issued'
+  | 'checked_out'
+  | 'returned_usable'
+  | 'returned_damaged'
+  | 'marked_lost'
+  | 'unmarked_lost'
+  | 'repaired'
+  | 'written_off';
 
 export interface Item {
   id: number;
@@ -29,7 +36,11 @@ export interface Borrower {
 }
 
 export class DomainError extends Error {
-  constructor(public readonly code: string, message: string, public readonly status = 400) {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly status = 400,
+  ) {
     super(message);
   }
 }

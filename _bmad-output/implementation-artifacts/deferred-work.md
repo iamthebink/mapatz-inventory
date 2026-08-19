@@ -13,3 +13,11 @@
 - source_spec: none
   summary: Add operational reports for outstanding loans, daily activity, inventory by location, damage, and loss.
   evidence: Split from the initial core workflow because reporting can be derived from the stable ledger after the core transaction paths are validated.
+
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-formatting-and-linting.md`
+  summary: Decide whether CI should enforce formatting, zero-warning linting, typechecking, and tests on every change.
+  evidence: The repository now has reproducible local gates but no checked-in CI workflow; enforcement policy and hosting integration are independently shippable and outside this formatting/linting baseline.
+
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-formatting-and-linting.md`
+  summary: Decide whether to adopt type-aware strict TypeScript linting and eliminate the repository-wide `no-explicit-any` exception.
+  evidence: ESLint currently uses non-type-aware recommended rules and explicitly disables `@typescript-eslint/no-explicit-any`; strengthening that policy would surface existing database-boundary typing work and requires a deliberate scope decision rather than a mechanical cleanup.

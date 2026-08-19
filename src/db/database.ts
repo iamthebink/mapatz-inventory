@@ -20,7 +20,11 @@ export function migrate(db: InventoryDatabase): void {
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
-  const applied = new Set((db.prepare('SELECT version FROM migrations').all() as { version: number }[]).map((row) => Number(row.version)));
+  const applied = new Set(
+    (db.prepare('SELECT version FROM migrations').all() as { version: number }[]).map((row) =>
+      Number(row.version),
+    ),
+  );
   const migrations = [{ version: 1, filename: '001_initial.sql' }];
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
