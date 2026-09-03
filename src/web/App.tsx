@@ -667,7 +667,7 @@ export function App() {
               <Boxes className="size-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">מלאי מפ״ץ</h1>
+              <h1 className="text-xl font-bold tracking-tight">מלאי מפ״צ</h1>
               <p className="mt-0.5 flex items-center gap-1.5 text-xs text-ctp-subtext">
                 <span className="size-1.5 rounded-full bg-ctp-green" />
                 מקומי · עובד ללא אינטרנט
