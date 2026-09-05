@@ -56,6 +56,22 @@ export const WORKBOOK_CONTRACT = {
         'Created At',
       ],
     },
+    unresolvedDamage: {
+      name: 'Unresolved Damage',
+      columns: ['Item Code', 'Item Name', 'Location', 'Unresolved Damaged Quantity'],
+    },
+    consumablesUsage: {
+      name: 'Consumables Usage',
+      columns: [
+        'Item Code',
+        'Item Name',
+        'Location',
+        'Start of Cycle Stock',
+        'Added During Cycle',
+        'Usage',
+        'Left',
+      ],
+    },
   },
 } as const;
 

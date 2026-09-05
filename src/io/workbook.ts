@@ -1,10 +1,12 @@
 import ExcelJS, { type CellValue, type Worksheet } from 'exceljs';
 import {
+  consumablesUsageReport,
   type InventoryTransferSnapshot,
   type RecoveryPayload,
   type ResetItem,
   type ResetPayload,
   type TransferLocation,
+  unresolvedDamageReport,
   validateRecoveryPayload,
 } from '../domain/import-export.js';
 import { DomainError, type BorrowerType, type EventKind, type ItemKind } from '../domain/types.js';
@@ -96,6 +98,29 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
       event.relatedEventId,
       event.note,
       event.createdAt,
+    ]),
+  );
+  addSheet(
+    workbook,
+    'unresolvedDamage',
+    unresolvedDamageReport(snapshot).map((row) => [
+      row.itemCode,
+      row.itemName,
+      row.location,
+      row.unresolvedDamagedQuantity,
+    ]),
+  );
+  addSheet(
+    workbook,
+    'consumablesUsage',
+    consumablesUsageReport(snapshot).map((row) => [
+      row.itemCode,
+      row.itemName,
+      row.location,
+      row.startOfCycleStock,
+      row.addedDuringCycle,
+      row.usage,
+      row.left,
     ]),
   );
   return Buffer.from(await workbook.xlsx.writeBuffer());

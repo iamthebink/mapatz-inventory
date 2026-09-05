@@ -2,7 +2,7 @@
 title: 'Import, Export, and Field Recovery'
 type: 'feature'
 created: '2026-09-05'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '1f44faf048c07cd590143e741c43acb8cd9e1bba'
@@ -57,8 +57,8 @@ context:
 - [x] Story 1 -- add schema/baseline foundation, central workbook contract, exporter, admin server/UI export, and representative deterministic workbook tests.
 - [x] Story 2 -- add reset parser/validator, code allocation and location remapping, atomic replacement, confirmed admin server/UI import, adversarial/rollback tests, then checkpoint.
 - [x] Story 3 -- add complete recovery validator/replacement and clean-destination business-equivalence/future-operability tests, then checkpoint.
-- [ ] Story 4 -- add unresolved-damage report reconciled to recovery state.
-- [ ] Story 5 -- add consumables report with baseline/addition/issue/correction semantics and reset-vs-recovery tests; run all repository gates.
+- [x] Story 4 -- add unresolved-damage report reconciled to recovery state.
+- [x] Story 5 -- add consumables report with baseline/addition/issue/correction semantics and reset-vs-recovery tests; run all repository gates.
 
 **Acceptance Criteria:**
 - Given either import mode, when workbook content is malformed, inconsistent, unauthorized, unconfirmed, cancelled, or fails during commit, then live inventory and destination credentials/configuration are unchanged.
@@ -72,6 +72,7 @@ context:
 - 2026-09-05: Stories 1-2 use ExcelJS at the adapter edge, exact ordered reset headers, JSON-encoded aliases, binary admin endpoints, and a confirmation header backed by a UI confirmation gate. Atomic replacement opens ledger deletion only through a transaction-scoped database guard and never touches credentials.
 - 2026-09-05: Apple Numbers preserves the contracted headers but may add styled trailing blank cells. Header validation now ignores only trailing blank cells while still rejecting missing, reordered, renamed, or additional nonblank columns.
 - 2026-09-05: Story 3 recovery preserves item codes, borrower metadata, event IDs/timestamps/relationships, aliases, archive state, and cycle baselines while regenerating only internal catalog row IDs. A pure domain validator replays the ledger before mutation to prove references, chronology, quantities, lifecycle transitions, derived state, and baseline cutoffs are coherent.
+- 2026-09-05: Stories 4-5 derive both reports as pure projections from the same authoritative snapshot serialized into recovery sheets. Damage includes only the unresolved returned-damaged balance. Consumable additions and issues count only events after each item's baseline cutoff, while remaining stock uses export-time availability so corrections affect `Left` without becoming usage.
 
 ## Spec Change Log
 
@@ -86,6 +87,12 @@ Keep XLSX concerns at the adapter edge. The domain accepts validated workbook-ne
 **Commands:**
 - `pnpm test -- <focused files>` -- each story's narrow and integration tests pass before proceeding.
 - `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build` -- all final repository gates pass.
+
+**Final evidence (2026-09-05):**
+- Story 4 focused: `pnpm exec vitest run tests/domain/reports.test.ts -t "unresolved damage"` -- 1 passed.
+- Story 5 focused: `pnpm exec vitest run tests/domain/reports.test.ts -t "consumable usage"` -- 1 passed.
+- Workbook/recovery/report regression: `pnpm exec vitest run tests/domain/workbook.test.ts tests/domain/recovery.test.ts tests/domain/reports.test.ts` -- 3 files, 16 tests passed.
+- Repository gates: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build` -- all passed; full suite 6 files, 39 tests passed; production build completed successfully.
 
 **Manual checks:**
 - Export as admin and inspect the workbook's fixed sheets/headers; confirm no credential/configuration fields.

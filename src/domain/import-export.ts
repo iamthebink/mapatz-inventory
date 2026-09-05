@@ -75,6 +75,72 @@ export interface RecoveryPayload {
   events: TransferEvent[];
 }
 
+export interface UnresolvedDamageReportRow {
+  itemCode: number;
+  itemName: string;
+  location: string | null;
+  unresolvedDamagedQuantity: number;
+}
+
+export interface ConsumablesUsageReportRow {
+  itemCode: number;
+  itemName: string;
+  location: string | null;
+  startOfCycleStock: number;
+  addedDuringCycle: number;
+  usage: number;
+  left: number;
+}
+
+export function unresolvedDamageReport(
+  snapshot: InventoryTransferSnapshot,
+): UnresolvedDamageReportRow[] {
+  const quantities = new Map<number, number>();
+  for (const event of snapshot.events) {
+    const change =
+      event.kind === 'returned_damaged'
+        ? event.quantity
+        : event.kind === 'repaired' || event.kind === 'written_off'
+          ? -event.quantity
+          : 0;
+    if (change !== 0)
+      quantities.set(event.itemCode, (quantities.get(event.itemCode) ?? 0) + change);
+  }
+  return snapshot.items
+    .filter((item) => item.kind === 'non_consumable' && (quantities.get(item.code) ?? 0) > 0)
+    .map((item) => ({
+      itemCode: item.code,
+      itemName: item.name,
+      location: item.location,
+      unresolvedDamagedQuantity: quantities.get(item.code)!,
+    }));
+}
+
+export function consumablesUsageReport(
+  snapshot: InventoryTransferSnapshot,
+): ConsumablesUsageReportRow[] {
+  return snapshot.items
+    .filter((item) => item.kind === 'consumable')
+    .map((item) => {
+      let addedDuringCycle = 0;
+      let usage = 0;
+      for (const event of snapshot.events) {
+        if (event.itemCode !== item.code || event.id <= item.baselineThroughEventId) continue;
+        if (event.kind === 'stock_added') addedDuringCycle += event.quantity;
+        if (event.kind === 'issued') usage += event.quantity;
+      }
+      return {
+        itemCode: item.code,
+        itemName: item.name,
+        location: item.location,
+        startOfCycleStock: item.startingStock,
+        addedDuringCycle,
+        usage,
+        left: item.resetTotal,
+      };
+    });
+}
+
 type RecoveryItemState = {
   available: number;
   damaged: number;
