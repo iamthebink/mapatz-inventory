@@ -52,3 +52,15 @@ export async function importResetWorkbook(file: File): Promise<void> {
   });
   await requireSuccess(response);
 }
+
+export async function importRecoveryWorkbook(file: File): Promise<void> {
+  const response = await fetch('/api/workbook/recovery', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'x-mapatz-confirmed': 'true',
+    },
+    body: file,
+  });
+  await requireSuccess(response);
+}

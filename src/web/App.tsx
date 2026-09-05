@@ -36,9 +36,9 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { api, downloadInventoryWorkbook, importResetWorkbook } from './api';
+import { api, downloadInventoryWorkbook, importRecoveryWorkbook, importResetWorkbook } from './api';
 import { DataTable, type TableColumn } from './DataTable';
-import { confirmResetImport } from './import-confirmation';
+import { confirmRecoveryImport, confirmResetImport } from './import-confirmation';
 
 type Role = 'guest' | 'operator' | 'admin';
 type Item = {
@@ -157,6 +157,7 @@ export function App() {
   const [roleRequest, setRoleRequest] = useState<Role | null>(null);
   const pendingRef = useRef(false);
   const resetFileRef = useRef<HTMLInputElement>(null);
+  const recoveryFileRef = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(Date.now());
   const remaining =
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
@@ -371,6 +372,16 @@ export function App() {
     }
     void action(() => importResetWorkbook(file)).finally(() => {
       if (resetFileRef.current) resetFileRef.current.value = '';
+    });
+  }
+  function importRecovery(file: File | undefined) {
+    if (!file) return;
+    if (!confirmRecoveryImport((message) => window.confirm(message))) {
+      if (recoveryFileRef.current) recoveryFileRef.current.value = '';
+      return;
+    }
+    void action(() => importRecoveryWorkbook(file)).finally(() => {
+      if (recoveryFileRef.current) recoveryFileRef.current.value = '';
     });
   }
 
@@ -1228,6 +1239,27 @@ export function App() {
                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                       disabled={!isAdmin || pending}
                       onChange={(event) => importReset(event.target.files?.[0])}
+                    />
+                  </section>
+                  <section className="action-card">
+                    <div className="mb-5 flex items-start gap-3">
+                      <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-ctp-blue/10 text-ctp-blue">
+                        <Upload className="size-4.5" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold">שחזור מלא</h3>
+                        <p className="mt-0.5 text-xs text-ctp-subtext">
+                          משתמש רק בגיליונות Recovery ומשחזר את הקטלוג וההיסטוריה המלאה
+                        </p>
+                      </div>
+                    </div>
+                    <input
+                      ref={recoveryFileRef}
+                      className="input-field"
+                      type="file"
+                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      disabled={!isAdmin || pending}
+                      onChange={(event) => importRecovery(event.target.files?.[0])}
                     />
                   </section>
                   {!isAdmin && <PermissionNote />}

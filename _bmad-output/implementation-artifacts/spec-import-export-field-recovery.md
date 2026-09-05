@@ -56,7 +56,7 @@ context:
 **Execution:**
 - [x] Story 1 -- add schema/baseline foundation, central workbook contract, exporter, admin server/UI export, and representative deterministic workbook tests.
 - [x] Story 2 -- add reset parser/validator, code allocation and location remapping, atomic replacement, confirmed admin server/UI import, adversarial/rollback tests, then checkpoint.
-- [ ] Story 3 -- add complete recovery validator/replacement and clean-destination business-equivalence/future-operability tests, then checkpoint.
+- [x] Story 3 -- add complete recovery validator/replacement and clean-destination business-equivalence/future-operability tests, then checkpoint.
 - [ ] Story 4 -- add unresolved-damage report reconciled to recovery state.
 - [ ] Story 5 -- add consumables report with baseline/addition/issue/correction semantics and reset-vs-recovery tests; run all repository gates.
 
@@ -71,6 +71,7 @@ context:
 - 2026-09-05: Legacy data has no inferable original cycle boundary. Migration establishes each existing item's current business quantity as its baseline at upgrade and cuts prior events out of the new reporting cycle; subsequent reset/recovery semantics are exact.
 - 2026-09-05: Stories 1-2 use ExcelJS at the adapter edge, exact ordered reset headers, JSON-encoded aliases, binary admin endpoints, and a confirmation header backed by a UI confirmation gate. Atomic replacement opens ledger deletion only through a transaction-scoped database guard and never touches credentials.
 - 2026-09-05: Apple Numbers preserves the contracted headers but may add styled trailing blank cells. Header validation now ignores only trailing blank cells while still rejecting missing, reordered, renamed, or additional nonblank columns.
+- 2026-09-05: Story 3 recovery preserves item codes, borrower metadata, event IDs/timestamps/relationships, aliases, archive state, and cycle baselines while regenerating only internal catalog row IDs. A pure domain validator replays the ledger before mutation to prove references, chronology, quantities, lifecycle transitions, derived state, and baseline cutoffs are coherent.
 
 ## Spec Change Log
 

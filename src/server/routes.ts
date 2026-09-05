@@ -3,7 +3,7 @@ import { z, type ZodType } from 'zod';
 import type { InventoryService } from '../domain/inventory.js';
 import type { InventoryTransferService } from '../domain/import-export.js';
 import { DomainError, type Role } from '../domain/types.js';
-import { exportWorkbook, parseResetWorkbook } from '../io/workbook.js';
+import { exportWorkbook, parseRecoveryWorkbook, parseResetWorkbook } from '../io/workbook.js';
 import { WORKBOOK_CONTRACT } from '../io/workbook-contract.js';
 import type { SessionStore } from './session.js';
 
@@ -189,6 +189,28 @@ export function apiRouter(
       if (!Buffer.isBuffer(req.body) || req.body.length === 0)
         throw new DomainError('invalid_workbook', 'יש לבחור קובץ XLSX לייבוא');
       transfers.replaceWithReset(await parseResetWorkbook(req.body));
+      res.status(204).end();
+    }),
+  );
+  api.post(
+    '/workbook/recovery',
+    requireRole('admin'),
+    (req, _res, next) => {
+      if (req.header('x-mapatz-confirmed') !== 'true')
+        return next(
+          new DomainError(
+            'confirmation_required',
+            'יש לאשר במפורש את החלפת המלאי הקיים בשחזור לפני הייבוא',
+            400,
+          ),
+        );
+      next();
+    },
+    express.raw({ type: WORKBOOK_CONTRACT.mimeType, limit: '10mb' }),
+    route(async (req, res) => {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0)
+        throw new DomainError('invalid_workbook', 'יש לבחור קובץ XLSX לשחזור');
+      transfers.replaceWithRecovery(await parseRecoveryWorkbook(req.body));
       res.status(204).end();
     }),
   );

@@ -1,11 +1,13 @@
 import ExcelJS, { type CellValue, type Worksheet } from 'exceljs';
 import {
   type InventoryTransferSnapshot,
+  type RecoveryPayload,
   type ResetItem,
   type ResetPayload,
   type TransferLocation,
+  validateRecoveryPayload,
 } from '../domain/import-export.js';
-import { DomainError, type ItemKind } from '../domain/types.js';
+import { DomainError, type BorrowerType, type EventKind, type ItemKind } from '../domain/types.js';
 import { WORKBOOK_CONTRACT, type WorkbookSheetKey } from './workbook-contract.js';
 
 type Primitive = string | number | boolean | null | undefined;
@@ -149,6 +151,11 @@ function optionalBoolean(value: Primitive, context: string): boolean {
   return importError(`${context} must be TRUE, FALSE, 1, 0, or blank`);
 }
 
+function requiredBoolean(value: Primitive, context: string): boolean {
+  if (isBlank(value)) return importError(`${context} is required and must be a boolean`);
+  return optionalBoolean(value, context);
+}
+
 function aliases(value: Primitive, context: string): string[] {
   if (isBlank(value)) return [];
   if (typeof value !== 'string')
@@ -172,6 +179,25 @@ function aliases(value: Primitive, context: string): string[] {
   if (unique.size !== normalized.length)
     return importError(`${context} contains duplicate aliases`);
   return normalized;
+}
+
+function requiredAliases(value: Primitive, context: string): string[] {
+  if (isBlank(value))
+    return importError(`${context} is required; use [] when there are no aliases`);
+  return aliases(value, context);
+}
+
+function timestamp(value: Primitive, context: string): string {
+  const text = requiredText(value, context, 100);
+  if (!Number.isFinite(Date.parse(text)))
+    return importError(`${context} must be a valid timestamp`);
+  return text;
+}
+
+function plainText(value: Primitive, context: string, maximum: number): string {
+  if (typeof value !== 'string' || value.length > maximum)
+    return importError(`${context} must be text of at most ${maximum} characters`);
+  return value;
 }
 
 function requiredSheet(workbook: ExcelJS.Workbook, key: WorkbookSheetKey): Worksheet {
@@ -275,4 +301,113 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
     nextCode += 1;
   }
   return { locations, items: items as ResetItem[] };
+}
+
+const eventKinds = new Set<EventKind>([
+  'stock_added',
+  'stock_removed',
+  'issued',
+  'checked_out',
+  'returned_usable',
+  'returned_damaged',
+  'marked_lost',
+  'unmarked_lost',
+  'repaired',
+  'written_off',
+]);
+
+export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPayload> {
+  const workbook = new ExcelJS.Workbook();
+  try {
+    const bytes = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    ) as ArrayBuffer;
+    await workbook.xlsx.load(bytes);
+  } catch {
+    return importError('The uploaded file is not a readable XLSX workbook');
+  }
+  const locationSheet = requiredSheet(workbook, 'recoveryLocations');
+  const itemSheet = requiredSheet(workbook, 'recoveryItems');
+  const borrowerSheet = requiredSheet(workbook, 'recoveryBorrowers');
+  const eventSheet = requiredSheet(workbook, 'recoveryEvents');
+
+  const locations = dataRows(locationSheet, 2).map((row, index) => ({
+    name: requiredText(row[0], `Recovery Locations row ${index + 2} Name`),
+    archived: requiredBoolean(row[1], `Recovery Locations row ${index + 2} Archived`),
+  }));
+  const items = dataRows(itemSheet, 10).map((row, index) => {
+    const rowNumber = index + 2;
+    const kind = requiredText(row[2], `Recovery Items row ${rowNumber} Kind`) as ItemKind;
+    if (kind !== 'consumable' && kind !== 'non_consumable')
+      return importError(
+        `Recovery Items row ${rowNumber} Kind must be consumable or non_consumable`,
+      );
+    return {
+      code: integer(row[0], `Recovery Items row ${rowNumber} Item Code`),
+      name: requiredText(row[1], `Recovery Items row ${rowNumber} Name`),
+      kind,
+      location: optionalText(row[3], `Recovery Items row ${rowNumber} Location`),
+      aliases: requiredAliases(row[4], `Recovery Items row ${rowNumber} Aliases`),
+      lotSize: optionalInteger(row[5], `Recovery Items row ${rowNumber} Lot Size`, 1),
+      archived: requiredBoolean(row[6], `Recovery Items row ${rowNumber} Archived`),
+      createdAt: timestamp(row[7], `Recovery Items row ${rowNumber} Created At`),
+      startingStock: integer(row[8], `Recovery Items row ${rowNumber} Starting Stock`, 0),
+      baselineThroughEventId: integer(
+        row[9],
+        `Recovery Items row ${rowNumber} Baseline Through Event ID`,
+        0,
+      ),
+    };
+  });
+  const borrowers = dataRows(borrowerSheet, 6).map((row, index) => {
+    const rowNumber = index + 2;
+    const username = requiredText(row[0], `Recovery Borrowers row ${rowNumber} Username`, 40);
+    if (username.length < 2)
+      return importError(
+        `Recovery Borrowers row ${rowNumber} Username must contain at least 2 characters`,
+      );
+    const type = requiredText(row[3], `Recovery Borrowers row ${rowNumber} Type`) as BorrowerType;
+    if (type !== 'individual' && type !== 'camp_organization' && type !== 'other')
+      return importError(
+        `Recovery Borrowers row ${rowNumber} Type must be individual, camp_organization, or other`,
+      );
+    return {
+      username,
+      name: requiredText(row[1], `Recovery Borrowers row ${rowNumber} Name`),
+      contact: plainText(row[2], `Recovery Borrowers row ${rowNumber} Contact`, 500),
+      type,
+      archived: requiredBoolean(row[4], `Recovery Borrowers row ${rowNumber} Archived`),
+      createdAt: timestamp(row[5], `Recovery Borrowers row ${rowNumber} Created At`),
+    };
+  });
+  const events = dataRows(eventSheet, 8).map((row, index) => {
+    const rowNumber = index + 2;
+    const kind = requiredText(row[1], `Recovery Events row ${rowNumber} Kind`) as EventKind;
+    if (!eventKinds.has(kind))
+      return importError(`Recovery Events row ${rowNumber} has unsupported Kind "${kind}"`);
+    const borrowerUsername = optionalText(
+      row[3],
+      `Recovery Events row ${rowNumber} Borrower Username`,
+    );
+    if (borrowerUsername != null && borrowerUsername.length > 40)
+      return importError(
+        `Recovery Events row ${rowNumber} Borrower Username must be at most 40 characters`,
+      );
+    return {
+      id: integer(row[0], `Recovery Events row ${rowNumber} Event ID`, 1),
+      kind,
+      itemCode: integer(row[2], `Recovery Events row ${rowNumber} Item Code`),
+      borrowerUsername,
+      quantity: integer(row[4], `Recovery Events row ${rowNumber} Quantity`, 1),
+      relatedEventId: optionalInteger(
+        row[5],
+        `Recovery Events row ${rowNumber} Related Event ID`,
+        1,
+      ),
+      note: plainText(row[6], `Recovery Events row ${rowNumber} Note`, 500),
+      createdAt: timestamp(row[7], `Recovery Events row ${rowNumber} Created At`),
+    };
+  });
+  return validateRecoveryPayload({ locations, items, borrowers, events });
 }

@@ -129,6 +129,72 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
+  it('enforces confirmed admin recovery and preserves destination credentials', async () => {
+    const sourceDb = openDatabase(':memory:');
+    const sourceTransfers = new InventoryTransferService(sourceDb);
+    sourceTransfers.replaceWithReset({
+      locations: [{ name: 'Recovery Location', archived: false }],
+      items: [
+        {
+          code: 9,
+          name: 'Recovered Equipment',
+          kind: 'non_consumable',
+          location: 'Recovery Location',
+          aliases: ['Recovery Alias'],
+          lotSize: null,
+          archived: false,
+          total: 3,
+        },
+      ],
+    });
+    const sourceInventory = new InventoryService(sourceDb);
+    const sourceItem = sourceInventory.listItems('', true)[0]!;
+    const sourceBorrower = sourceInventory.createBorrower({
+      username: 'recover-me',
+      name: 'Recovery Borrower',
+      type: 'individual',
+    });
+    sourceInventory.checkout(sourceItem.id, sourceBorrower.id, 1, 'preserved loan');
+    const expected = sourceTransfers.snapshot();
+    const exported = await exportWorkbook(expected);
+
+    const { db, inventory, agent } = fixture();
+    const old = inventory.createItem({ name: 'Destination Data', kind: 'consumable' });
+    inventory.addStock(old.id, 8);
+    const credentialsBefore = db
+      .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
+      .all();
+    await agent
+      .post('/api/workbook/recovery')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .set('x-mapatz-confirmed', 'true')
+      .send(exported)
+      .expect(403);
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    await agent
+      .post('/api/workbook/recovery')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .send(exported)
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('confirmation_required'));
+    expect(inventory.listItems('', true)[0]?.name).toBe('Destination Data');
+    await agent
+      .post('/api/workbook/recovery')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .set('x-mapatz-confirmed', 'true')
+      .send(exported)
+      .expect(204);
+
+    expect(new InventoryTransferService(db).snapshot()).toEqual(expected);
+    expect(
+      db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
+    ).toEqual(credentialsBefore);
+    await role(agent, 'guest').expect(200);
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    sourceDb.close();
+    db.close();
+  });
+
   it('requires the target password for upward roles and no password for downward roles', async () => {
     const { db, agent } = fixture();
     await role(agent, 'operator', 'wrong')
