@@ -222,6 +222,25 @@ describe('inventory XLSX workbook', () => {
     await expect(parseResetWorkbook(await save(altered))).rejects.toThrow(/exact exported columns/);
   });
 
+  it('accepts trailing styled blank columns added by Apple Numbers', async () => {
+    const workbook = await load(await exportWorkbook(emptySnapshot));
+    const locations = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetLocations.name)!;
+    locations.addRow(['North', false]);
+    locations.getRow(1).getCell(5).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFFFF' },
+    };
+    const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
+    items.addRow([1, 'Edited in Numbers', 'consumable', 'North', '', '', '', 17]);
+
+    const numbersRoundTrip = await save(await load(await save(workbook)));
+    await expect(parseResetWorkbook(numbersRoundTrip)).resolves.toMatchObject({
+      locations: [{ name: 'North', archived: false }],
+      items: [{ code: 1, name: 'Edited in Numbers', total: 17 }],
+    });
+  });
+
   it('atomically replaces only inventory-domain data and rolls back a commit failure', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);

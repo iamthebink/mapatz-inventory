@@ -181,9 +181,13 @@ function requiredSheet(workbook: ExcelJS.Workbook, key: WorkbookSheetKey): Works
   const actual = Array.from({ length: definition.columns.length }, (_, index) =>
     primitive(sheet.getRow(1).getCell(index + 1).value),
   );
+  const trailingHeaders = Array.from(
+    { length: Math.max(0, sheet.getRow(1).cellCount - definition.columns.length) },
+    (_, index) => primitive(sheet.getRow(1).getCell(definition.columns.length + index + 1).value),
+  );
   if (
-    sheet.getRow(1).cellCount !== definition.columns.length ||
-    actual.some((value, index) => value !== definition.columns[index])
+    actual.some((value, index) => value !== definition.columns[index]) ||
+    trailingHeaders.some((value) => !isBlank(value))
   )
     return importError(
       `Sheet "${definition.name}" must use the exact exported columns in their original order`,

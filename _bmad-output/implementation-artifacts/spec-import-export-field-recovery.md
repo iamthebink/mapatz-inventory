@@ -70,6 +70,7 @@ context:
 
 - 2026-09-05: Legacy data has no inferable original cycle boundary. Migration establishes each existing item's current business quantity as its baseline at upgrade and cuts prior events out of the new reporting cycle; subsequent reset/recovery semantics are exact.
 - 2026-09-05: Stories 1-2 use ExcelJS at the adapter edge, exact ordered reset headers, JSON-encoded aliases, binary admin endpoints, and a confirmation header backed by a UI confirmation gate. Atomic replacement opens ledger deletion only through a transaction-scoped database guard and never touches credentials.
+- 2026-09-05: Apple Numbers preserves the contracted headers but may add styled trailing blank cells. Header validation now ignores only trailing blank cells while still rejecting missing, reordered, renamed, or additional nonblank columns.
 
 ## Spec Change Log
 
