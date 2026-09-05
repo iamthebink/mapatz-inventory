@@ -25,18 +25,29 @@ export function migrate(db: InventoryDatabase): void {
       Number(row.version),
     ),
   );
-  const migrations = [{ version: 1, filename: '001_initial.sql' }];
+  const migrations = [
+    { version: 1, filename: '001_initial.sql', disableForeignKeys: false },
+    { version: 2, filename: '002_import_export.sql', disableForeignKeys: true },
+  ];
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
     const sql = readFileSync(resolve(here, `migrations/${migration.filename}`), 'utf8');
+    if (migration.disableForeignKeys) db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN IMMEDIATE');
     try {
       db.exec(sql);
+      if (migration.disableForeignKeys) {
+        const violations = db.prepare('PRAGMA foreign_key_check').all();
+        if (violations.length > 0)
+          throw new Error(`Migration ${migration.version} introduced foreign-key violations`);
+      }
       db.prepare('INSERT INTO migrations(version) VALUES (?)').run(migration.version);
       db.exec('COMMIT');
     } catch (error) {
-      db.exec('ROLLBACK');
+      if (db.isTransaction) db.exec('ROLLBACK');
       throw error;
+    } finally {
+      if (migration.disableForeignKeys) db.exec('PRAGMA foreign_keys = ON');
     }
   }
 }

@@ -30,7 +30,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(1);
+    ).toBe(2);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);

@@ -15,6 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "lucide-react": "^1.32.0",
     "react": "^19.1.1",

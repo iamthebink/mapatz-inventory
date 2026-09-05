@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
+import { InventoryTransferService } from '../../src/domain/import-export.js';
+import { WORKBOOK_CONTRACT } from '../../src/io/workbook-contract.js';
+import { exportWorkbook, parseResetWorkbook } from '../../src/io/workbook.js';
 import { createApp } from '../../src/server/index.js';
 
 const cleanup: string[] = [];
@@ -30,6 +33,102 @@ function role(agent: ReturnType<typeof request.agent>, target: string, password?
 }
 
 describe('inventory API permission and edge-case matrix', () => {
+  it('enforces admin-only workbook export and returns the standard offline XLSX', async () => {
+    const { db, inventory, agent } = fixture();
+    const item = inventory.createItem({ name: 'Exported', kind: 'consumable' });
+    inventory.addStock(item.id, 4);
+    await agent.get('/api/workbook').expect(403);
+    await role(agent, 'operator', 'operator-pass').expect(200);
+    await agent.get('/api/workbook').expect(403);
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    const response = await agent
+      .get('/api/workbook')
+      .buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect('content-type', new RegExp(WORKBOOK_CONTRACT.mimeType))
+      .expect(200);
+    await expect(parseResetWorkbook(response.body as Buffer)).resolves.toMatchObject({
+      items: [expect.objectContaining({ name: 'Exported', total: 4 })],
+    });
+    db.close();
+  });
+
+  it('requires reset confirmation, validates before mutation, and preserves destination credentials', async () => {
+    const { db, inventory, agent } = fixture();
+    const oldItem = inventory.createItem({ name: 'Old', kind: 'consumable' });
+    inventory.addStock(oldItem.id, 9);
+    const credentialsBefore = db
+      .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
+      .all();
+    const workbook = await exportWorkbook({
+      locations: [{ name: 'Imported Place', archived: false }],
+      items: [
+        {
+          code: 4,
+          name: 'Imported',
+          kind: 'consumable',
+          location: 'Imported Place',
+          aliases: [],
+          lotSize: null,
+          archived: false,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          startingStock: 6,
+          baselineThroughEventId: 0,
+          resetTotal: 6,
+        },
+      ],
+      borrowers: [],
+      events: [],
+    });
+    await agent
+      .post('/api/workbook/reset')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .set('x-mapatz-confirmed', 'true')
+      .send(workbook)
+      .expect(403);
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    await agent
+      .post('/api/workbook/reset')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .send(workbook)
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('confirmation_required'));
+    expect(inventory.listItems('', true)[0]?.name).toBe('Old');
+    await agent
+      .post('/api/workbook/reset')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .set('x-mapatz-confirmed', 'true')
+      .send(Buffer.from('not xlsx'))
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('invalid_workbook'));
+    expect(inventory.listItems('', true)[0]?.name).toBe('Old');
+
+    await agent
+      .post('/api/workbook/reset')
+      .set('content-type', WORKBOOK_CONTRACT.mimeType)
+      .set('x-mapatz-confirmed', 'true')
+      .send(workbook)
+      .expect(204);
+    const imported = inventory.listItems('', true)[0]!;
+    expect(imported).toMatchObject({ code: 4, name: 'Imported', available: 6 });
+    const location = db.prepare('SELECT name FROM locations WHERE id=?').get(imported.locationId);
+    expect(location).toMatchObject({ name: 'Imported Place' });
+    expect(
+      db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
+    ).toEqual(credentialsBefore);
+    await role(agent, 'guest').expect(200);
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    expect(new InventoryTransferService(db).snapshot().items[0]).toMatchObject({
+      startingStock: 6,
+      resetTotal: 6,
+    });
+    db.close();
+  });
+
   it('requires the target password for upward roles and no password for downward roles', async () => {
     const { db, agent } = fixture();
     await role(agent, 'operator', 'wrong')

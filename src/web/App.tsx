@@ -13,6 +13,7 @@ import {
   BookOpen,
   Boxes,
   ClipboardList,
+  Download,
   Eye,
   EyeOff,
   KeyRound,
@@ -28,14 +29,16 @@ import {
   Settings2,
   ShieldCheck,
   TriangleAlert,
+  Upload,
   UserPlus,
   Users,
   Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { api } from './api';
+import { api, downloadInventoryWorkbook, importResetWorkbook } from './api';
 import { DataTable, type TableColumn } from './DataTable';
+import { confirmResetImport } from './import-confirmation';
 
 type Role = 'guest' | 'operator' | 'admin';
 type Item = {
@@ -79,7 +82,7 @@ type LedgerEvent = {
 };
 type Session = { role: Role; deadline: number | null };
 type Tab = 'inventory' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
-type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'access';
+type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
 const roleNames: Record<Role, string> = { guest: 'אורח', operator: 'מפעיל', admin: 'מנהל' };
 const borrowerTypeNames: Record<Borrower['type'], string> = {
@@ -125,6 +128,7 @@ const managementNavigation: {
     icon: LayoutGrid,
   },
   { key: 'borrowers', label: 'שואלים', description: 'אנשים וארגונים', icon: Users },
+  { key: 'data', label: 'ייבוא וייצוא', description: 'איפוס ושחזור מקובץ', icon: Download },
   { key: 'access', label: 'הרשאות', description: 'סיסמאות גישה', icon: ShieldCheck },
 ];
 
@@ -152,6 +156,7 @@ export function App() {
   const [pending, setPending] = useState(false);
   const [roleRequest, setRoleRequest] = useState<Role | null>(null);
   const pendingRef = useRef(false);
+  const resetFileRef = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(Date.now());
   const remaining =
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
@@ -357,6 +362,16 @@ export function App() {
         body: JSON.stringify({ name, username, contact, type }),
       }),
     );
+  }
+  function importReset(file: File | undefined) {
+    if (!file) return;
+    if (!confirmResetImport((message) => window.confirm(message))) {
+      if (resetFileRef.current) resetFileRef.current.value = '';
+      return;
+    }
+    void action(() => importResetWorkbook(file)).finally(() => {
+      if (resetFileRef.current) resetFileRef.current.value = '';
+    });
   }
 
   const inventoryColumns: TableColumn<Item>[] = [
@@ -1178,6 +1193,43 @@ export function App() {
                     </label>
                     <PasswordField name="password" label="סיסמה חדשה" />
                   </ActionCard>
+                  {!isAdmin && <PermissionNote />}
+                </div>
+              )}
+              {managementTab === 'data' && (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <ActionCard
+                    title="ייצוא מלאי"
+                    description="קובץ XLSX לאיפוס, שחזור ודוחות — ללא סיסמאות או הגדרות"
+                    icon={Download}
+                    disabled={!isAdmin || pending}
+                    onSubmit={() => void action(downloadInventoryWorkbook)}
+                  >
+                    <p className="text-sm text-ctp-subtext">
+                      הקובץ כולל אזורי איפוס ושחזור נפרדים. שמרו אותו במקום מאובטח.
+                    </p>
+                  </ActionCard>
+                  <section className="action-card">
+                    <div className="mb-5 flex items-start gap-3">
+                      <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-ctp-blue/10 text-ctp-blue">
+                        <Upload className="size-4.5" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold">ייבוא איפוס שנתי</h3>
+                        <p className="mt-0.5 text-xs text-ctp-subtext">
+                          משתמש רק בגיליונות Reset ומחליף את כל נתוני המלאי
+                        </p>
+                      </div>
+                    </div>
+                    <input
+                      ref={resetFileRef}
+                      className="input-field"
+                      type="file"
+                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      disabled={!isAdmin || pending}
+                      onChange={(event) => importReset(event.target.files?.[0])}
+                    />
+                  </section>
                   {!isAdmin && <PermissionNote />}
                 </div>
               )}

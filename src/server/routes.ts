@@ -1,7 +1,10 @@
-import { Router, type RequestHandler } from 'express';
+import express, { Router, type RequestHandler } from 'express';
 import { z, type ZodType } from 'zod';
 import type { InventoryService } from '../domain/inventory.js';
+import type { InventoryTransferService } from '../domain/import-export.js';
 import { DomainError, type Role } from '../domain/types.js';
+import { exportWorkbook, parseResetWorkbook } from '../io/workbook.js';
+import { WORKBOOK_CONTRACT } from '../io/workbook-contract.js';
 import type { SessionStore } from './session.js';
 
 const positive = z.number().int().positive();
@@ -47,7 +50,11 @@ function requireRole(...roles: Role[]): RequestHandler {
   };
 }
 
-export function apiRouter(service: InventoryService, sessions: SessionStore): Router {
+export function apiRouter(
+  service: InventoryService,
+  transfers: InventoryTransferService,
+  sessions: SessionStore,
+): Router {
   const api = Router();
 
   api.get('/session', (req, res) =>
@@ -155,6 +162,36 @@ export function apiRouter(service: InventoryService, sessions: SessionStore): Ro
 
   api.get('/loans', (req, res) => res.json(service.listLoans()));
   api.get('/ledger', (req, res) => res.json(service.listLedger()));
+  api.get(
+    '/workbook',
+    requireRole('admin'),
+    route(async (_req, res) => {
+      const buffer = await exportWorkbook(transfers.snapshot());
+      res.type(WORKBOOK_CONTRACT.mimeType).attachment(WORKBOOK_CONTRACT.filename).send(buffer);
+    }),
+  );
+  api.post(
+    '/workbook/reset',
+    requireRole('admin'),
+    (req, _res, next) => {
+      if (req.header('x-mapatz-confirmed') !== 'true')
+        return next(
+          new DomainError(
+            'confirmation_required',
+            'יש לאשר במפורש את מחיקת המלאי הקיים לפני הייבוא',
+            400,
+          ),
+        );
+      next();
+    },
+    express.raw({ type: WORKBOOK_CONTRACT.mimeType, limit: '10mb' }),
+    route(async (req, res) => {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0)
+        throw new DomainError('invalid_workbook', 'יש לבחור קובץ XLSX לייבוא');
+      transfers.replaceWithReset(await parseResetWorkbook(req.body));
+      res.status(204).end();
+    }),
+  );
   api.post(
     '/stock/add',
     requireRole('admin'),

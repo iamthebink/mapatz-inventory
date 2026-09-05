@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase, type InventoryDatabase } from '../db/database.js';
 import { InventoryService } from '../domain/inventory.js';
+import { InventoryTransferService } from '../domain/import-export.js';
 import { DomainError } from '../domain/types.js';
 import { apiRouter } from './routes.js';
 import { readCookie, SessionStore } from './session.js';
@@ -28,6 +29,7 @@ export function createApp(options: AppOptions): Express {
     options.idleMs,
   );
   const service = new InventoryService(options.database);
+  const transfers = new InventoryTransferService(options.database);
   app.use(express.json({ limit: '32kb' }));
   app.use(
     '/api',
@@ -42,7 +44,7 @@ export function createApp(options: AppOptions): Express {
       res.locals.session = sessions.touch(session);
       next();
     },
-    apiRouter(service, sessions),
+    apiRouter(service, transfers, sessions),
     (_req, res) => {
       res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
     },

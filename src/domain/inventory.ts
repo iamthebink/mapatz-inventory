@@ -77,6 +77,11 @@ export class InventoryService {
         .run(code, input.name.trim(), input.kind, input.lotSize ?? null, input.locationId ?? null);
       const id = Number(result.lastInsertRowid);
       this.setAliases(id, input.aliases ?? []);
+      this.db
+        .prepare(
+          'INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)',
+        )
+        .run(id);
       return this.getItem(id);
     });
   }
