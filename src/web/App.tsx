@@ -39,6 +39,7 @@ import {
 import { api, downloadInventoryWorkbook, importRecoveryWorkbook, importResetWorkbook } from './api';
 import { DataTable, type TableColumn } from './DataTable';
 import { confirmRecoveryImport, confirmResetImport } from './import-confirmation';
+import { Toast, type ToastMessage, type ToastTone } from './Toast';
 
 type Role = 'guest' | 'operator' | 'admin';
 type Item = {
@@ -152,15 +153,30 @@ export function App() {
   const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
   const [operationQuery, setOperationQuery] = useState('');
   const [borrowerQuery, setBorrowerQuery] = useState('');
-  const [message, setMessage] = useState('');
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [roleRequest, setRoleRequest] = useState<Role | null>(null);
   const pendingRef = useRef(false);
+  const toastIdRef = useRef(0);
   const resetFileRef = useRef<HTMLInputElement>(null);
   const recoveryFileRef = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(Date.now());
   const remaining =
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
+
+  const showToast = useCallback((message: string, tone: ToastTone) => {
+    toastIdRef.current += 1;
+    setToast({ id: toastIdRef.current, message, tone });
+  }, []);
+  const dismissToast = useCallback((id: number) => {
+    setToast((current) => (current?.id === id ? null : current));
+  }, []);
+  const showError = useCallback(
+    (error: unknown) => {
+      showToast(error instanceof Error ? error.message : 'הפעולה נכשלה', 'error');
+    },
+    [showToast],
+  );
 
   const refresh = useCallback(async () => {
     const [current, nextItems, nextBorrowers, nextLoans, allItems, allBorrowers, nextLocations] =
@@ -185,7 +201,7 @@ export function App() {
 
   useEffect(() => {
     refresh().catch(showError);
-  }, [refresh]);
+  }, [refresh, showError]);
   useEffect(() => {
     const auth = () => refresh().catch(showError);
     window.addEventListener('mapatz-auth-stale', auth);
@@ -194,10 +210,10 @@ export function App() {
       window.removeEventListener('mapatz-auth-stale', auth);
       clearInterval(timer);
     };
-  }, [refresh]);
+  }, [refresh, showError]);
   useEffect(() => {
     if (remaining === 0 && session.role !== 'guest') refresh().catch(showError);
-  }, [remaining, session.role, refresh]);
+  }, [remaining, session.role, refresh, showError]);
   useEffect(() => {
     let lastPing = 0;
     const activity = () => {
@@ -211,7 +227,7 @@ export function App() {
       window.removeEventListener('pointerdown', activity);
       window.removeEventListener('keydown', activity);
     };
-  }, [session.role]);
+  }, [session.role, showError]);
 
   const canOperate = session.role === 'operator' || session.role === 'admin';
   const isAdmin = session.role === 'admin';
@@ -234,9 +250,6 @@ export function App() {
     [borrowers, borrowerQuery],
   );
 
-  function showError(error: unknown) {
-    setMessage(error instanceof Error ? error.message : 'הפעולה נכשלה');
-  }
   async function action(operation: () => Promise<unknown>) {
     if (pendingRef.current) return false;
     pendingRef.current = true;
@@ -245,9 +258,12 @@ export function App() {
       await operation();
       try {
         await refresh();
-        setMessage('הפעולה הושלמה בהצלחה');
+        showToast('הפעולה הושלמה בהצלחה', 'success');
       } catch {
-        setMessage('הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.');
+        showToast(
+          'הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.',
+          'warning',
+        );
       }
       return true;
     } catch (error) {
@@ -262,7 +278,7 @@ export function App() {
     const upward =
       { guest: 0, operator: 1, admin: 2 }[role] > { guest: 0, operator: 1, admin: 2 }[session.role];
     if (upward) {
-      setMessage('');
+      setToast(null);
       setRoleRequest(role);
     } else
       void action(async () =>
@@ -741,14 +757,7 @@ export function App() {
           ))}
         </div>
       </nav>
-      {message && (
-        <div className="notice" role="status">
-          <span>{message}</span>
-          <button className="icon-button" aria-label="סגירת הודעה" onClick={() => setMessage('')}>
-            <X className="size-4" />
-          </button>
-        </div>
-      )}
+      {toast && <Toast toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'inventory' && (
           <PageSection
@@ -1301,7 +1310,6 @@ export function App() {
         <PasswordDialog
           role={roleRequest}
           pending={pending}
-          error={message}
           onClose={() => setRoleRequest(null)}
           onSubmit={(password) => void authenticateRole(password)}
         />
@@ -1591,13 +1599,11 @@ function CatalogBlock({ title, children }: { title: string; children: ReactNode 
 function PasswordDialog({
   role,
   pending,
-  error,
   onClose,
   onSubmit,
 }: {
   role: Role;
   pending: boolean;
-  error: string;
   onClose: () => void;
   onSubmit: (password: string) => void;
 }) {
@@ -1630,11 +1636,6 @@ function PasswordDialog({
           }}
         >
           <PasswordField name="password" label="סיסמה" autoFocus />
-          {error && (
-            <p role="alert" className="rounded-xl bg-ctp-red/10 px-3 py-2 text-sm text-ctp-red">
-              {error}
-            </p>
-          )}
           <div className="flex gap-2">
             <button type="submit" disabled={pending} className="primary-button flex-1">
               כניסה
