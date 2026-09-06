@@ -1,5 +1,5 @@
 import { CheckCircle2, CircleX, TriangleAlert, X, type LucideIcon } from 'lucide-react';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 export type ToastTone = 'success' | 'warning' | 'error';
 
@@ -8,6 +8,9 @@ export type ToastMessage = {
   message: string;
   tone: ToastTone;
 };
+
+const AUTO_DISMISS_MS = 6_000;
+const EXIT_FALLBACK_MS = 250;
 
 const toastPresentation: Record<
   ToastTone,
@@ -27,16 +30,44 @@ export function Toast({
 }) {
   const presentation = toastPresentation[toast.tone];
   const Icon = presentation.icon;
+  const [exiting, setExiting] = useState(false);
+
+  const requestDismiss = useCallback(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      onDismiss(toast.id);
+      return;
+    }
+    setExiting(true);
+  }, [onDismiss, toast.id]);
 
   useEffect(() => {
     if (toast.tone !== 'success') return;
-    const timer = window.setTimeout(() => onDismiss(toast.id), 6_000);
+    const timer = window.setTimeout(requestDismiss, AUTO_DISMISS_MS);
     return () => window.clearTimeout(timer);
-  }, [onDismiss, toast.id, toast.tone]);
+  }, [requestDismiss, toast.tone]);
+
+  useEffect(() => {
+    if (!exiting) return;
+    const fallback = window.setTimeout(() => onDismiss(toast.id), EXIT_FALLBACK_MS);
+    return () => window.clearTimeout(fallback);
+  }, [exiting, onDismiss, toast.id]);
 
   return (
     <div className="toast-viewport">
-      <div className={`toast toast-${toast.tone}`} role={presentation.role} aria-atomic="true">
+      <div
+        className={`toast toast-${toast.tone}${exiting ? ' toast-exiting' : ''}`}
+        role={presentation.role}
+        aria-atomic="true"
+        onAnimationEnd={(event) => {
+          if (
+            exiting &&
+            event.currentTarget === event.target &&
+            event.animationName === 'toast-exit'
+          ) {
+            onDismiss(toast.id);
+          }
+        }}
+      >
         <Icon className="toast-icon" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <strong className="block text-xs font-semibold text-ctp-text">
@@ -48,7 +79,8 @@ export function Toast({
           type="button"
           className="icon-button -m-1 shrink-0"
           aria-label="סגירת הודעה"
-          onClick={() => onDismiss(toast.id)}
+          disabled={exiting}
+          onClick={requestDismiss}
         >
           <X className="size-4" />
         </button>

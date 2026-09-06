@@ -872,7 +872,7 @@ export function App() {
       >
         {announcement.text}
       </div>
-      {toast && <Toast toast={toast} onDismiss={dismissToast} />}
+      {toast && <Toast key={toast.id} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'inventory' && (
           <PageSection

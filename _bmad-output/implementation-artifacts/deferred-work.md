@@ -29,3 +29,7 @@
 - source_spec: `/Users/orba/.codex/worktrees/9062/mapatz-inventory/_bmad-output/implementation-artifacts/spec-admin-mode-ux.md`
   summary: Add DOM-capable interaction tests for admin-mode focus, cancellation, expiry, visibility, and activity/action ordering.
   evidence: The current Vitest setup is Node-only. Static SSR and API tests cover presentation and session contracts, while focus trapping, pending dismissal, live announcements, foreground reconciliation, trusted-event filtering, and browser event races were verified manually. Automating those flows requires a DOM or end-to-end test harness beyond this quick feature.
+
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-toast-bottom-entry-exit-animation.md`
+  summary: Pause success-toast auto-dismiss while the toast is hovered or contains keyboard focus.
+  evidence: The existing six-second success timeout can still remove a toast while a pointer or keyboard user is interacting with it; this accessibility improvement predates and is independent of the requested position and exit-motion change.
