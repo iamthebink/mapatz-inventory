@@ -295,10 +295,73 @@
     @apply bg-ctp-base text-ctp-subtext;
   }
   .dialog-backdrop {
-    @apply fixed inset-0 z-50 grid place-items-center bg-ctp-text/30 p-4 backdrop-blur-sm;
+    @apply fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-ctp-text/30 p-4 backdrop-blur-sm;
+    overscroll-behavior: contain;
   }
   .dialog {
-    @apply relative w-full max-w-md rounded-3xl border border-white/60 bg-white p-6 shadow-2xl;
+    @apply relative w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/60 bg-white p-5 shadow-2xl sm:p-6;
+    max-height: calc(100dvh - 2rem);
+  }
+  .dialog:focus {
+    outline: 3px solid color-mix(in srgb, var(--color-ctp-lavender) 45%, transparent);
+    outline-offset: -3px;
+  }
+  .dialog-close {
+    @apply absolute top-4 left-4;
+  }
+  .dialog-title {
+    @apply pe-10 text-xl font-bold;
+  }
+  .dialog-description {
+    @apply mt-1 pe-10 text-sm leading-6 text-ctp-subtext;
+  }
+  .dialog-heading-icon {
+    @apply mt-4 grid size-11 place-items-center rounded-2xl bg-ctp-lavender/10 text-ctp-lavender;
+  }
+  .dialog-form {
+    @apply mt-5;
+  }
+  .dialog-form fieldset {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .dialog-fields {
+    @apply grid gap-4 sm:grid-cols-2;
+  }
+  .dialog-field-wide {
+    @apply sm:col-span-2;
+  }
+  .dialog-textarea {
+    min-height: 5rem;
+    resize: vertical;
+  }
+  .dialog-actions {
+    @apply mt-5 flex flex-col-reverse gap-2 sm:flex-row;
+  }
+  .dialog-actions .primary-button,
+  .dialog-actions .danger-button {
+    @apply flex-1;
+  }
+  .dialog-form-error {
+    @apply mt-4 rounded-xl border border-ctp-red/20 bg-ctp-red/5 px-3 py-2 text-sm text-ctp-red;
+  }
+  .dialog-destructive {
+    border-color: color-mix(in srgb, var(--color-ctp-red) 28%, white);
+  }
+  .dialog-destructive .dialog-title {
+    @apply text-ctp-red;
+  }
+  .dialog-file-name {
+    @apply mt-4 rounded-xl bg-ctp-base px-3 py-2 text-sm text-ctp-subtext;
+  }
+  .dialog-actions-destructive {
+    border: 0;
+    padding: 0;
+  }
+  .danger-button {
+    @apply inline-flex items-center justify-center rounded-xl bg-ctp-red px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-maroon;
   }
   .admin-password-error {
     padding: 8px 12px;
@@ -306,6 +369,10 @@
     background: var(--color-admin-soft);
     color: var(--color-admin-text);
     font-size: 0.875rem;
+  }
+  [inert][aria-hidden='true'] {
+    pointer-events: none;
+    user-select: none;
   }
 }
 

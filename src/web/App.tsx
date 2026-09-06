@@ -44,39 +44,18 @@ import {
   importResetWorkbook,
 } from './api';
 import { DataTable, type TableColumn } from './DataTable';
-import { confirmRecoveryImport, confirmResetImport } from './import-confirmation';
+import {
+  InventoryDialog,
+  type ActiveDialog,
+  type Borrower,
+  type DialogSubmission,
+  type Item,
+  type Loan,
+  type Location,
+} from './InventoryDialogs';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 
 type Role = 'operator' | 'admin';
-type Item = {
-  id: number;
-  code: number;
-  name: string;
-  kind: 'consumable' | 'non_consumable';
-  lotSize: number | null;
-  locationId: number | null;
-  aliases: string[];
-  available: number;
-  damaged: number;
-  archived: boolean;
-};
-type Borrower = {
-  id: number;
-  username: string;
-  name: string;
-  contact: string;
-  type: 'individual' | 'camp_organization' | 'other';
-  archived: boolean;
-};
-type Loan = {
-  checkoutId: number;
-  code: number;
-  itemName: string;
-  borrowerName: string;
-  outstanding: number;
-  lost: number;
-};
-type Location = { id: number; code: string; name: string; archived: boolean };
 type LedgerEvent = {
   id: number;
   created_at: string;
@@ -161,6 +140,7 @@ export function App() {
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
+  const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
   const [adminPasswordError, setAdminPasswordError] = useState('');
   const [sessionReconciling, setSessionReconciling] = useState(false);
   const [announcement, setAnnouncement] = useState({ id: 0, text: '' });
@@ -169,6 +149,10 @@ export function App() {
   const sessionRequestRef = useRef(0);
   const activityRequestRef = useRef<Promise<void> | null>(null);
   const adminControlRef = useRef<HTMLButtonElement>(null);
+  const returnsTabRef = useRef<HTMLButtonElement>(null);
+  const managementTabRef = useRef<HTMLButtonElement>(null);
+  const dialogReturnFocusRef = useRef<HTMLElement>(null);
+  const dialogFallbackRef = useRef<HTMLElement>(null);
   const previousRoleRef = useRef<Role>('operator');
   const imminentAnnouncedRef = useRef(false);
   const resetFileRef = useRef<HTMLInputElement>(null);
@@ -178,6 +162,28 @@ export function App() {
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
   const isAdmin = session.role === 'admin';
   const adminActionsEnabled = isAdmin && !sessionReconciling;
+  const activeDialogRequiresAdmin = activeDialog != null && activeDialog.kind !== 'return';
+  const inventoryDialogPending = pending || (sessionReconciling && activeDialogRequiresAdmin);
+
+  const clearImportInput = useCallback((mode: 'reset' | 'recovery') => {
+    const input = mode === 'reset' ? resetFileRef.current : recoveryFileRef.current;
+    if (input) input.value = '';
+  }, []);
+
+  const closeInventoryDialog = useCallback(() => {
+    if (activeDialog?.kind === 'import') clearImportInput(activeDialog.mode);
+    setActiveDialog(null);
+  }, [activeDialog, clearImportInput]);
+
+  function openInventoryDialog(
+    dialog: ActiveDialog,
+    fallback: HTMLElement | null,
+    returnFocus: HTMLElement | null = document.activeElement as HTMLElement | null,
+  ) {
+    dialogReturnFocusRef.current = returnFocus;
+    dialogFallbackRef.current = fallback;
+    setActiveDialog(dialog);
+  }
 
   const showToast = useCallback((message: string, tone: ToastTone) => {
     toastIdRef.current += 1;
@@ -307,6 +313,11 @@ export function App() {
       announce('מצב מנהל יסתיים בעוד 10 שניות.');
     }
   }, [announce, isAdmin, remaining]);
+  useEffect(() => {
+    if (isAdmin || !activeDialog || activeDialog.kind === 'return') return;
+    if (activeDialog.kind === 'import') clearImportInput(activeDialog.mode);
+    setActiveDialog(null);
+  }, [activeDialog, clearImportInput, isAdmin]);
   const operationItems = useMemo(
     () =>
       items.filter((item) =>
@@ -408,110 +419,84 @@ export function App() {
       setPending(false);
     }
   }
-  function returnLoan(loan: Loan) {
-    const usableText = prompt('כמות תקינה', String(loan.outstanding));
-    if (usableText === null) return;
-    const damagedText = prompt('כמות פגומה', '0');
-    if (damagedText === null) return;
-    const note = prompt('הערה (רשות)', '');
-    if (note === null) return;
-    void action(() =>
-      api('/return', {
-        method: 'POST',
-        body: JSON.stringify({
-          checkoutId: loan.checkoutId,
-          usable: Number(usableText),
-          damaged: Number(damagedText),
-          note,
-        }),
-      }),
-    );
-  }
-  function changeLost(loan: Loan, lost: boolean) {
-    const quantity = prompt(
-      lost ? 'כמות לסימון כאבודה' : 'כמות לביטול אובדן',
-      String(lost ? loan.outstanding : loan.lost),
-    );
-    if (quantity === null) return;
-    const note = prompt('הערה (רשות)', '');
-    if (note === null) return;
-    void action(() =>
-      api('/lost', {
-        method: 'POST',
-        body: JSON.stringify({
-          checkoutId: loan.checkoutId,
-          quantity: Number(quantity),
-          lost,
-          note,
-        }),
-      }),
-    );
-  }
-  function editItem(item: Item) {
-    const name = prompt('שם פריט', item.name);
-    if (name === null) return;
-    const aliasText = prompt('כינויים מופרדים בפסיק', item.aliases.join(','));
-    if (aliasText === null) return;
-    const lotText = prompt('גודל מארז (ריק ללא מארז)', item.lotSize?.toString() ?? '');
-    if (lotText === null) return;
-    const locationText = prompt(
-      `מזהה מיקום (ריק ללא מיקום)\n${locations
-        .filter((location) => !location.archived)
-        .map((location) => `${location.id}: ${location.name}`)
-        .join('\n')}`,
-      item.locationId?.toString() ?? '',
-    );
-    if (locationText === null) return;
-    void action(() =>
-      api(`/items/${item.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          name,
-          aliases: aliasText
-            .split(',')
-            .map((alias) => alias.trim())
-            .filter(Boolean),
-          lotSize: lotText.trim() ? Number(lotText) : null,
-          locationId: locationText.trim() ? Number(locationText) : null,
-        }),
-      }),
-    );
-  }
-  function editBorrower(borrower: Borrower) {
-    const name = prompt('שם', borrower.name);
-    if (name === null) return;
-    const username = prompt('שם משתמש', borrower.username);
-    if (username === null) return;
-    const contact = prompt('פרטי קשר', borrower.contact);
-    if (contact === null) return;
-    const type = prompt('סוג: individual / camp_organization / other', borrower.type);
-    if (type === null) return;
-    void action(() =>
-      api(`/borrowers/${borrower.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ name, username, contact, type }),
-      }),
-    );
-  }
-  function importReset(file: File | undefined) {
-    if (!file) return;
-    if (!confirmResetImport((message) => window.confirm(message))) {
-      if (resetFileRef.current) resetFileRef.current.value = '';
-      return;
+  async function submitInventoryDialog(submission: DialogSubmission): Promise<boolean> {
+    let succeeded = false;
+    switch (submission.kind) {
+      case 'return':
+        succeeded = await action(() =>
+          api('/return', {
+            method: 'POST',
+            body: JSON.stringify({
+              checkoutId: submission.checkoutId,
+              usable: submission.usable,
+              damaged: submission.damaged,
+              note: submission.note,
+            }),
+          }),
+        );
+        break;
+      case 'lost':
+        succeeded = await action(() =>
+          api('/lost', {
+            method: 'POST',
+            body: JSON.stringify({
+              checkoutId: submission.checkoutId,
+              quantity: submission.quantity,
+              lost: submission.lost,
+              note: submission.note,
+            }),
+          }),
+        );
+        break;
+      case 'edit-item':
+        succeeded = await action(() =>
+          api(`/items/${submission.itemId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: submission.name,
+              aliases: submission.aliases,
+              lotSize: submission.lotSize,
+              locationId: submission.locationId,
+            }),
+          }),
+        );
+        break;
+      case 'edit-borrower':
+        succeeded = await action(() =>
+          api(`/borrowers/${submission.borrowerId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: submission.name,
+              username: submission.username,
+              contact: submission.contact,
+              type: submission.borrowerType,
+            }),
+          }),
+        );
+        break;
+      case 'edit-location':
+        succeeded = await action(() =>
+          api(`/locations/${submission.locationId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: submission.name,
+              code: submission.code,
+              archived: submission.archived,
+            }),
+          }),
+        );
+        break;
+      case 'import':
+        succeeded = await action(() =>
+          submission.mode === 'reset'
+            ? importResetWorkbook(submission.file)
+            : importRecoveryWorkbook(submission.file),
+        );
+        clearImportInput(submission.mode);
+        break;
     }
-    void action(() => importResetWorkbook(file)).finally(() => {
-      if (resetFileRef.current) resetFileRef.current.value = '';
-    });
-  }
-  function importRecovery(file: File | undefined) {
-    if (!file) return;
-    if (!confirmRecoveryImport((message) => window.confirm(message))) {
-      if (recoveryFileRef.current) recoveryFileRef.current.value = '';
-      return;
-    }
-    void action(() => importRecoveryWorkbook(file)).finally(() => {
-      if (recoveryFileRef.current) recoveryFileRef.current.value = '';
-    });
+    if (succeeded) setActiveDialog(null);
+    return succeeded;
   }
 
   const inventoryColumns: TableColumn<Item>[] = [
@@ -596,21 +581,25 @@ export function App() {
           <SmallButton
             icon={RotateCcw}
             disabled={pending || loan.outstanding < 1}
-            onClick={() => returnLoan(loan)}
+            onClick={() => openInventoryDialog({ kind: 'return', loan }, returnsTabRef.current)}
           >
             החזרה
           </SmallButton>
           <SmallButton
             icon={TriangleAlert}
             disabled={pending || !adminActionsEnabled || loan.outstanding < 1}
-            onClick={() => changeLost(loan, true)}
+            onClick={() =>
+              openInventoryDialog({ kind: 'lost', loan, lost: true }, returnsTabRef.current)
+            }
           >
             סמן אבוד
           </SmallButton>
           <SmallButton
             icon={RotateCcw}
             disabled={pending || !adminActionsEnabled || loan.lost < 1}
-            onClick={() => changeLost(loan, false)}
+            onClick={() =>
+              openInventoryDialog({ kind: 'lost', loan, lost: false }, returnsTabRef.current)
+            }
           >
             בטל אובדן
           </SmallButton>
@@ -641,7 +630,7 @@ export function App() {
       label: 'פעולות',
       render: (item) => (
         <RowActions
-          onEdit={() => editItem(item)}
+          onEdit={() => openInventoryDialog({ kind: 'edit-item', item }, managementTabRef.current)}
           archived={item.archived}
           disabled={pending || !adminActionsEnabled}
           onArchive={() =>
@@ -694,7 +683,9 @@ export function App() {
       label: 'פעולות',
       render: (borrower) => (
         <RowActions
-          onEdit={() => editBorrower(borrower)}
+          onEdit={() =>
+            openInventoryDialog({ kind: 'edit-borrower', borrower }, managementTabRef.current)
+          }
           archived={borrower.archived}
           disabled={pending || !adminActionsEnabled}
           onArchive={() =>
@@ -739,17 +730,9 @@ export function App() {
         <RowActions
           archived={location.archived}
           disabled={pending || !adminActionsEnabled}
-          onEdit={() => {
-            const name = prompt('שם', location.name);
-            const code = prompt('קוד', location.code);
-            if (!name || !code) return;
-            void action(() =>
-              api(`/locations/${location.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ name, code, archived: location.archived }),
-              }),
-            );
-          }}
+          onEdit={() =>
+            openInventoryDialog({ kind: 'edit-location', location }, managementTabRef.current)
+          }
           onArchive={() =>
             void action(() =>
               api(`/locations/${location.id}`, {
@@ -815,7 +798,7 @@ export function App() {
 
   return (
     <div className={`app-shell ${isAdmin ? 'admin-mode-active' : ''}`}>
-      <header className="app-header">
+      <header className="app-header" data-dialog-background>
         <div className="app-header-inner">
           <div className="app-brand">
             <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-ctp-lavender text-white shadow-sm">
@@ -847,12 +830,19 @@ export function App() {
           />
         </div>
       </header>
-      <nav className="app-nav" aria-label="ניווט ראשי">
+      <nav className="app-nav" aria-label="ניווט ראשי" data-dialog-background>
         <div className="mx-auto flex max-w-screen-2xl items-center gap-1 overflow-x-auto px-3 py-2 sm:px-6 lg:px-8">
           {navigation.map(({ key, label, icon: Icon }, index) => (
             <div className="contents" key={key}>
               {index === 2 && <span className="nav-separator" aria-hidden="true" />}
               <button
+                ref={
+                  key === 'returns'
+                    ? returnsTabRef
+                    : key === 'catalogs'
+                      ? managementTabRef
+                      : undefined
+                }
                 className={`nav-item ${tab === key ? 'active' : ''}`}
                 onClick={() => setTab(key)}
               >
@@ -864,7 +854,8 @@ export function App() {
         </div>
       </nav>
       <div
-        key={announcement.id}
+        key={`announcement-${announcement.id}`}
+        data-dialog-background
         className="sr-only"
         role="status"
         aria-live={isAdmin && remaining != null && remaining <= 10 ? 'assertive' : 'polite'}
@@ -872,8 +863,11 @@ export function App() {
       >
         {announcement.text}
       </div>
-      {toast && <Toast key={toast.id} toast={toast} onDismiss={dismissToast} />}
-      <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
+      <main
+        className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
+        data-dialog-background
+      >
         {tab === 'inventory' && (
           <PageSection
             title="מצב מלאי"
@@ -1347,11 +1341,20 @@ export function App() {
                     </div>
                     <input
                       ref={resetFileRef}
+                      aria-label="בחירת קובץ לייבוא איפוס"
                       className="input-field"
                       type="file"
                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                       disabled={!adminActionsEnabled || pending}
-                      onChange={(event) => importReset(event.target.files?.[0])}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file)
+                          openInventoryDialog(
+                            { kind: 'import', mode: 'reset', file },
+                            managementTabRef.current,
+                            resetFileRef.current,
+                          );
+                      }}
                     />
                   </section>
                   <section className="action-card">
@@ -1368,11 +1371,20 @@ export function App() {
                     </div>
                     <input
                       ref={recoveryFileRef}
+                      aria-label="בחירת קובץ לשחזור מלא"
                       className="input-field"
                       type="file"
                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                       disabled={!adminActionsEnabled || pending}
-                      onChange={(event) => importRecovery(event.target.files?.[0])}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file)
+                          openInventoryDialog(
+                            { kind: 'import', mode: 'recovery', file },
+                            managementTabRef.current,
+                            recoveryFileRef.current,
+                          );
+                      }}
                     />
                   </section>
                   {!isAdmin && <PermissionNote />}
@@ -1417,6 +1429,17 @@ export function App() {
           returnFocusRef={adminControlRef}
           onClose={closeAdminDialog}
           onSubmit={(password) => void authenticateAdmin(password)}
+        />
+      )}
+      {activeDialog && (
+        <InventoryDialog
+          active={activeDialog}
+          pending={inventoryDialogPending}
+          locations={locations}
+          returnFocusRef={dialogReturnFocusRef}
+          fallbackFocusRef={dialogFallbackRef}
+          onClose={closeInventoryDialog}
+          onSubmit={submitInventoryDialog}
         />
       )}
     </div>

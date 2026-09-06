@@ -33,3 +33,11 @@
 - source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-toast-bottom-entry-exit-animation.md`
   summary: Pause success-toast auto-dismiss while the toast is hovered or contains keyboard focus.
   evidence: The existing six-second success timeout can still remove a toast while a pointer or keyboard user is interacting with it; this accessibility improvement predates and is independent of the requested position and exit-motion change.
+
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-in-app-dialogs.md`
+  summary: Preflight workbook size and XLSX type before presenting destructive import confirmation.
+  evidence: The file picker filters for XLSX but does not enforce the server's 10 MB limit or reject programmatically supplied files before confirmation; this behavior predates the in-app dialog conversion and remains protected by server validation.
+
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-in-app-dialogs.md`
+  summary: Add conflict-safe reconciliation for entity and loan snapshots held during edits.
+  evidence: Return and location-edit submissions can use row state captured before another session refreshes or archives the record; the baseline native-prompt paths had the same last-write behavior, and resolving it requires a broader concurrency policy rather than a dialog-only patch.

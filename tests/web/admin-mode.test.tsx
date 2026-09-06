@@ -1,8 +1,13 @@
+// @vitest-environment jsdom
+
 import { createRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from '../../src/web/AdminMode';
 import { formatAdminCountdown } from '../../src/web/admin-mode';
+
+afterEach(() => cleanup());
 
 describe('admin mode presentation', () => {
   it('formats the ten-minute countdown without exceeding the configured window', () => {
@@ -66,6 +71,32 @@ describe('admin mode presentation', () => {
       />,
     );
 
-    expect(markup.match(/disabled=""/g)).toHaveLength(3);
+    expect(markup).toContain('<fieldset disabled="">');
+    expect(markup.match(/disabled=""/g)).toHaveLength(4);
+  });
+
+  it('ignores Escape and backdrop dismissal while authentication is pending', () => {
+    const onClose = vi.fn();
+    const returnFocusRef = createRef<HTMLButtonElement>();
+    render(
+      <>
+        <button ref={returnFocusRef} data-dialog-background>
+          הפעלת מנהל
+        </button>
+        <AdminPasswordDialog
+          pending
+          error=""
+          returnFocusRef={returnFocusRef}
+          onClose={onClose}
+          onSubmit={() => undefined}
+        />
+      </>,
+    );
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.mouseDown(dialog.parentElement!);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBe(dialog);
   });
 });

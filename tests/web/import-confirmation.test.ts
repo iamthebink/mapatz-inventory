@@ -1,21 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  confirmRecoveryImport,
-  confirmResetImport,
   RECOVERY_IMPORT_CONFIRMATION,
   RESET_IMPORT_CONFIRMATION,
 } from '../../src/web/import-confirmation.js';
 
-describe('reset import confirmation', () => {
-  it('returns false on cancellation so the caller does not start an import', () => {
-    const confirm = vi.fn(() => false);
-    expect(confirmResetImport(confirm)).toBe(false);
-    expect(confirm).toHaveBeenCalledWith(RESET_IMPORT_CONFIRMATION);
-  });
-
-  it('returns false on recovery cancellation so the caller does not start an import', () => {
-    const confirm = vi.fn(() => false);
-    expect(confirmRecoveryImport(confirm)).toBe(false);
-    expect(confirm).toHaveBeenCalledWith(RECOVERY_IMPORT_CONFIRMATION);
+describe('import confirmation copy', () => {
+  it('keeps explicit destructive copy for both import modes', () => {
+    expect(RESET_IMPORT_CONFIRMATION).toContain('ימחק את כל');
+    expect(RECOVERY_IMPORT_CONFIRMATION).toContain('יחליף את כל');
+    expect(RESET_IMPORT_CONFIRMATION).toContain('הסיסמאות וההגדרות יישמרו');
+    expect(RECOVERY_IMPORT_CONFIRMATION).toContain('הסיסמאות וההגדרות יישמרו');
   });
 });
