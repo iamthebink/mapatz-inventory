@@ -22,6 +22,11 @@
   --color-ctp-mantle: #e6e9ef;
   --color-ctp-base: #eff1f5;
   --color-ctp-crust: #dce0e8;
+  --color-admin-chrome: #fffbf0;
+  --color-admin-soft: #fff8e7;
+  --color-admin-line: #b77912;
+  --color-admin-text: #76510f;
+  --color-admin-text-secondary: #8f6a27;
 }
 
 @layer base {
@@ -60,6 +65,121 @@
 }
 
 @layer components {
+  .app-shell {
+    @apply min-h-screen bg-ctp-base text-ctp-text;
+  }
+  .app-shell.admin-mode-active::before {
+    position: fixed;
+    z-index: 70;
+    inset: 0;
+    border: 1px solid var(--color-admin-line);
+    border-top-width: 4px;
+    pointer-events: none;
+    content: '';
+  }
+  .app-header {
+    min-height: 76px;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-ctp-crust) 10%, transparent);
+    background: color-mix(in srgb, white 80%, transparent);
+    backdrop-filter: blur(24px);
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease;
+  }
+  .admin-mode-active .app-header {
+    border-bottom-color: color-mix(in srgb, var(--color-admin-line) 20%, transparent);
+    background: color-mix(in srgb, var(--color-admin-chrome) 94%, transparent);
+  }
+  .app-header-inner {
+    display: grid;
+    grid-template-areas: 'control brand';
+    grid-template-columns: 128px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 1536px;
+    min-height: 76px;
+    margin-inline: auto;
+    padding: 14px 16px;
+    direction: ltr;
+  }
+  .app-brand {
+    display: flex;
+    grid-area: brand;
+    min-width: 0;
+    align-items: center;
+    gap: 12px;
+    direction: rtl;
+  }
+  .connectivity-status {
+    @apply mt-0.5 flex items-center gap-1.5 text-xs text-ctp-subtext;
+  }
+  .admin-mode-status-desktop {
+    display: none;
+    grid-area: status;
+    justify-self: end;
+  }
+  .admin-mode-status-mobile {
+    display: none;
+  }
+  .admin-mode-active .connectivity-status {
+    display: none;
+  }
+  .admin-mode-active .admin-mode-status-mobile {
+    display: block;
+  }
+  .admin-mode-control {
+    @apply justify-self-start rounded-xl border border-ctp-surface bg-white text-xs font-semibold text-ctp-subtext shadow-sm transition hover:border-ctp-lavender/30 hover:text-ctp-text;
+    grid-area: control;
+    width: 128px;
+    height: 44px;
+    direction: rtl;
+  }
+  .admin-mode-control.active {
+    border-color: var(--color-admin-line);
+    color: var(--color-admin-text);
+  }
+  .admin-mode-status {
+    display: flex;
+    min-height: 16px;
+    align-items: center;
+    gap: 5px;
+    overflow: hidden;
+    color: var(--color-admin-text);
+    font-size: 11px;
+    line-height: 16px;
+    white-space: nowrap;
+    direction: rtl;
+  }
+  .admin-mode-status.imminent {
+    background: var(--color-admin-soft);
+    font-weight: 700;
+  }
+  .admin-mode-marker {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 9999px;
+    background: var(--color-admin-line);
+  }
+  .admin-mode-status-full {
+    display: none;
+  }
+  .admin-mode-countdown {
+    color: var(--color-admin-text-secondary);
+    font-variant-numeric: tabular-nums;
+    unicode-bidi: isolate;
+  }
+  .app-nav {
+    @apply sticky top-0 z-20 border-b border-ctp-crust/10 bg-ctp-base/90 backdrop-blur-xl;
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease;
+  }
+  .admin-mode-active .app-nav {
+    border-bottom-color: color-mix(in srgb, var(--color-admin-line) 20%, transparent);
+    background: color-mix(in srgb, var(--color-admin-chrome) 94%, transparent);
+  }
   .nav-item {
     @apply flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-ctp-subtext transition hover:bg-white hover:text-ctp-text;
   }
@@ -68,21 +188,6 @@
   }
   .nav-separator {
     @apply mx-2 h-6 w-px shrink-0 bg-ctp-surface;
-  }
-  .role-switch {
-    @apply flex rounded-xl border border-ctp-surface bg-ctp-base p-1;
-  }
-  .role-switch button {
-    @apply rounded-lg px-3 py-1.5 text-xs font-medium text-ctp-subtext transition hover:text-ctp-text;
-  }
-  .role-switch button.active {
-    @apply bg-white text-ctp-lavender shadow-sm;
-  }
-  .timer {
-    @apply rounded-lg bg-ctp-base px-2.5 py-2 text-xs text-ctp-subtext;
-  }
-  .timer.warning {
-    @apply bg-ctp-yellow/10 font-semibold text-ctp-yellow;
   }
   .toast-viewport {
     @apply pointer-events-none fixed inset-x-0 top-4 z-60 flex justify-center px-4 sm:right-4 sm:left-auto sm:w-full sm:max-w-md sm:px-0;
@@ -192,6 +297,13 @@
   .dialog {
     @apply relative w-full max-w-md rounded-3xl border border-white/60 bg-white p-6 shadow-2xl;
   }
+  .admin-password-error {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--color-admin-soft);
+    color: var(--color-admin-text);
+    font-size: 0.875rem;
+  }
 }
 
 @keyframes toast-enter {
@@ -206,8 +318,50 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .toast {
+  .toast,
+  .app-header,
+  .app-nav,
+  .admin-mode-control {
     animation: none;
+    transition: none;
+  }
+}
+
+@media (min-width: 640px) {
+  .app-header-inner {
+    grid-template-areas: 'control status brand';
+    grid-template-columns: 128px auto minmax(0, 1fr);
+    gap: 16px;
+    padding-inline: 24px;
+  }
+  .connectivity-status,
+  .admin-mode-active .connectivity-status {
+    display: flex;
+  }
+  .admin-mode-active .admin-mode-status-mobile {
+    display: none;
+  }
+  .admin-mode-status-desktop {
+    display: block;
+  }
+  .admin-mode-status-desktop .admin-mode-status {
+    min-height: 28px;
+    gap: 7px;
+    padding: 4px 8px;
+    border-radius: 9px;
+    font-size: 12px;
+  }
+  .admin-mode-status-full {
+    display: inline;
+  }
+  .admin-mode-status-compact {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-header-inner {
+    padding-inline: 32px;
   }
 }
 

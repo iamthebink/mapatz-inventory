@@ -37,7 +37,7 @@ export function createApp(options: AppOptions): Express {
         secure: false,
         path: '/',
       });
-      res.locals.session = sessions.touch(session);
+      res.locals.session = session;
       next();
     },
     apiRouter(service, transfers, sessions),

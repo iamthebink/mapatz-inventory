@@ -60,6 +60,10 @@ export function apiRouter(
   api.get('/session', (req, res) =>
     res.json({ role: res.locals.session.role, deadline: res.locals.session.deadline }),
   );
+  api.post('/session/activity', (req, res) => {
+    const session = sessions.touch(res.locals.session);
+    res.json({ role: session.role, deadline: session.deadline });
+  });
   api.post(
     '/session/role',
     route((req, res) => {

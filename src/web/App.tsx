@@ -33,10 +33,16 @@ import {
   UserPlus,
   Users,
   Wrench,
-  X,
   type LucideIcon,
 } from 'lucide-react';
-import { api, downloadInventoryWorkbook, importRecoveryWorkbook, importResetWorkbook } from './api';
+import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from './AdminMode';
+import {
+  ApiError,
+  api,
+  downloadInventoryWorkbook,
+  importRecoveryWorkbook,
+  importResetWorkbook,
+} from './api';
 import { DataTable, type TableColumn } from './DataTable';
 import { confirmRecoveryImport, confirmResetImport } from './import-confirmation';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
@@ -85,7 +91,6 @@ type Session = { role: Role; deadline: number | null };
 type Tab = 'inventory' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
-const roleNames: Record<Role, string> = { operator: 'מפעיל', admin: 'מנהל' };
 const borrowerTypeNames: Record<Borrower['type'], string> = {
   individual: 'יחיד',
   camp_organization: 'ארגון מחנה',
@@ -155,14 +160,24 @@ export function App() {
   const [borrowerQuery, setBorrowerQuery] = useState('');
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
-  const [roleRequest, setRoleRequest] = useState<Role | null>(null);
+  const [adminDialogOpen, setAdminDialogOpen] = useState(false);
+  const [adminPasswordError, setAdminPasswordError] = useState('');
+  const [sessionReconciling, setSessionReconciling] = useState(false);
+  const [announcement, setAnnouncement] = useState({ id: 0, text: '' });
   const pendingRef = useRef(false);
   const toastIdRef = useRef(0);
+  const sessionRequestRef = useRef(0);
+  const activityRequestRef = useRef<Promise<void> | null>(null);
+  const adminControlRef = useRef<HTMLButtonElement>(null);
+  const previousRoleRef = useRef<Role>('operator');
+  const imminentAnnouncedRef = useRef(false);
   const resetFileRef = useRef<HTMLInputElement>(null);
   const recoveryFileRef = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(Date.now());
   const remaining =
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
+  const isAdmin = session.role === 'admin';
+  const adminActionsEnabled = isAdmin && !sessionReconciling;
 
   const showToast = useCallback((message: string, tone: ToastTone) => {
     toastIdRef.current += 1;
@@ -178,7 +193,18 @@ export function App() {
     [showToast],
   );
 
+  const announce = useCallback((text: string) => {
+    setAnnouncement((current) => ({ id: current.id + 1, text }));
+  }, []);
+
+  const applySession = useCallback((next: Session, requestId: number) => {
+    if (requestId !== sessionRequestRef.current) return;
+    setNow(Date.now());
+    setSession(next);
+  }, []);
+
   const refresh = useCallback(async () => {
+    const sessionRequestId = ++sessionRequestRef.current;
     const [current, nextItems, nextBorrowers, nextLoans, allItems, allBorrowers, nextLocations] =
       await Promise.all([
         api<Session>('/session'),
@@ -189,7 +215,7 @@ export function App() {
         api<Borrower[]>('/borrowers?all=1'),
         api<Location[]>('/locations?all=1'),
       ]);
-    setSession(current);
+    applySession(current, sessionRequestId);
     setItems(nextItems);
     setBorrowers(nextBorrowers);
     setLoans(nextLoans);
@@ -197,7 +223,7 @@ export function App() {
     setCatalogBorrowers(allBorrowers);
     setLocations(nextLocations);
     if (tab === 'ledger') setLedger(await api<LedgerEvent[]>('/ledger'));
-  }, [tab]);
+  }, [applySession, tab]);
 
   useEffect(() => {
     refresh().catch(showError);
@@ -212,14 +238,27 @@ export function App() {
     };
   }, [refresh, showError]);
   useEffect(() => {
-    if (remaining === 0 && session.role === 'admin') refresh().catch(showError);
+    if (remaining !== 0 || session.role !== 'admin') return;
+
+    // Expiry is fail-safe in the UI: revoke locally before reconciling with the server.
+    // This prevents a failed refresh from leaving enabled admin controls at 00:00.
+    sessionRequestRef.current += 1;
+    setSession({ role: 'operator', deadline: null });
+    refresh().catch(showError);
   }, [remaining, session.role, refresh, showError]);
   useEffect(() => {
     let lastPing = 0;
-    const activity = () => {
-      if (session.role !== 'admin' || Date.now() - lastPing < 5_000) return;
+    const activity = (event: Event) => {
+      if (!event.isTrusted || session.role !== 'admin' || Date.now() - lastPing < 5_000) return;
       lastPing = Date.now();
-      api<Session>('/session').then(setSession).catch(showError);
+      const requestId = ++sessionRequestRef.current;
+      const request = api<Session>('/session/activity', { method: 'POST' })
+        .then((next) => applySession(next, requestId))
+        .catch(showError)
+        .finally(() => {
+          if (activityRequestRef.current === request) activityRequestRef.current = null;
+        });
+      activityRequestRef.current = request;
     };
     window.addEventListener('pointerdown', activity);
     window.addEventListener('keydown', activity);
@@ -227,9 +266,47 @@ export function App() {
       window.removeEventListener('pointerdown', activity);
       window.removeEventListener('keydown', activity);
     };
-  }, [session.role, showError]);
-
-  const isAdmin = session.role === 'admin';
+  }, [applySession, session.role, showError]);
+  useEffect(() => {
+    const reconcile = () => {
+      if (document.visibilityState !== 'visible') return;
+      setSessionReconciling(true);
+      refresh()
+        .catch(showError)
+        .finally(() => setSessionReconciling(false));
+    };
+    document.addEventListener('visibilitychange', reconcile);
+    return () => document.removeEventListener('visibilitychange', reconcile);
+  }, [refresh, showError]);
+  useEffect(() => {
+    const previousRole = previousRoleRef.current;
+    if (previousRole !== session.role) {
+      announce(session.role === 'admin' ? 'מצב מנהל הופעל. נותרו 10 דקות.' : 'מצב מנהל הסתיים.');
+      if (previousRole === 'admin' && session.role === 'operator') {
+        const focused = document.activeElement as HTMLElement | null;
+        const becameUnavailable =
+          !focused?.isConnected ||
+          focused.matches(':disabled, [aria-disabled="true"]') ||
+          Boolean(focused.closest('fieldset:disabled'));
+        if (becameUnavailable) adminControlRef.current?.focus();
+      }
+    }
+    previousRoleRef.current = session.role;
+  }, [announce, session.role]);
+  useEffect(() => {
+    if (!isAdmin || remaining == null) {
+      imminentAnnouncedRef.current = false;
+      return;
+    }
+    if (remaining > 10) {
+      imminentAnnouncedRef.current = false;
+      return;
+    }
+    if (!imminentAnnouncedRef.current) {
+      imminentAnnouncedRef.current = true;
+      announce('מצב מנהל יסתיים בעוד 10 שניות.');
+    }
+  }, [announce, isAdmin, remaining]);
   const operationItems = useMemo(
     () =>
       items.filter((item) =>
@@ -254,6 +331,9 @@ export function App() {
     pendingRef.current = true;
     setPending(true);
     try {
+      // A pointer/keyboard event may have started a deadline extension immediately
+      // before this action. Preserve event order at the API boundary.
+      await activityRequestRef.current;
       await operation();
       try {
         await refresh();
@@ -273,25 +353,60 @@ export function App() {
       setPending(false);
     }
   }
-  function requestRole(role: Role) {
-    if (role === session.role) return;
-    if (role === 'admin') {
+  const closeAdminDialog = useCallback(() => {
+    setAdminDialogOpen(false);
+    setAdminPasswordError('');
+  }, []);
+  function toggleAdminMode() {
+    if (!isAdmin) {
       setToast(null);
-      setRoleRequest(role);
-    } else
-      void action(async () =>
-        setSession(await api('/session/role', { method: 'POST', body: JSON.stringify({ role }) })),
-      );
+      setAdminPasswordError('');
+      setAdminDialogOpen(true);
+      return;
+    }
+    void endAdminMode();
   }
-  async function authenticateRole(password: string) {
-    if (!roleRequest) return;
-    const role = roleRequest;
-    const succeeded = await action(async () =>
-      setSession(
-        await api('/session/role', { method: 'POST', body: JSON.stringify({ role, password }) }),
-      ),
-    );
-    if (succeeded) setRoleRequest(null);
+  async function endAdminMode() {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    const requestId = ++sessionRequestRef.current;
+    try {
+      const next = await api<Session>('/session/role', {
+        method: 'POST',
+        body: JSON.stringify({ role: 'operator' }),
+      });
+      applySession(next, requestId);
+    } catch (error) {
+      showError(error);
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }
+  async function authenticateAdmin(password: string) {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setAdminPasswordError('');
+    const requestId = ++sessionRequestRef.current;
+    try {
+      const next = await api<Session>('/session/role', {
+        method: 'POST',
+        body: JSON.stringify({ role: 'admin', password }),
+      });
+      applySession(next, requestId);
+      closeAdminDialog();
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'wrong_password') {
+        setAdminPasswordError('הסיסמה אינה נכונה.');
+      } else {
+        showError(error);
+      }
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
   }
   function returnLoan(loan: Loan) {
     const usableText = prompt('כמות תקינה', String(loan.outstanding));
@@ -487,14 +602,14 @@ export function App() {
           </SmallButton>
           <SmallButton
             icon={TriangleAlert}
-            disabled={pending || !isAdmin || loan.outstanding < 1}
+            disabled={pending || !adminActionsEnabled || loan.outstanding < 1}
             onClick={() => changeLost(loan, true)}
           >
             סמן אבוד
           </SmallButton>
           <SmallButton
             icon={RotateCcw}
-            disabled={pending || !isAdmin || loan.lost < 1}
+            disabled={pending || !adminActionsEnabled || loan.lost < 1}
             onClick={() => changeLost(loan, false)}
           >
             בטל אובדן
@@ -528,7 +643,7 @@ export function App() {
         <RowActions
           onEdit={() => editItem(item)}
           archived={item.archived}
-          disabled={pending || !isAdmin}
+          disabled={pending || !adminActionsEnabled}
           onArchive={() =>
             void action(() =>
               api(`/items/${item.id}/archive`, {
@@ -581,7 +696,7 @@ export function App() {
         <RowActions
           onEdit={() => editBorrower(borrower)}
           archived={borrower.archived}
-          disabled={pending || !isAdmin}
+          disabled={pending || !adminActionsEnabled}
           onArchive={() =>
             void action(() =>
               api(`/borrowers/${borrower.id}/archive`, {
@@ -623,7 +738,7 @@ export function App() {
       render: (location) => (
         <RowActions
           archived={location.archived}
-          disabled={pending || !isAdmin}
+          disabled={pending || !adminActionsEnabled}
           onEdit={() => {
             const name = prompt('שם', location.name);
             const code = prompt('קוד', location.code);
@@ -699,47 +814,40 @@ export function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-ctp-base text-ctp-text">
-      <header className="border-b border-ctp-crust/10 bg-white/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-screen-2xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-          <div className="flex items-center gap-3">
+    <div className={`app-shell ${isAdmin ? 'admin-mode-active' : ''}`}>
+      <header className="app-header">
+        <div className="app-header-inner">
+          <div className="app-brand">
             <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-ctp-lavender text-white shadow-sm">
               <Boxes className="size-6" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight">מלאי מפ״צ</h1>
-              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-ctp-subtext">
+              <p className={`connectivity-status ${isAdmin ? 'admin-active' : ''}`}>
                 <span className="size-1.5 rounded-full bg-ctp-green" />
                 מקומי · עובד ללא אינטרנט
               </p>
+              {isAdmin && remaining != null && (
+                <div className="admin-mode-status-mobile">
+                  <AdminModeStatus remaining={remaining} />
+                </div>
+              )}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="role-switch" aria-label="בחירת הרשאה">
-              {(['operator', 'admin'] as Role[]).map((role) => (
-                <button
-                  disabled={pending}
-                  key={role}
-                  className={session.role === role ? 'active' : ''}
-                  onClick={() => requestRole(role)}
-                >
-                  {roleNames[role]}
-                </button>
-              ))}
+          {isAdmin && remaining != null && (
+            <div className="admin-mode-status-desktop">
+              <AdminModeStatus remaining={remaining} />
             </div>
-            {remaining != null && (
-              <span className={`timer ${remaining <= 10 ? 'warning' : ''}`}>
-                {remaining <= 10 ? 'ההרשאה תסתיים: ' : 'זמן שנותר: '}
-                {remaining} שנ׳
-              </span>
-            )}
-          </div>
+          )}
+          <AdminModeControl
+            ref={adminControlRef}
+            active={isAdmin}
+            disabled={pending}
+            onClick={toggleAdminMode}
+          />
         </div>
       </header>
-      <nav
-        className="sticky top-0 z-20 border-b border-ctp-crust/10 bg-ctp-base/90 backdrop-blur-xl"
-        aria-label="ניווט ראשי"
-      >
+      <nav className="app-nav" aria-label="ניווט ראשי">
         <div className="mx-auto flex max-w-screen-2xl items-center gap-1 overflow-x-auto px-3 py-2 sm:px-6 lg:px-8">
           {navigation.map(({ key, label, icon: Icon }, index) => (
             <div className="contents" key={key}>
@@ -755,6 +863,15 @@ export function App() {
           ))}
         </div>
       </nav>
+      <div
+        key={announcement.id}
+        className="sr-only"
+        role="status"
+        aria-live={isAdmin && remaining != null && remaining <= 10 ? 'assertive' : 'polite'}
+        aria-atomic="true"
+      >
+        {announcement.text}
+      </div>
       {toast && <Toast toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'inventory' && (
@@ -928,7 +1045,7 @@ export function App() {
                       title="הוספת מלאי"
                       description="קליטת יחידות חדשות"
                       icon={PackagePlus}
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
                         void action(() =>
                           api('/stock/add', {
@@ -954,7 +1071,7 @@ export function App() {
                       title="תיקון כמות"
                       description="התאמת המלאי לספירה בפועל"
                       icon={Wrench}
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
                         void action(() =>
                           api('/stock/remove', {
@@ -983,7 +1100,7 @@ export function App() {
                       title="טיפול בפגום"
                       description="החזרה לשימוש או גריעה"
                       icon={TriangleAlert}
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
                         void action(() =>
                           api('/damage', {
@@ -1029,7 +1146,7 @@ export function App() {
                       title="פריט חדש"
                       description="הוספת סוג ציוד לקטלוג"
                       icon={Plus}
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
                         void action(() =>
                           api('/items', {
@@ -1079,7 +1196,7 @@ export function App() {
                       title="מיקום חדש"
                       description="אזור אחסון שניתן לשייך לפריטים"
                       icon={MapPin}
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
                         void action(() =>
                           api('/locations', {
@@ -1186,7 +1303,7 @@ export function App() {
                     title="החלפת סיסמה"
                     description="עדכון הסיסמה לכניסה למצב מנהל"
                     icon={KeyRound}
-                    disabled={!isAdmin || pending}
+                    disabled={!adminActionsEnabled || pending}
                     onSubmit={(form) =>
                       void action(() =>
                         api('/password', {
@@ -1209,7 +1326,7 @@ export function App() {
                     title="ייצוא מלאי"
                     description="קובץ XLSX לאיפוס, שחזור ודוחות — ללא סיסמאות או הגדרות"
                     icon={Download}
-                    disabled={!isAdmin || pending}
+                    disabled={!adminActionsEnabled || pending}
                     onSubmit={() => void action(downloadInventoryWorkbook)}
                   >
                     <p className="text-sm text-ctp-subtext">
@@ -1233,7 +1350,7 @@ export function App() {
                       className="input-field"
                       type="file"
                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onChange={(event) => importReset(event.target.files?.[0])}
                     />
                   </section>
@@ -1254,7 +1371,7 @@ export function App() {
                       className="input-field"
                       type="file"
                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      disabled={!isAdmin || pending}
+                      disabled={!adminActionsEnabled || pending}
                       onChange={(event) => importRecovery(event.target.files?.[0])}
                     />
                   </section>
@@ -1293,12 +1410,13 @@ export function App() {
           </PageSection>
         )}
       </main>
-      {roleRequest && (
-        <PasswordDialog
-          role={roleRequest}
+      {adminDialogOpen && (
+        <AdminPasswordDialog
           pending={pending}
-          onClose={() => setRoleRequest(null)}
-          onSubmit={(password) => void authenticateRole(password)}
+          error={adminPasswordError}
+          returnFocusRef={adminControlRef}
+          onClose={closeAdminDialog}
+          onSubmit={(password) => void authenticateAdmin(password)}
         />
       )}
     </div>
@@ -1581,58 +1699,5 @@ function CatalogBlock({ title, children }: { title: string; children: ReactNode 
       <h3 className="mb-4 font-semibold">{title}</h3>
       {children}
     </section>
-  );
-}
-function PasswordDialog({
-  role,
-  pending,
-  onClose,
-  onSubmit,
-}: {
-  role: Role;
-  pending: boolean;
-  onClose: () => void;
-  onSubmit: (password: string) => void;
-}) {
-  return (
-    <div
-      className="dialog-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="password-title">
-        <button className="icon-button absolute left-4 top-4" onClick={onClose} aria-label="סגירה">
-          <X className="size-5" />
-        </button>
-        <div className="grid size-11 place-items-center rounded-2xl bg-ctp-lavender/10 text-ctp-lavender">
-          <KeyRound className="size-5" />
-        </div>
-        <h2 id="password-title" className="mt-4 text-xl font-bold">
-          כניסה כ{roleNames[role]}
-        </h2>
-        <p className="mt-1 text-sm text-ctp-subtext">
-          הזינו את הסיסמה כדי להפעיל הרשאות {roleNames[role]}.
-        </p>
-        <form
-          className="mt-5 space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit(String(new FormData(event.currentTarget).get('password')));
-          }}
-        >
-          <PasswordField name="password" label="סיסמה" autoFocus />
-          <div className="flex gap-2">
-            <button type="submit" disabled={pending} className="primary-button flex-1">
-              כניסה
-            </button>
-            <button type="button" className="secondary-button" onClick={onClose}>
-              ביטול
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
   );
 }

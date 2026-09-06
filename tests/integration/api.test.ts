@@ -310,7 +310,7 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
-  it('extends the admin deadline on activity', async () => {
+  it('extends the admin deadline only through explicit user activity', async () => {
     const { db, agent, clock } = fixture();
     await role(agent, 'admin', 'admin-pass')
       .expect(200)
@@ -319,6 +319,10 @@ describe('inventory API permission and edge-case matrix', () => {
     await agent.get('/api/items').expect(200);
     await agent
       .get('/api/session')
+      .expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 601_000 }));
+    await agent
+      .post('/api/session/activity')
       .expect(200)
       .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 700_000 }));
     db.close();

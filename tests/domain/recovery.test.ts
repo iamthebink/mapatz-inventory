@@ -108,7 +108,6 @@ describe('complete inventory recovery', () => {
     const destination = database('recovery-destination');
     createApp({
       database: destination,
-      operatorPassword: 'destination-operator',
       adminPassword: 'destination-admin',
       serveWeb: false,
     });
