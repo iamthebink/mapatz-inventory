@@ -41,7 +41,7 @@ import { DataTable, type TableColumn } from './DataTable';
 import { confirmRecoveryImport, confirmResetImport } from './import-confirmation';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 
-type Role = 'guest' | 'operator' | 'admin';
+type Role = 'operator' | 'admin';
 type Item = {
   id: number;
   code: number;
@@ -85,7 +85,7 @@ type Session = { role: Role; deadline: number | null };
 type Tab = 'inventory' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
-const roleNames: Record<Role, string> = { guest: 'אורח', operator: 'מפעיל', admin: 'מנהל' };
+const roleNames: Record<Role, string> = { operator: 'מפעיל', admin: 'מנהל' };
 const borrowerTypeNames: Record<Borrower['type'], string> = {
   individual: 'יחיד',
   camp_organization: 'ארגון מחנה',
@@ -141,7 +141,7 @@ function join(...values: (string | number | null | undefined)[]) {
 }
 
 export function App() {
-  const [session, setSession] = useState<Session>({ role: 'guest', deadline: null });
+  const [session, setSession] = useState<Session>({ role: 'operator', deadline: null });
   const [items, setItems] = useState<Item[]>([]);
   const [borrowers, setBorrowers] = useState<Borrower[]>([]);
   const [catalogItems, setCatalogItems] = useState<Item[]>([]);
@@ -212,12 +212,12 @@ export function App() {
     };
   }, [refresh, showError]);
   useEffect(() => {
-    if (remaining === 0 && session.role !== 'guest') refresh().catch(showError);
+    if (remaining === 0 && session.role === 'admin') refresh().catch(showError);
   }, [remaining, session.role, refresh, showError]);
   useEffect(() => {
     let lastPing = 0;
     const activity = () => {
-      if (session.role === 'guest' || Date.now() - lastPing < 5_000) return;
+      if (session.role !== 'admin' || Date.now() - lastPing < 5_000) return;
       lastPing = Date.now();
       api<Session>('/session').then(setSession).catch(showError);
     };
@@ -229,7 +229,6 @@ export function App() {
     };
   }, [session.role, showError]);
 
-  const canOperate = session.role === 'operator' || session.role === 'admin';
   const isAdmin = session.role === 'admin';
   const operationItems = useMemo(
     () =>
@@ -275,9 +274,8 @@ export function App() {
     }
   }
   function requestRole(role: Role) {
-    const upward =
-      { guest: 0, operator: 1, admin: 2 }[role] > { guest: 0, operator: 1, admin: 2 }[session.role];
-    if (upward) {
+    if (role === session.role) return;
+    if (role === 'admin') {
       setToast(null);
       setRoleRequest(role);
     } else
@@ -482,7 +480,7 @@ export function App() {
         <div className="flex flex-wrap gap-1.5">
           <SmallButton
             icon={RotateCcw}
-            disabled={pending || !canOperate || loan.outstanding < 1}
+            disabled={pending || loan.outstanding < 1}
             onClick={() => returnLoan(loan)}
           >
             החזרה
@@ -718,7 +716,7 @@ export function App() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="role-switch" aria-label="בחירת הרשאה">
-              {(['guest', 'operator', 'admin'] as Role[]).map((role) => (
+              {(['operator', 'admin'] as Role[]).map((role) => (
                 <button
                   disabled={pending}
                   key={role}
@@ -818,7 +816,7 @@ export function App() {
                 title="ניפוק מתכלה"
                 description="הוצאה קבועה מהמלאי"
                 icon={PackageOpen}
-                disabled={!canOperate || pending}
+                disabled={pending}
                 onSubmit={(form) =>
                   void action(() =>
                     api('/issue', {
@@ -846,7 +844,7 @@ export function App() {
                 title="השאלת ציוד"
                 description="שיוך ציוד לשואל עד להחזרה"
                 icon={ArrowLeftRight}
-                disabled={!canOperate || pending}
+                disabled={pending}
                 onSubmit={(form) =>
                   void action(() =>
                     api('/checkout', {
@@ -880,7 +878,6 @@ export function App() {
                 <Note />
               </ActionCard>
             </div>
-            {!canOperate && <PermissionNote />}
           </PageSection>
         )}
         {tab === 'returns' && (
@@ -898,7 +895,6 @@ export function App() {
               }
               searchPlaceholder="סינון לפי פריט, שואל או קוד…"
             />
-            {!canOperate && <PermissionNote />}
           </PageSection>
         )}
         {tab === 'catalogs' && (
@@ -1137,7 +1133,7 @@ export function App() {
                       title="שואל חדש"
                       description="אדם או ארגון שמקבל ציוד"
                       icon={UserPlus}
-                      disabled={!canOperate || pending}
+                      disabled={pending}
                       onSubmit={(form) =>
                         void action(() =>
                           api('/borrowers', {
@@ -1182,14 +1178,13 @@ export function App() {
                       searchPlaceholder="סינון שואלים…"
                     />
                   </CatalogBlock>
-                  {!canOperate && <PermissionNote />}
                 </div>
               )}
               {managementTab === 'access' && (
                 <div className="max-w-2xl">
                   <ActionCard
                     title="החלפת סיסמה"
-                    description="עדכון פרטי גישה למפעיל או למנהל"
+                    description="עדכון הסיסמה לכניסה למצב מנהל"
                     icon={KeyRound}
                     disabled={!isAdmin || pending}
                     onSubmit={(form) =>
@@ -1197,20 +1192,12 @@ export function App() {
                         api('/password', {
                           method: 'POST',
                           body: JSON.stringify({
-                            role: form.get('role'),
                             password: form.get('password'),
                           }),
                         }),
                       )
                     }
                   >
-                    <label className="field-label">
-                      מצב
-                      <select name="role" className="input-field">
-                        <option value="operator">מפעיל</option>
-                        <option value="admin">מנהל</option>
-                      </select>
-                    </label>
                     <PasswordField name="password" label="סיסמה חדשה" />
                   </ActionCard>
                   {!isAdmin && <PermissionNote />}
@@ -1534,7 +1521,7 @@ function PermissionNote() {
   return (
     <p className="permission-note">
       <ShieldCheck className="size-4 shrink-0" />
-      המסך גלוי לעיון. יש לעבור למצב מורשה כדי לבצע שינויים.
+      המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.
     </p>
   );
 }

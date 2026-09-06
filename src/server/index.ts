@@ -10,10 +10,9 @@ import { readCookie, SessionStore } from './session.js';
 
 export interface AppOptions {
   database: InventoryDatabase;
-  operatorPassword?: string;
   adminPassword?: string;
   now?: () => number;
-  idleMs?: { operator: number; admin: number };
+  adminIdleMs?: number;
   serveWeb?: boolean;
 }
 
@@ -21,12 +20,9 @@ export function createApp(options: AppOptions): Express {
   const app = express();
   const sessions = new SessionStore(
     options.database,
-    {
-      operator: options.operatorPassword,
-      admin: options.adminPassword,
-    },
+    options.adminPassword,
     options.now,
-    options.idleMs,
+    options.adminIdleMs,
   );
   const service = new InventoryService(options.database);
   const transfers = new InventoryTransferService(options.database);
@@ -90,7 +86,6 @@ if (process.env.NODE_ENV !== 'test') {
   const db = openDatabase(resolve(dataDir, 'inventory.sqlite'));
   const app = createApp({
     database: db,
-    operatorPassword: process.env.OPERATOR_PASSWORD,
     adminPassword: process.env.ADMIN_PASSWORD,
   });
   const port = Number(process.env.PORT ?? 3000);

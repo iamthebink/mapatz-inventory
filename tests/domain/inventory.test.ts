@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,6 +12,35 @@ afterEach(() => {
 });
 
 describe('inventory domain', () => {
+  it('migrates legacy operator credentials to the admin-only credential model', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-credentials-migration-'));
+    cleanup.push(directory);
+    const filename = join(directory, 'inventory.sqlite');
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(
+      readFileSync(new URL('../../src/db/migrations/001_initial.sql', import.meta.url), 'utf8'),
+    );
+    legacy
+      .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
+      .run('operator', 'operator-salt', 'operator-hash');
+    legacy
+      .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
+      .run('admin', 'admin-salt', 'admin-hash');
+    legacy.prepare('INSERT INTO migrations(version) VALUES (?)').run(1);
+    legacy.close();
+
+    const migrated = openDatabase(filename);
+    expect(migrated.prepare('SELECT role,salt,password_hash FROM credentials').all()).toEqual([
+      { role: 'admin', salt: 'admin-salt', password_hash: 'admin-hash' },
+    ]);
+    expect(() =>
+      migrated
+        .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
+        .run('operator', 'salt', 'hash'),
+    ).toThrow();
+    migrated.close();
+  });
+
   it('migrates idempotently, seeds locations, and persists monotonic codes and event-derived state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-domain-'));
     cleanup.push(directory);
@@ -30,7 +60,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(2);
+    ).toBe(3);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);

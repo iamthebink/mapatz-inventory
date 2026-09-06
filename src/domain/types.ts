@@ -1,4 +1,4 @@
-export type Role = 'guest' | 'operator' | 'admin';
+export type Role = 'operator' | 'admin';
 export type ItemKind = 'consumable' | 'non_consumable';
 export type BorrowerType = 'individual' | 'camp_organization' | 'other';
 export type EventKind =

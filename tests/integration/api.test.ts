@@ -20,7 +20,6 @@ function fixture(clock: { now: number } = { now: 1_000 }) {
   const inventory = new InventoryService(db);
   const app = createApp({
     database: db,
-    operatorPassword: 'operator-pass',
     adminPassword: 'admin-pass',
     now: () => clock.now,
     serveWeb: false,
@@ -37,8 +36,6 @@ describe('inventory API permission and edge-case matrix', () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'Exported', kind: 'consumable' });
     inventory.addStock(item.id, 4);
-    await agent.get('/api/workbook').expect(403);
-    await role(agent, 'operator', 'operator-pass').expect(200);
     await agent.get('/api/workbook').expect(403);
     await role(agent, 'admin', 'admin-pass').expect(200);
     const response = await agent
@@ -120,7 +117,7 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(
       db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
     ).toEqual(credentialsBefore);
-    await role(agent, 'guest').expect(200);
+    await role(agent, 'operator').expect(200);
     await role(agent, 'admin', 'admin-pass').expect(200);
     expect(new InventoryTransferService(db).snapshot().items[0]).toMatchObject({
       startingStock: 6,
@@ -189,36 +186,35 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(
       db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
     ).toEqual(credentialsBefore);
-    await role(agent, 'guest').expect(200);
+    await role(agent, 'operator').expect(200);
     await role(agent, 'admin', 'admin-pass').expect(200);
     sourceDb.close();
     db.close();
   });
 
-  it('requires the target password for upward roles and no password for downward roles', async () => {
+  it('starts as an operator, requires the admin password for elevation, and downgrades freely', async () => {
     const { db, agent } = fixture();
-    await role(agent, 'operator', 'wrong')
+    await agent
+      .get('/api/session')
+      .expect(200)
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
+    await role(agent, 'admin', 'wrong')
       .expect(401)
       .expect(({ body }) => expect(body.message).toBe('סיסמה שגויה'));
-    await role(agent, 'operator', 'operator-pass')
-      .expect(200)
-      .expect(({ body }) => expect(body.role).toBe('operator'));
-    await role(agent, 'admin', 'operator-pass').expect(401);
     await role(agent, 'admin', 'admin-pass')
       .expect(200)
-      .expect(({ body }) => expect(body.role).toBe('admin'));
-    await role(agent, 'guest')
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 601_000 }));
+    await role(agent, 'operator')
       .expect(200)
-      .expect(({ body }) => expect(body.role).toBe('guest'));
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
+    await role(agent, 'guest').expect(400);
     db.close();
   });
 
-  it('enforces the same permission matrix for forbidden mutations', async () => {
+  it('allows operator work by default and still restricts admin mutations', async () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'כפפה', kind: 'consumable' });
     inventory.addStock(item.id, 5);
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(403);
-    await role(agent, 'operator', 'operator-pass').expect(200);
     await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
     await agent.post('/api/stock/add').send({ itemId: item.id, quantity: 1 }).expect(403);
     await role(agent, 'admin', 'admin-pass').expect(200);
@@ -230,7 +226,6 @@ describe('inventory API permission and edge-case matrix', () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'מים', kind: 'consumable' });
     inventory.addStock(item.id, 2);
-    await role(agent, 'operator', 'operator-pass');
     await agent
       .post('/api/issue')
       .send({ itemId: item.id, quantity: 1, borrowerId: 4 })
@@ -255,7 +250,6 @@ describe('inventory API permission and edge-case matrix', () => {
       name: 'מחנה א',
       type: 'camp_organization',
     });
-    await role(agent, 'operator', 'operator-pass');
     const checkout = await agent
       .post('/api/checkout')
       .send({ itemId: item.id, borrowerId: borrower.id, quantity: 2 })
@@ -291,7 +285,6 @@ describe('inventory API permission and edge-case matrix', () => {
     inventory.addStock(item.id, 1);
     const borrower = inventory.createBorrower({ username: 'power', name: 'חשמל', type: 'other' });
     const checkoutId = inventory.checkout(item.id, borrower.id, 1);
-    await role(agent, 'operator', 'operator-pass');
     await agent.post('/api/lost').send({ checkoutId, quantity: 1, lost: true }).expect(403);
     await role(agent, 'admin', 'admin-pass');
     await agent.post('/api/lost').send({ checkoutId, quantity: 2, lost: true }).expect(400);
@@ -307,46 +300,55 @@ describe('inventory API permission and edge-case matrix', () => {
     const item = inventory.createItem({ name: 'כבל', kind: 'consumable' });
     await role(agent, 'admin', 'admin-pass')
       .expect(200)
-      .expect(({ body }) => expect(body.deadline).toBe(61_000));
-    clock.now = 61_001;
+      .expect(({ body }) => expect(body.deadline).toBe(601_000));
+    clock.now = 601_001;
     await agent.post('/api/stock/add').send({ itemId: item.id, quantity: 1 }).expect(403);
     await agent
       .get('/api/session')
       .expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ role: 'guest', deadline: null }));
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
     db.close();
   });
 
-  it('extends an active user deadline on authenticated activity', async () => {
+  it('extends the admin deadline on activity', async () => {
     const { db, agent, clock } = fixture();
-    await role(agent, 'operator', 'operator-pass')
+    await role(agent, 'admin', 'admin-pass')
       .expect(200)
-      .expect(({ body }) => expect(body.deadline).toBe(301_000));
+      .expect(({ body }) => expect(body.deadline).toBe(601_000));
     clock.now = 100_000;
     await agent.get('/api/items').expect(200);
     await agent
       .get('/api/session')
       .expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: 400_000 }));
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 700_000 }));
     db.close();
   });
 
-  it('revokes sessions for a changed role and accepts only the new password', async () => {
-    const { db, app } = fixture();
-    const operator = request.agent(app);
-    const admin = request.agent(app);
-    await role(operator, 'operator', 'operator-pass').expect(200);
-    await role(admin, 'admin', 'admin-pass').expect(200);
-    await admin
-      .post('/api/password')
-      .send({ role: 'operator', password: 'new-operator-pass' })
-      .expect(204);
-    await operator
+  it('keeps non-admin access active without an inactivity deadline', async () => {
+    const clock = { now: 1_000 };
+    const { db, inventory, agent } = fixture(clock);
+    const item = inventory.createItem({ name: 'חבל', kind: 'consumable' });
+    inventory.addStock(item.id, 2);
+    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
+    clock.now = 86_400_001_000;
+    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
+    await agent
       .get('/api/session')
       .expect(200)
-      .expect(({ body }) => expect(body.role).toBe('guest'));
-    await role(operator, 'operator', 'operator-pass').expect(401);
-    await role(operator, 'operator', 'new-operator-pass').expect(200);
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
+    db.close();
+  });
+
+  it('revokes admin sessions after an admin password change and accepts the new password', async () => {
+    const { db, agent } = fixture();
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    await agent.post('/api/password').send({ password: 'x' }).expect(204);
+    await agent
+      .get('/api/session')
+      .expect(200)
+      .expect(({ body }) => expect(body.role).toBe('operator'));
+    await role(agent, 'admin', 'admin-pass').expect(401);
+    await role(agent, 'admin', 'x').expect(200);
     db.close();
   });
 
@@ -357,35 +359,35 @@ describe('inventory API permission and edge-case matrix', () => {
     let db = openDatabase(filename);
     const firstApp = createApp({
       database: db,
-      operatorPassword: 'first-operator',
       adminPassword: 'first-admin',
       serveWeb: false,
     });
     const firstAgent = request.agent(firstApp);
     await role(firstAgent, 'admin', 'first-admin').expect(200);
-    await firstAgent
-      .post('/api/password')
-      .send({ role: 'operator', password: 'persisted-operator' })
-      .expect(204);
+    await firstAgent.post('/api/password').send({ password: 'persisted-admin' }).expect(204);
     db.close();
 
     db = openDatabase(filename);
     const app = createApp({
       database: db,
-      operatorPassword: 'replacement-operator',
       adminPassword: 'replacement-admin',
       serveWeb: false,
     });
     const agent = request.agent(app);
-    await role(agent, 'operator', 'replacement-operator').expect(401);
-    await role(agent, 'operator', 'first-operator').expect(401);
-    await role(agent, 'operator', 'persisted-operator').expect(200);
+    await role(agent, 'admin', 'replacement-admin').expect(401);
+    await role(agent, 'admin', 'first-admin').expect(401);
+    await role(agent, 'admin', 'persisted-admin').expect(200);
     db.close();
   });
 
   it('requires explicit bootstrap passwords only for missing credentials', () => {
     const db = openDatabase(':memory:');
-    expect(() => createApp({ database: db, serveWeb: false })).toThrow(/OPERATOR_PASSWORD/);
+    expect(() => createApp({ database: db, serveWeb: false })).toThrow(/ADMIN_PASSWORD/);
+    expect(() =>
+      db
+        .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
+        .run('operator', 'salt', 'hash'),
+    ).toThrow();
     db.close();
   });
 
@@ -400,7 +402,7 @@ describe('inventory API permission and edge-case matrix', () => {
     await agent
       .post('/api/session/role')
       .set('content-type', 'application/json')
-      .send(JSON.stringify({ role: 'guest', padding: 'x'.repeat(33_000) }))
+      .send(JSON.stringify({ role: 'operator', padding: 'x'.repeat(33_000) }))
       .expect(400)
       .expect(({ body }) => expect(body).toMatchObject({ error: 'invalid_json' }));
     await agent

@@ -28,6 +28,7 @@ export function migrate(db: InventoryDatabase): void {
   const migrations = [
     { version: 1, filename: '001_initial.sql', disableForeignKeys: false },
     { version: 2, filename: '002_import_export.sql', disableForeignKeys: true },
+    { version: 3, filename: '003_admin_only_credentials.sql', disableForeignKeys: false },
   ];
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;

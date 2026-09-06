@@ -64,7 +64,7 @@ export function apiRouter(
     '/session/role',
     route((req, res) => {
       const body = parse(
-        z.object({ role: z.enum(['guest', 'operator', 'admin']), password: z.string().optional() }),
+        z.object({ role: z.enum(['operator', 'admin']), password: z.string().optional() }),
         req.body,
       );
       const before = res.locals.session.role;
@@ -138,7 +138,6 @@ export function apiRouter(
   );
   api.post(
     '/borrowers',
-    requireRole('operator', 'admin'),
     route((req, res) =>
       res.status(201).json(service.createBorrower(parse(borrowerInput, req.body))),
     ),
@@ -238,7 +237,6 @@ export function apiRouter(
   );
   api.post(
     '/issue',
-    requireRole('operator', 'admin'),
     route((req, res) => {
       const body = parse(
         z
@@ -251,7 +249,6 @@ export function apiRouter(
   );
   api.post(
     '/checkout',
-    requireRole('operator', 'admin'),
     route((req, res) => {
       const body = parse(
         z.object({
@@ -269,7 +266,6 @@ export function apiRouter(
   );
   api.post(
     '/return',
-    requireRole('operator', 'admin'),
     route((req, res) => {
       const body = parse(
         z.object({
@@ -330,11 +326,8 @@ export function apiRouter(
     '/password',
     requireRole('admin'),
     route((req, res) => {
-      const body = parse(
-        z.object({ role: z.enum(['operator', 'admin']), password: z.string().min(8).max(200) }),
-        req.body,
-      );
-      sessions.changePassword(body.role, body.password);
+      const body = parse(z.object({ password: z.string().min(1).max(200) }), req.body);
+      sessions.changePassword(body.password);
       res.status(204).end();
     }),
   );
