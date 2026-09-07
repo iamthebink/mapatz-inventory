@@ -66,7 +66,7 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'inventory' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
+type Tab = 'inventory' | 'issue' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
 const borrowerTypeNames: Record<Borrower['type'], string> = {
@@ -92,7 +92,8 @@ const eventNames: Record<string, string> = {
   written_off: 'גריעה',
 };
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
-  { key: 'checkout', label: 'ניפוק והשאלה', icon: ArrowLeftRight },
+  { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
+  { key: 'checkout', label: 'השאלה', icon: ArrowLeftRight },
   { key: 'returns', label: 'החזרות', icon: PackageCheck },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
@@ -139,7 +140,8 @@ export function App() {
   const [ledger, setLedger] = useState<LedgerEvent[]>([]);
   const [tab, setTab] = useState<Tab>('inventory');
   const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
-  const [operationQuery, setOperationQuery] = useState('');
+  const [issueQuery, setIssueQuery] = useState('');
+  const [checkoutQuery, setCheckoutQuery] = useState('');
   const [borrowerQuery, setBorrowerQuery] = useState('');
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
@@ -322,14 +324,27 @@ export function App() {
     if (activeDialog.kind === 'import') clearImportInput(activeDialog.mode);
     setActiveDialog(null);
   }, [activeDialog, clearImportInput, isAdmin]);
-  const operationItems = useMemo(
+  const issueItems = useMemo(
     () =>
-      items.filter((item) =>
-        join(item.code, item.name, ...item.aliases)
-          .toLocaleLowerCase()
-          .includes(operationQuery.toLocaleLowerCase()),
+      items.filter(
+        (item) =>
+          item.kind === 'consumable' &&
+          join(item.code, item.name, ...item.aliases)
+            .toLocaleLowerCase()
+            .includes(issueQuery.toLocaleLowerCase()),
       ),
-    [items, operationQuery],
+    [issueQuery, items],
+  );
+  const checkoutItems = useMemo(
+    () =>
+      items.filter(
+        (item) =>
+          item.kind === 'non_consumable' &&
+          join(item.code, item.name, ...item.aliases)
+            .toLocaleLowerCase()
+            .includes(checkoutQuery.toLocaleLowerCase()),
+      ),
+    [checkoutQuery, items],
   );
   const operationBorrowers = useMemo(
     () =>
@@ -843,9 +858,9 @@ export function App() {
       </header>
       <nav className="app-nav" aria-label="ניווט ראשי" data-dialog-background>
         <div className="mx-auto flex max-w-screen-2xl items-center gap-1 overflow-x-auto px-3 py-2 sm:px-6 lg:px-8">
-          {navigation.map(({ key, label, icon: Icon }, index) => (
+          {navigation.map(({ key, label, icon: Icon }) => (
             <div className="contents" key={key}>
-              {index === 2 && <span className="nav-separator" aria-hidden="true" />}
+              {key === 'inventory' && <span className="nav-separator" aria-hidden="true" />}
               <button
                 ref={
                   key === 'returns'
@@ -855,6 +870,7 @@ export function App() {
                       : undefined
                 }
                 className={`nav-item ${tab === key ? 'active' : ''}`}
+                aria-current={tab === key ? 'page' : undefined}
                 onClick={() => setTab(key)}
               >
                 <Icon className="size-4" />
@@ -913,27 +929,17 @@ export function App() {
             />
           </PageSection>
         )}
-        {tab === 'checkout' && (
-          <PageSection
-            title="ניפוק והשאלה"
-            description="בחרו פעולה, פריט ושואל — בלי לעבור בין מסכים"
-            icon={ArrowLeftRight}
-          >
-            <div className="mb-5 grid gap-3 rounded-2xl border border-ctp-surface bg-white p-4 sm:grid-cols-2">
+        {tab === 'issue' && (
+          <PageSection title="ציוד מתכלה" description="ניפוק ציוד מתכלה מהמלאי" icon={PackageOpen}>
+            <div className="mb-5 rounded-2xl border border-ctp-surface bg-white p-4">
               <SearchField
                 label="סינון פריטים"
-                value={operationQuery}
-                onChange={setOperationQuery}
+                value={issueQuery}
+                onChange={setIssueQuery}
                 placeholder="שם, כינוי או קוד"
               />
-              <SearchField
-                label="סינון שואלים"
-                value={borrowerQuery}
-                onChange={setBorrowerQuery}
-                placeholder="שם או שם משתמש"
-              />
             </div>
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4">
               <ActionCard
                 title="ניפוק מתכלה"
                 description="הוצאה קבועה מהמלאי"
@@ -955,13 +961,34 @@ export function App() {
                 <Select
                   name="itemId"
                   label="פריט"
-                  options={operationItems
-                    .filter((item) => item.kind === 'consumable')
-                    .map((item) => [item.id, `${item.code} — ${item.name} (${item.available})`])}
+                  options={issueItems.map((item) => [
+                    item.id,
+                    `${item.code} — ${item.name} (${item.available})`,
+                  ])}
                 />
                 <Quantity />
                 <Note />
               </ActionCard>
+            </div>
+          </PageSection>
+        )}
+        {tab === 'checkout' && (
+          <PageSection title="השאלה" description="השאלת ציוד לשואל עד להחזרה" icon={ArrowLeftRight}>
+            <div className="mb-5 grid gap-3 rounded-2xl border border-ctp-surface bg-white p-4 sm:grid-cols-2">
+              <SearchField
+                label="סינון פריטים"
+                value={checkoutQuery}
+                onChange={setCheckoutQuery}
+                placeholder="שם, כינוי או קוד"
+              />
+              <SearchField
+                label="סינון שואלים"
+                value={borrowerQuery}
+                onChange={setBorrowerQuery}
+                placeholder="שם או שם משתמש"
+              />
+            </div>
+            <div className="grid gap-4">
               <ActionCard
                 title="השאלת ציוד"
                 description="שיוך ציוד לשואל עד להחזרה"
@@ -984,9 +1011,10 @@ export function App() {
                 <Select
                   name="itemId"
                   label="פריט"
-                  options={operationItems
-                    .filter((item) => item.kind === 'non_consumable')
-                    .map((item) => [item.id, `${item.code} — ${item.name} (${item.available})`])}
+                  options={checkoutItems.map((item) => [
+                    item.id,
+                    `${item.code} — ${item.name} (${item.available})`,
+                  ])}
                 />
                 <Select
                   name="borrowerId"

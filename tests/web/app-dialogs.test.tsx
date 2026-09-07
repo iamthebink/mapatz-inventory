@@ -26,6 +26,15 @@ const campEquipment = {
   lotSize: null,
   aliases: ['שולחן מחנה'],
 };
+const consumable = {
+  ...item,
+  id: 13,
+  code: 102,
+  name: 'כפפות',
+  kind: 'consumable' as const,
+  lotSize: 10,
+  aliases: ['כפפת עבודה'],
+};
 const borrower = {
   id: 21,
   username: 'orba',
@@ -66,7 +75,7 @@ function installApiMock({
   failRefreshAfterPath?: string;
   holdPath?: string;
   removeLoanAfterReturn?: boolean;
-  inventoryItems?: Array<typeof item | typeof campEquipment>;
+  inventoryItems?: Array<typeof item | typeof campEquipment | typeof consumable>;
   catalogBorrowers?: Array<typeof borrower>;
   catalogLocations?: Array<typeof location>;
 } = {}) {
@@ -144,16 +153,44 @@ async function openManagement(user: ReturnType<typeof userEvent.setup>, tabName:
   await user.click(screen.getByRole('tab', { name: new RegExp(tabName) }));
 }
 
-it('shows camp equipment in inventory and catalog but excludes it from operator actions', async () => {
-  installApiMock({ inventoryItems: [item, campEquipment] });
+it('separates consumable issue and checkout while excluding camp equipment', async () => {
+  const api = installApiMock({ inventoryItems: [item, consumable, campEquipment] });
   const user = await renderReadyApp();
   expect(screen.getByText('ציוד מחנה')).toBeTruthy();
 
-  await user.click(screen.getByRole('button', { name: 'ניפוק והשאלה' }));
+  const issueTab = screen.getByRole('button', { name: 'ציוד מתכלה' });
+  await user.click(issueTab);
+  expect(issueTab.getAttribute('aria-current')).toBe('page');
   const issue = screen.getByText('ניפוק מתכלה').closest('form')!;
-  const checkout = screen.getByText('השאלת ציוד').closest('form')!;
+  expect(screen.queryByText('השאלת ציוד')).toBeNull();
+  expect(within(issue).getByRole('option', { name: /כפפות/ })).toBeTruthy();
+  expect(within(issue).queryByRole('option', { name: /פטיש/ })).toBeNull();
   expect(within(issue).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
+  await user.type(screen.getByLabelText('סינון פריטים'), 'כפפות');
+  await user.selectOptions(within(issue).getByLabelText('פריט'), String(consumable.id));
+  await user.type(within(issue).getByLabelText('כמות'), '2');
+  await user.click(within(issue).getByRole('button', { name: 'בצע פעולה' }));
+  await waitFor(() => expect(issue.querySelector('fieldset')?.disabled).toBe(false));
+  const issueRequest = api.requests.find((request) => request.path === '/api/issue')!;
+  expect(bodyOf(issueRequest)).toEqual({ itemId: 13, quantity: 2, note: '' });
+
+  const checkoutTab = screen.getByRole('button', { name: /^השאלה$/ });
+  await user.click(checkoutTab);
+  expect(issueTab.hasAttribute('aria-current')).toBe(false);
+  expect(checkoutTab.getAttribute('aria-current')).toBe('page');
+  expect((screen.getByLabelText('סינון פריטים') as HTMLInputElement).value).toBe('');
+  const checkout = screen.getByText('השאלת ציוד').closest('form')!;
+  expect(issue.isConnected).toBe(false);
+  expect(within(checkout).getByRole('option', { name: /פטיש/ })).toBeTruthy();
+  expect(within(checkout).queryByRole('option', { name: /כפפות/ })).toBeNull();
   expect(within(checkout).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
+  await user.selectOptions(within(checkout).getByLabelText('פריט'), String(item.id));
+  await user.selectOptions(within(checkout).getByLabelText('שואל'), String(borrower.id));
+  await user.type(within(checkout).getByLabelText('כמות'), '1');
+  await user.click(within(checkout).getByRole('button', { name: 'בצע פעולה' }));
+  await waitFor(() => expect(checkout.querySelector('fieldset')?.disabled).toBe(false));
+  const checkoutRequest = api.requests.find((request) => request.path === '/api/checkout')!;
+  expect(bodyOf(checkoutRequest)).toEqual({ itemId: 11, borrowerId: 21, quantity: 1, note: '' });
 
   await openManagement(user, 'פריטים ומיקומים');
   expect(screen.getByRole('option', { name: 'ציוד מחנה' })).toBeTruthy();
