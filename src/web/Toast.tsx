@@ -5,6 +5,7 @@ export type ToastTone = 'success' | 'warning' | 'error';
 
 export type ToastMessage = {
   id: number;
+  title: string;
   message: string;
   tone: ToastTone;
 };
@@ -14,11 +15,11 @@ const EXIT_FALLBACK_MS = 250;
 
 const toastPresentation: Record<
   ToastTone,
-  { icon: LucideIcon; label: string; role: 'status' | 'alert' }
+  { icon: LucideIcon; accessibleTone: string; role: 'status' | 'alert' }
 > = {
-  success: { icon: CheckCircle2, label: 'הצלחה', role: 'status' },
-  warning: { icon: TriangleAlert, label: 'אזהרה', role: 'alert' },
-  error: { icon: CircleX, label: 'שגיאה', role: 'alert' },
+  success: { icon: CheckCircle2, accessibleTone: 'הצלחה', role: 'status' },
+  warning: { icon: TriangleAlert, accessibleTone: 'אזהרה', role: 'alert' },
+  error: { icon: CircleX, accessibleTone: 'שגיאה', role: 'alert' },
 };
 
 export function Toast({
@@ -58,6 +59,7 @@ export function Toast({
         className={`toast toast-${toast.tone}${exiting ? ' toast-exiting' : ''}`}
         role={presentation.role}
         aria-atomic="true"
+        aria-label={`${presentation.accessibleTone}: ${toast.title}. ${toast.message}`}
         onAnimationEnd={(event) => {
           if (
             exiting &&
@@ -70,9 +72,7 @@ export function Toast({
       >
         <Icon className="toast-icon" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <strong className="block text-xs font-semibold text-ctp-text">
-            {presentation.label}
-          </strong>
+          <strong className="block text-xs font-semibold text-ctp-text">{toast.title}</strong>
           <span className="mt-0.5 block text-sm text-ctp-text">{toast.message}</span>
         </div>
         <button

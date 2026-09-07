@@ -7,7 +7,10 @@ const styles = readFileSync(new URL('../../src/web/styles.css', import.meta.url)
 
 function renderToast(tone: ToastMessage['tone']) {
   return renderToStaticMarkup(
-    <Toast toast={{ id: 1, message: 'הודעת בדיקה', tone }} onDismiss={() => undefined} />,
+    <Toast
+      toast={{ id: 1, title: 'הוספת פריט חדש', message: 'הודעת בדיקה', tone }}
+      onDismiss={() => undefined}
+    />,
   );
 }
 
@@ -16,17 +19,21 @@ describe('Toast', () => {
     ['success', 'toast-success', 'role="status"', 'הצלחה'],
     ['warning', 'toast-warning', 'role="alert"', 'אזהרה'],
     ['error', 'toast-error', 'role="alert"', 'שגיאה'],
-  ] as const)('renders %s feedback with distinct semantics', (tone, className, role, label) => {
-    const markup = renderToast(tone);
+  ] as const)(
+    'renders %s feedback with distinct semantics',
+    (tone, className, role, accessibleTone) => {
+      const markup = renderToast(tone);
 
-    expect(markup).toContain(className);
-    expect(markup).toContain(role);
-    expect(markup).toContain(label);
-    expect(markup).toContain('text-ctp-text');
-    expect(markup).toContain('הודעת בדיקה');
-    expect(markup).toContain('aria-label="סגירת הודעה"');
-    expect(markup).toContain('type="button"');
-  });
+      expect(markup).toContain(className);
+      expect(markup).toContain(role);
+      expect(markup).toContain('הוספת פריט חדש');
+      expect(markup).toContain(`aria-label="${accessibleTone}: הוספת פריט חדש. הודעת בדיקה"`);
+      expect(markup).toContain('text-ctp-text');
+      expect(markup).toContain('הודעת בדיקה');
+      expect(markup).toContain('aria-label="סגירת הודעה"');
+      expect(markup).toContain('type="button"');
+    },
+  );
 
   it('anchors the viewport at the bottom and uses symmetric vertical motion', () => {
     expect(styles).toMatch(/\.toast-viewport\s*{[^}]*\bbottom-4\b/);

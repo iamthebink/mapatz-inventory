@@ -190,16 +190,16 @@ export function App() {
     setActiveDialog(dialog);
   }
 
-  const showToast = useCallback((message: string, tone: ToastTone) => {
+  const showToast = useCallback((title: string, message: string, tone: ToastTone) => {
     toastIdRef.current += 1;
-    setToast({ id: toastIdRef.current, message, tone });
+    setToast({ id: toastIdRef.current, title, message, tone });
   }, []);
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
   const showError = useCallback(
-    (error: unknown) => {
-      showToast(error instanceof Error ? error.message : 'הפעולה נכשלה', 'error');
+    (title: string, error: unknown) => {
+      showToast(title, error instanceof Error ? error.message : 'הפעולה נכשלה', 'error');
     },
     [showToast],
   );
@@ -237,10 +237,10 @@ export function App() {
   }, [applySession, tab]);
 
   useEffect(() => {
-    refresh().catch(showError);
+    refresh().catch((error) => showError('טעינת נתוני המלאי', error));
   }, [refresh, showError]);
   useEffect(() => {
-    const auth = () => refresh().catch(showError);
+    const auth = () => refresh().catch((error) => showError('רענון הרשאות', error));
     window.addEventListener('mapatz-auth-stale', auth);
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => {
@@ -255,7 +255,7 @@ export function App() {
     // This prevents a failed refresh from leaving enabled admin controls at 00:00.
     sessionRequestRef.current += 1;
     setSession({ role: 'operator', deadline: null });
-    refresh().catch(showError);
+    refresh().catch((error) => showError('רענון לאחר סיום מצב מנהל', error));
   }, [remaining, session.role, refresh, showError]);
   useEffect(() => {
     let lastPing = 0;
@@ -265,7 +265,7 @@ export function App() {
       const requestId = ++sessionRequestRef.current;
       const request = api<Session>('/session/activity', { method: 'POST' })
         .then((next) => applySession(next, requestId))
-        .catch(showError)
+        .catch((error) => showError('הארכת מצב מנהל', error))
         .finally(() => {
           if (activityRequestRef.current === request) activityRequestRef.current = null;
         });
@@ -283,7 +283,7 @@ export function App() {
       if (document.visibilityState !== 'visible') return;
       setSessionReconciling(true);
       refresh()
-        .catch(showError)
+        .catch((error) => showError('רענון נתוני המלאי', error))
         .finally(() => setSessionReconciling(false));
     };
     document.addEventListener('visibilitychange', reconcile);
@@ -342,7 +342,7 @@ export function App() {
     [borrowers, borrowerQuery],
   );
 
-  async function action(operation: () => Promise<unknown>) {
+  async function action(title: string, operation: () => Promise<unknown>) {
     if (pendingRef.current) return false;
     pendingRef.current = true;
     setPending(true);
@@ -353,16 +353,17 @@ export function App() {
       await operation();
       try {
         await refresh();
-        showToast('הפעולה הושלמה בהצלחה', 'success');
+        showToast(title, 'הפעולה הושלמה בהצלחה', 'success');
       } catch {
         showToast(
+          title,
           'הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.',
           'warning',
         );
       }
       return true;
     } catch (error) {
-      showError(error);
+      showError(title, error);
       return false;
     } finally {
       pendingRef.current = false;
@@ -394,7 +395,7 @@ export function App() {
       });
       applySession(next, requestId);
     } catch (error) {
-      showError(error);
+      showError('סיום מצב מנהל', error);
     } finally {
       pendingRef.current = false;
       setPending(false);
@@ -417,7 +418,7 @@ export function App() {
       if (error instanceof ApiError && error.code === 'wrong_password') {
         setAdminPasswordError('הסיסמה אינה נכונה.');
       } else {
-        showError(error);
+        showError('הפעלת מצב מנהל', error);
       }
     } finally {
       pendingRef.current = false;
@@ -428,7 +429,7 @@ export function App() {
     let succeeded = false;
     switch (submission.kind) {
       case 'return':
-        succeeded = await action(() =>
+        succeeded = await action('החזרת ציוד', () =>
           api('/return', {
             method: 'POST',
             body: JSON.stringify({
@@ -441,7 +442,7 @@ export function App() {
         );
         break;
       case 'lost':
-        succeeded = await action(() =>
+        succeeded = await action(submission.lost ? 'סימון ציוד כאבוד' : 'ביטול סימון אובדן', () =>
           api('/lost', {
             method: 'POST',
             body: JSON.stringify({
@@ -454,7 +455,7 @@ export function App() {
         );
         break;
       case 'edit-item':
-        succeeded = await action(() =>
+        succeeded = await action('עריכת פריט', () =>
           api(`/items/${submission.itemId}`, {
             method: 'PUT',
             body: JSON.stringify({
@@ -467,7 +468,7 @@ export function App() {
         );
         break;
       case 'edit-borrower':
-        succeeded = await action(() =>
+        succeeded = await action('עריכת שואל', () =>
           api(`/borrowers/${submission.borrowerId}`, {
             method: 'PUT',
             body: JSON.stringify({
@@ -480,7 +481,7 @@ export function App() {
         );
         break;
       case 'edit-location':
-        succeeded = await action(() =>
+        succeeded = await action('עריכת מיקום', () =>
           api(`/locations/${submission.locationId}`, {
             method: 'PUT',
             body: JSON.stringify({
@@ -492,10 +493,12 @@ export function App() {
         );
         break;
       case 'import':
-        succeeded = await action(() =>
-          submission.mode === 'reset'
-            ? importResetWorkbook(submission.file)
-            : importRecoveryWorkbook(submission.file),
+        succeeded = await action(
+          submission.mode === 'reset' ? 'ייבוא איפוס שנתי' : 'שחזור מלא',
+          () =>
+            submission.mode === 'reset'
+              ? importResetWorkbook(submission.file)
+              : importRecoveryWorkbook(submission.file),
         );
         clearImportInput(submission.mode);
         break;
@@ -643,7 +646,7 @@ export function App() {
           archived={item.archived}
           disabled={pending || !adminActionsEnabled}
           onArchive={() =>
-            void action(() =>
+            void action(item.archived ? 'הוצאת פריט מהארכיון' : 'העברת פריט לארכיון', () =>
               api(`/items/${item.id}/archive`, {
                 method: 'POST',
                 body: JSON.stringify({ archived: !item.archived }),
@@ -698,7 +701,7 @@ export function App() {
           archived={borrower.archived}
           disabled={pending || !adminActionsEnabled}
           onArchive={() =>
-            void action(() =>
+            void action(borrower.archived ? 'הוצאת שואל מהארכיון' : 'העברת שואל לארכיון', () =>
               api(`/borrowers/${borrower.id}/archive`, {
                 method: 'POST',
                 body: JSON.stringify({ archived: !borrower.archived }),
@@ -743,7 +746,7 @@ export function App() {
             openInventoryDialog({ kind: 'edit-location', location }, managementTabRef.current)
           }
           onArchive={() =>
-            void action(() =>
+            void action(location.archived ? 'הוצאת מיקום מהארכיון' : 'העברת מיקום לארכיון', () =>
               api(`/locations/${location.id}`, {
                 method: 'PUT',
                 body: JSON.stringify({ ...location, archived: !location.archived }),
@@ -938,7 +941,7 @@ export function App() {
                 icon={PackageOpen}
                 disabled={pending}
                 onSubmit={(form) =>
-                  void action(() =>
+                  void action('ניפוק מתכלה', () =>
                     api('/issue', {
                       method: 'POST',
                       body: JSON.stringify({
@@ -966,7 +969,7 @@ export function App() {
                 icon={ArrowLeftRight}
                 disabled={pending}
                 onSubmit={(form) =>
-                  void action(() =>
+                  void action('השאלת ציוד', () =>
                     api('/checkout', {
                       method: 'POST',
                       body: JSON.stringify({
@@ -1050,7 +1053,7 @@ export function App() {
                       icon={PackagePlus}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action(() =>
+                        void action('הוספת מלאי', () =>
                           api('/stock/add', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1076,7 +1079,7 @@ export function App() {
                       icon={Wrench}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action(() =>
+                        void action('תיקון כמות', () =>
                           api('/stock/remove', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1104,19 +1107,26 @@ export function App() {
                       description="החזרה לשימוש או גריעה"
                       icon={TriangleAlert}
                       disabled={!adminActionsEnabled || pending}
-                      onSubmit={(form) =>
-                        void action(() =>
-                          api('/damage', {
-                            method: 'POST',
-                            body: JSON.stringify({
-                              itemId: number(form, 'itemId'),
-                              quantity: number(form, 'quantity'),
-                              resolution: form.get('resolution'),
-                              note: form.get('note'),
+                      onSubmit={(form) => {
+                        const resolution = form.get('resolution');
+                        void action(
+                          resolution === 'repair'
+                            ? 'תיקון פריט פגום'
+                            : resolution === 'write_off'
+                              ? 'גריעת פריט פגום'
+                              : 'טיפול בפריט פגום',
+                          () =>
+                            api('/damage', {
+                              method: 'POST',
+                              body: JSON.stringify({
+                                itemId: number(form, 'itemId'),
+                                quantity: number(form, 'quantity'),
+                                resolution: form.get('resolution'),
+                                note: form.get('note'),
+                              }),
                             }),
-                          }),
-                        )
-                      }
+                        );
+                      }}
                     >
                       <Select
                         name="itemId"
@@ -1151,7 +1161,7 @@ export function App() {
                       icon={Plus}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action(() =>
+                        void action('הוספת פריט חדש', () =>
                           api('/items', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1202,7 +1212,7 @@ export function App() {
                       icon={MapPin}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action(() =>
+                        void action('הוספת מיקום חדש', () =>
                           api('/locations', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1256,7 +1266,7 @@ export function App() {
                       icon={UserPlus}
                       disabled={pending}
                       onSubmit={(form) =>
-                        void action(() =>
+                        void action('הוספת שואל חדש', () =>
                           api('/borrowers', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1309,7 +1319,7 @@ export function App() {
                     icon={KeyRound}
                     disabled={!adminActionsEnabled || pending}
                     onSubmit={(form) =>
-                      void action(() =>
+                      void action('החלפת סיסמה', () =>
                         api('/password', {
                           method: 'POST',
                           body: JSON.stringify({
@@ -1331,7 +1341,7 @@ export function App() {
                     description="קובץ XLSX לאיפוס, שחזור ודוחות — ללא סיסמאות או הגדרות"
                     icon={Download}
                     disabled={!adminActionsEnabled || pending}
-                    onSubmit={() => void action(downloadInventoryWorkbook)}
+                    onSubmit={() => void action('ייצוא מלאי', downloadInventoryWorkbook)}
                   >
                     <p className="text-sm text-ctp-subtext">
                       הקובץ כולל אזורי איפוס ושחזור נפרדים. שמרו אותו במקום מאובטח.

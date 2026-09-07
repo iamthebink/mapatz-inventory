@@ -55,14 +55,20 @@ function response(body: unknown, status = 200): Response {
 
 function installApiMock({
   failPath,
+  failRefreshAfterPath,
   holdPath,
   removeLoanAfterReturn = false,
   inventoryItems = [item],
+  catalogBorrowers = [borrower],
+  catalogLocations = [location],
 }: {
   failPath?: string;
+  failRefreshAfterPath?: string;
   holdPath?: string;
   removeLoanAfterReturn?: boolean;
   inventoryItems?: Array<typeof item | typeof campEquipment>;
+  catalogBorrowers?: Array<typeof borrower>;
+  catalogLocations?: Array<typeof location>;
 } = {}) {
   const requests: RecordedRequest[] = [];
   let role: 'operator' | 'admin' = 'admin';
@@ -70,6 +76,7 @@ function installApiMock({
   let releaseHeld: (() => void) | undefined;
   let holdNextSession = false;
   let releaseSession: (() => void) | undefined;
+  let failNextRefresh = false;
 
   vi.stubGlobal(
     'fetch',
@@ -82,7 +89,12 @@ function installApiMock({
         if (path === failPath)
           return response({ error: 'rejected', message: 'השרת דחה את הפעולה' }, 400);
         if (path === '/api/return' && removeLoanAfterReturn) loans = [];
+        if (path === failRefreshAfterPath) failNextRefresh = true;
         return response(undefined, 204);
+      }
+      if (failNextRefresh) {
+        failNextRefresh = false;
+        return response({ error: 'refresh_failed', message: 'הרענון נכשל' }, 500);
       }
       if (path === '/api/session') {
         if (holdNextSession) {
@@ -92,8 +104,9 @@ function installApiMock({
         return response({ role, deadline: role === 'admin' ? Date.now() + 600_000 : null });
       }
       if (path === '/api/items' || path === '/api/items?all=1') return response(inventoryItems);
-      if (path === '/api/borrowers' || path === '/api/borrowers?all=1') return response([borrower]);
-      if (path === '/api/locations?all=1') return response([location]);
+      if (path === '/api/borrowers' || path === '/api/borrowers?all=1')
+        return response(catalogBorrowers);
+      if (path === '/api/locations?all=1') return response(catalogLocations);
       if (path === '/api/loans') return response(loans);
       if (path === '/api/ledger') return response([]);
       throw new Error(`Unexpected request: ${method} ${path}`);
@@ -152,6 +165,20 @@ afterEach(() => {
 });
 
 describe('App dialog workflows', () => {
+  it('names a successful new-item toast after the completed action', async () => {
+    const api = installApiMock();
+    const user = await renderReadyApp();
+    await openManagement(user, 'פריטים ומיקומים');
+
+    const form = screen.getByText('פריט חדש').closest('form')!;
+    await user.type(within(form).getByLabelText('שם'), 'אוהל חדש');
+    await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+
+    const successToast = await screen.findByText('הוספת פריט חדש');
+    expect(successToast.closest('.toast')?.textContent).toContain('הפעולה הושלמה בהצלחה');
+    expect(api.requests.some((request) => request.path === '/api/items')).toBe(true);
+  });
+
   it('validates and submits one atomic return form, then restores a stable fallback', async () => {
     const api = installApiMock({ removeLoanAfterReturn: true });
     const user = await renderReadyApp();
@@ -193,6 +220,10 @@ describe('App dialog workflows', () => {
     await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
+    const successToast = screen.getByText('החזרת ציוד').closest('.toast')!;
+    expect(successToast.textContent).toContain('החזרת ציוד');
+    expect(successToast.textContent).toContain('הפעולה הושלמה בהצלחה');
+
     const request = api.requests.find((entry) => entry.path === '/api/return')!;
     expect(request.init.method).toBe('POST');
     expect(bodyOf(request)).toEqual({ checkoutId: 41, usable: 1, damaged: 1, note: 'תקין' });
@@ -216,6 +247,7 @@ describe('App dialog workflows', () => {
     await user.click(save);
 
     const toastText = await screen.findByText('השרת דחה את הפעולה');
+    expect(screen.getByRole('alert').textContent).toContain('החזרת ציוד');
     expect(screen.getByRole('dialog')).toBe(dialog);
     expect((note as HTMLTextAreaElement).value).toBe('ניסיון חוזר');
     await waitFor(() => expect(document.activeElement).toBe(save));
@@ -226,6 +258,20 @@ describe('App dialog workflows', () => {
     expect(document.activeElement).toBe(returnTrigger);
   });
 
+  it('keeps the action title when a successful operation is followed by a refresh warning', async () => {
+    installApiMock({ failRefreshAfterPath: '/api/return' });
+    const user = await renderReadyApp();
+    await user.click(screen.getByRole('button', { name: 'החזרות' }));
+    await user.click(screen.getByRole('button', { name: 'החזרה' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'שמירה' }));
+
+    const warningToast = await screen.findByRole('alert');
+    expect(warningToast.textContent).toContain('החזרת ציוד');
+    expect(warningToast.textContent).toContain(
+      'הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.',
+    );
+  });
+
   it('routes mark-lost and unmark-lost through the same bounded typed form', async () => {
     const api = installApiMock();
     const user = await renderReadyApp();
@@ -234,10 +280,12 @@ describe('App dialog workflows', () => {
     await user.click(screen.getByRole('button', { name: 'סמן אבוד' }));
     await user.click(screen.getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText('סימון ציוד כאבוד')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'בטל אובדן' }));
     await user.click(screen.getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText('ביטול סימון אובדן')).toBeTruthy();
 
     const lostRequests = api.requests.filter((request) => request.path === '/api/lost');
     expect(lostRequests.map(bodyOf)).toEqual([
@@ -245,6 +293,101 @@ describe('App dialog workflows', () => {
       { checkoutId: 41, quantity: 1, lost: false, note: '' },
     ]);
   });
+
+  it.each([
+    {
+      entity: 'item',
+      archived: false,
+      tab: 'פריטים ומיקומים',
+      section: 'קטלוג פריטים',
+      path: '/api/items/11/archive',
+      title: 'העברת פריט לארכיון',
+    },
+    {
+      entity: 'item',
+      archived: true,
+      tab: 'פריטים ומיקומים',
+      section: 'קטלוג פריטים',
+      path: '/api/items/11/archive',
+      title: 'הוצאת פריט מהארכיון',
+    },
+    {
+      entity: 'borrower',
+      archived: false,
+      tab: 'שואלים',
+      section: 'קטלוג שואלים',
+      path: '/api/borrowers/21/archive',
+      title: 'העברת שואל לארכיון',
+    },
+    {
+      entity: 'borrower',
+      archived: true,
+      tab: 'שואלים',
+      section: 'קטלוג שואלים',
+      path: '/api/borrowers/21/archive',
+      title: 'הוצאת שואל מהארכיון',
+    },
+    {
+      entity: 'location',
+      archived: false,
+      tab: 'פריטים ומיקומים',
+      section: 'מיקומים',
+      path: '/api/locations/31',
+      title: 'העברת מיקום לארכיון',
+    },
+    {
+      entity: 'location',
+      archived: true,
+      tab: 'פריטים ומיקומים',
+      section: 'מיקומים',
+      path: '/api/locations/31',
+      title: 'הוצאת מיקום מהארכיון',
+    },
+  ] as const)('uses "$title" for the matching archive direction', async (testCase) => {
+    const api = installApiMock({
+      inventoryItems:
+        testCase.entity === 'item' ? [{ ...item, archived: testCase.archived }] : [item],
+      catalogBorrowers:
+        testCase.entity === 'borrower'
+          ? [{ ...borrower, archived: testCase.archived }]
+          : [borrower],
+      catalogLocations:
+        testCase.entity === 'location'
+          ? [{ ...location, archived: testCase.archived }]
+          : [location],
+    });
+    const user = await renderReadyApp();
+    await openManagement(user, testCase.tab);
+
+    const section = screen.getByRole('heading', { name: testCase.section }).closest('section')!;
+    await user.click(
+      within(section).getByRole('button', { name: testCase.archived ? 'שחזור' : 'ארכוב' }),
+    );
+
+    expect(await screen.findByText(testCase.title)).toBeTruthy();
+    expect(api.requests.some((request) => request.path === testCase.path)).toBe(true);
+  });
+
+  it.each([
+    ['repair', 'תיקון פריט פגום'],
+    ['write_off', 'גריעת פריט פגום'],
+  ] as const)(
+    'uses the selected damage resolution in the toast title',
+    async (resolution, title) => {
+      const api = installApiMock({ inventoryItems: [{ ...item, damaged: 2 }] });
+      const user = await renderReadyApp();
+      await openManagement(user, 'מלאי ותיקונים');
+
+      const form = screen.getByText('טיפול בפגום').closest('form')!;
+      await user.selectOptions(within(form).getByLabelText('פריט'), String(item.id));
+      await user.type(within(form).getByLabelText('כמות'), '1');
+      await user.selectOptions(within(form).getByLabelText('פתרון'), resolution);
+      await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+
+      expect(await screen.findByText(title)).toBeTruthy();
+      expect(api.requests.some((request) => request.path === '/api/damage')).toBe(true);
+    },
+  );
 
   it('submits exact item, borrower, and location update payloads from prefilled forms', async () => {
     const api = installApiMock();
