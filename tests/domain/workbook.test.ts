@@ -12,6 +12,7 @@ import {
   parseRecoveryWorkbook,
   parseResetWorkbook,
 } from '../../src/io/workbook.js';
+import { recordHistoricalStockRemoval } from '../helpers/historical-events.js';
 
 async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
@@ -52,7 +53,7 @@ describe('inventory XLSX workbook', () => {
       ],
     });
     const item = new InventoryService(db).listItems('Permanent')[0]!;
-    new InventoryService(db).removeStock(item.id, 1, 'count correction');
+    recordHistoricalStockRemoval(db, item.id, 1, 'historical count correction');
     const snapshot = transfers.snapshot();
     const exported = await exportWorkbook(snapshot);
 
@@ -148,7 +149,7 @@ describe('inventory XLSX workbook', () => {
     const tent = inventory.listItems('אוהל', true)[0]!;
     inventory.addStock(water.id, 20, 'receipt');
     inventory.issue(water.id, 30, 'issued');
-    inventory.removeStock(water.id, 5, 'correction');
+    recordHistoricalStockRemoval(db, water.id, 5, 'historical correction');
     const borrower = inventory.createBorrower({
       username: 'camp-a',
       name: 'מחנה א',

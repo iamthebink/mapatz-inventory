@@ -232,12 +232,11 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(201);
     const itemId = Number(created.body.id);
     await agent.post('/api/stock/add').send({ itemId, quantity: 7 }).expect(201);
-    await agent.post('/api/stock/remove').send({ itemId, quantity: 2 }).expect(201);
     await agent
       .post('/api/stock/remove')
-      .send({ itemId, quantity: 6 })
-      .expect(400)
-      .expect(({ body }) => expect(body.error).toBe('insufficient_stock'));
+      .send({ itemId, quantity: 2 })
+      .expect(404)
+      .expect(({ body }) => expect(body.error).toBe('not_found'));
     await agent
       .post('/api/issue')
       .send({ itemId, quantity: 1 })
@@ -250,13 +249,10 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(({ body }) => expect(body.error).toBe('wrong_item_kind'));
     expect(inventory.listItems(String(created.body.code))[0]).toMatchObject({
       kind: 'camp_equipment',
-      available: 5,
+      available: 7,
       damaged: 0,
     });
-    expect(inventory.listLedger().map((event) => event.kind)).toEqual([
-      'stock_removed',
-      'stock_added',
-    ]);
+    expect(inventory.listLedger().map((event) => event.kind)).toEqual(['stock_added']);
     db.close();
   });
 

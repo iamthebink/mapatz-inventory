@@ -376,7 +376,7 @@ describe('App dialog workflows', () => {
     async (resolution, title) => {
       const api = installApiMock({ inventoryItems: [{ ...item, damaged: 2 }] });
       const user = await renderReadyApp();
-      await openManagement(user, 'מלאי ותיקונים');
+      await openManagement(user, 'מלאי ופגומים');
 
       const form = screen.getByText('טיפול בפגום').closest('form')!;
       await user.selectOptions(within(form).getByLabelText('פריט'), String(item.id));
@@ -388,6 +388,16 @@ describe('App dialog workflows', () => {
       expect(api.requests.some((request) => request.path === '/api/damage')).toBe(true);
     },
   );
+
+  it('does not expose an inventory correction action', async () => {
+    installApiMock();
+    const user = await renderReadyApp();
+    await openManagement(user, 'מלאי ופגומים');
+
+    expect(screen.queryByText('תיקון כמות')).toBeNull();
+    expect(screen.getByText('הוספת מלאי')).toBeTruthy();
+    expect(screen.getByText('טיפול בפגום')).toBeTruthy();
+  });
 
   it('submits exact item, borrower, and location update payloads from prefilled forms', async () => {
     const api = installApiMock();

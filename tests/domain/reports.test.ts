@@ -13,6 +13,7 @@ import {
   parseRecoveryWorkbook,
   parseResetWorkbook,
 } from '../../src/io/workbook.js';
+import { recordHistoricalStockRemoval } from '../helpers/historical-events.js';
 
 async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
@@ -155,7 +156,7 @@ describe('inventory workbook reports', () => {
     const planning = inventory.listItems('Planning example', true)[0]!;
     inventory.addStock(correction.id, 20);
     inventory.issue(correction.id, 30);
-    inventory.removeStock(correction.id, 5);
+    recordHistoricalStockRemoval(source, correction.id, 5);
     inventory.addStock(planning.id, 20);
 
     const snapshot = sourceTransfers.snapshot();

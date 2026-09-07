@@ -229,17 +229,6 @@ export function apiRouter(
     }),
   );
   api.post(
-    '/stock/remove',
-    requireRole('admin'),
-    route((req, res) => {
-      const body = parse(
-        z.object({ itemId: positive, quantity: positive, note: z.string().max(500).optional() }),
-        req.body,
-      );
-      res.status(201).json({ eventId: service.removeStock(body.itemId, body.quantity, body.note) });
-    }),
-  );
-  api.post(
     '/issue',
     route((req, res) => {
       const body = parse(

@@ -144,10 +144,9 @@ describe('inventory domain', () => {
     const inventory = new InventoryService(db);
     const item = inventory.createItem({ name: 'שולחן קבוע', kind: 'camp_equipment' });
     inventory.addStock(item.id, 8);
-    inventory.removeStock(item.id, 3);
     expect(inventory.listItems(String(item.code))[0]).toMatchObject({
       kind: 'camp_equipment',
-      available: 5,
+      available: 8,
       damaged: 0,
     });
     expect(() => inventory.issue(item.id, 1)).toThrow(
@@ -159,10 +158,7 @@ describe('inventory domain', () => {
     expect(() => inventory.createItem({ name: 'בר', kind: 'camp_equipment', lotSize: 2 })).toThrow(
       expect.objectContaining({ code: 'invalid_lot_size' }),
     );
-    expect(inventory.listLedger().map((event) => event.kind)).toEqual([
-      'stock_removed',
-      'stock_added',
-    ]);
+    expect(inventory.listLedger().map((event) => event.kind)).toEqual(['stock_added']);
     db.close();
   });
 

@@ -33,7 +33,7 @@ Development data defaults to `./data/inventory.sqlite`. A fresh database require
 ## Roles and operating model
 
 - Non-admin users can immediately create borrowers, issue consumables, check out non-consumables, and record usable or damaged returns without a password.
-- Admins can additionally manage catalogs and the admin password, correct stock through compensating events, archive inactive records, resolve damage, and mark or unmark lost equipment.
+- Admins can additionally manage catalogs and the admin password, receive stock, archive inactive records, resolve damage, and mark or unmark lost equipment.
 - Admin privileges return to non-admin after ten idle minutes. The UI warns during the last ten seconds, while the server independently enforces the deadline. Non-admin access does not expire.
 - The admin password is an accidental-action barrier for a trusted operating environment, not a security boundary against malicious local or network access.
 

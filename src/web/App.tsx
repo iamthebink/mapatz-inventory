@@ -32,7 +32,6 @@ import {
   Upload,
   UserPlus,
   Users,
-  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from './AdminMode';
@@ -107,8 +106,8 @@ const managementNavigation: {
 }[] = [
   {
     key: 'stock',
-    label: 'מלאי ותיקונים',
-    description: 'קליטה, התאמות וטיפול בפגום',
+    label: 'מלאי ופגומים',
+    description: 'קליטה וטיפול בפגום',
     icon: PackagePlus,
   },
   {
@@ -1046,7 +1045,7 @@ export function App() {
             <div className="mt-6">
               {managementTab === 'stock' && (
                 <>
-                  <div className="grid gap-4 lg:grid-cols-3">
+                  <div className="grid gap-4 lg:grid-cols-2">
                     <ActionCard
                       title="הוספת מלאי"
                       description="קליטת יחידות חדשות"
@@ -1072,35 +1071,6 @@ export function App() {
                       />
                       <Quantity />
                       <Note />
-                    </ActionCard>
-                    <ActionCard
-                      title="תיקון כמות"
-                      description="התאמת המלאי לספירה בפועל"
-                      icon={Wrench}
-                      disabled={!adminActionsEnabled || pending}
-                      onSubmit={(form) =>
-                        void action('תיקון כמות', () =>
-                          api('/stock/remove', {
-                            method: 'POST',
-                            body: JSON.stringify({
-                              itemId: number(form, 'itemId'),
-                              quantity: number(form, 'quantity'),
-                              note: form.get('note'),
-                            }),
-                          }),
-                        )
-                      }
-                    >
-                      <Select
-                        name="itemId"
-                        label="פריט"
-                        options={items.map((item) => [
-                          item.id,
-                          `${item.code} — ${item.name} (${item.available})`,
-                        ])}
-                      />
-                      <Quantity />
-                      <Note label="סיבת התיקון (רשות)" />
                     </ActionCard>
                     <ActionCard
                       title="טיפול בפגום"

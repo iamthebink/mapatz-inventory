@@ -9,6 +9,7 @@ import { InventoryService } from '../../src/domain/inventory.js';
 import { WORKBOOK_CONTRACT } from '../../src/io/workbook-contract.js';
 import { exportWorkbook, parseRecoveryWorkbook } from '../../src/io/workbook.js';
 import { createApp } from '../../src/server/index.js';
+import { recordHistoricalStockRemoval } from '../helpers/historical-events.js';
 
 const cleanup: string[] = [];
 afterEach(() => {
@@ -67,7 +68,7 @@ function sourceFixture() {
   const tent = inventory.listItems('Tent', true)[0]!;
   inventory.addStock(water.id, 20, 'received');
   inventory.issue(water.id, 30, 'used');
-  inventory.removeStock(water.id, 5, 'count correction');
+  recordHistoricalStockRemoval(db, water.id, 5, 'historical count correction');
   const borrower = inventory.createBorrower({
     username: 'camp-a',
     name: 'Camp A',

@@ -181,13 +181,6 @@ export class InventoryService {
     return this.append('stock_added', itemId, integer(quantity), null, null, note);
   }
 
-  removeStock(itemId: number, quantity: number, note = ''): number {
-    return transaction(this.db, () => {
-      this.requireAvailable(itemId, quantity);
-      return this.append('stock_removed', itemId, quantity, null, null, note);
-    });
-  }
-
   issue(itemId: number, quantity: number, note = ''): number {
     return transaction(this.db, () => {
       const item = this.requireItem(itemId);
