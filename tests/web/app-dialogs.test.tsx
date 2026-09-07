@@ -17,6 +17,15 @@ const item = {
   damaged: 0,
   archived: false,
 };
+const campEquipment = {
+  ...item,
+  id: 12,
+  code: 101,
+  name: 'שולחן קבוע',
+  kind: 'camp_equipment' as const,
+  lotSize: null,
+  aliases: ['שולחן מחנה'],
+};
 const borrower = {
   id: 21,
   username: 'orba',
@@ -48,10 +57,12 @@ function installApiMock({
   failPath,
   holdPath,
   removeLoanAfterReturn = false,
+  inventoryItems = [item],
 }: {
   failPath?: string;
   holdPath?: string;
   removeLoanAfterReturn?: boolean;
+  inventoryItems?: Array<typeof item | typeof campEquipment>;
 } = {}) {
   const requests: RecordedRequest[] = [];
   let role: 'operator' | 'admin' = 'admin';
@@ -80,7 +91,7 @@ function installApiMock({
         }
         return response({ role, deadline: role === 'admin' ? Date.now() + 600_000 : null });
       }
-      if (path === '/api/items' || path === '/api/items?all=1') return response([item]);
+      if (path === '/api/items' || path === '/api/items?all=1') return response(inventoryItems);
       if (path === '/api/borrowers' || path === '/api/borrowers?all=1') return response([borrower]);
       if (path === '/api/locations?all=1') return response([location]);
       if (path === '/api/loans') return response(loans);
@@ -119,6 +130,21 @@ async function openManagement(user: ReturnType<typeof userEvent.setup>, tabName:
   await user.click(screen.getByRole('button', { name: 'ניהול' }));
   await user.click(screen.getByRole('tab', { name: new RegExp(tabName) }));
 }
+
+it('shows camp equipment in inventory and catalog but excludes it from operator actions', async () => {
+  installApiMock({ inventoryItems: [item, campEquipment] });
+  const user = await renderReadyApp();
+  expect(screen.getByText('ציוד מחנה')).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'ניפוק והשאלה' }));
+  const issue = screen.getByText('ניפוק מתכלה').closest('form')!;
+  const checkout = screen.getByText('השאלת ציוד').closest('form')!;
+  expect(within(issue).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
+  expect(within(checkout).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
+
+  await openManagement(user, 'פריטים ומיקומים');
+  expect(screen.getByRole('option', { name: 'ציוד מחנה' })).toBeTruthy();
+});
 
 afterEach(() => {
   cleanup();

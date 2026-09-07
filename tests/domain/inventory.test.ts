@@ -41,6 +41,74 @@ describe('inventory domain', () => {
     migrated.close();
   });
 
+  it('migrates version 3 inventory without changing rows or foreign-key relationships', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-camp-equipment-migration-'));
+    cleanup.push(directory);
+    const filename = join(directory, 'inventory.sqlite');
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(
+      readFileSync(new URL('../../src/db/migrations/001_initial.sql', import.meta.url), 'utf8'),
+    );
+    legacy.exec('PRAGMA foreign_keys = OFF');
+    legacy.exec(
+      readFileSync(
+        new URL('../../src/db/migrations/002_import_export.sql', import.meta.url),
+        'utf8',
+      ),
+    );
+    legacy.exec('PRAGMA foreign_keys = ON');
+    legacy.exec(
+      readFileSync(
+        new URL('../../src/db/migrations/003_admin_only_credentials.sql', import.meta.url),
+        'utf8',
+      ),
+    );
+    legacy.prepare('INSERT INTO migrations(version) VALUES (?),(?),(?)').run(1, 2, 3);
+    const locationId = Number(
+      (legacy.prepare("SELECT id FROM locations WHERE code='monster'").get() as { id: number }).id,
+    );
+    const itemId = Number(
+      legacy
+        .prepare(
+          "INSERT INTO items(code,name,kind,location_id) VALUES (100,'Existing','non_consumable',?)",
+        )
+        .run(locationId).lastInsertRowid,
+    );
+    legacy.prepare('UPDATE code_sequence SET next_code=101 WHERE singleton=1').run();
+    legacy.prepare("INSERT INTO item_aliases(item_id,alias) VALUES (?,'Preserved')").run(itemId);
+    const eventId = Number(
+      legacy
+        .prepare(
+          "INSERT INTO inventory_events(kind,item_id,quantity,note) VALUES ('stock_added',?,4,'Existing history')",
+        )
+        .run(itemId).lastInsertRowid,
+    );
+    legacy
+      .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,?,?)')
+      .run(itemId, 4, eventId);
+    legacy.close();
+
+    const migrated = openDatabase(filename);
+    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 4 });
+    expect(migrated.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(migrated.prepare('SELECT code,name,kind,location_id FROM items').all()).toEqual([
+      { code: 100, name: 'Existing', kind: 'non_consumable', location_id: locationId },
+    ]);
+    expect(migrated.prepare('SELECT item_id,alias FROM item_aliases').all()).toEqual([
+      { item_id: itemId, alias: 'Preserved' },
+    ]);
+    expect(migrated.prepare('SELECT item_id,quantity,note FROM inventory_events').all()).toEqual([
+      { item_id: itemId, quantity: 4, note: 'Existing history' },
+    ]);
+    expect(
+      migrated.prepare('SELECT item_id,quantity,through_event_id FROM inventory_baselines').all(),
+    ).toEqual([{ item_id: itemId, quantity: 4, through_event_id: eventId }]);
+    expect(
+      new InventoryService(migrated).createItem({ name: 'Bar', kind: 'camp_equipment' }).kind,
+    ).toBe('camp_equipment');
+    migrated.close();
+  });
+
   it('migrates idempotently, seeds locations, and persists monotonic codes and event-derived state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-domain-'));
     cleanup.push(directory);
@@ -60,7 +128,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(3);
+    ).toBe(4);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);
@@ -68,6 +136,33 @@ describe('inventory domain', () => {
       /immutable/,
     );
     expect(() => db.prepare('DELETE FROM inventory_events WHERE id=1').run()).toThrow(/immutable/);
+    db.close();
+  });
+
+  it('tracks camp equipment by quantity while rejecting issue and checkout lifecycles', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'שולחן קבוע', kind: 'camp_equipment' });
+    inventory.addStock(item.id, 8);
+    inventory.removeStock(item.id, 3);
+    expect(inventory.listItems(String(item.code))[0]).toMatchObject({
+      kind: 'camp_equipment',
+      available: 5,
+      damaged: 0,
+    });
+    expect(() => inventory.issue(item.id, 1)).toThrow(
+      expect.objectContaining({ code: 'wrong_item_kind' }),
+    );
+    expect(() => inventory.checkout(item.id, 999, 1)).toThrow(
+      expect.objectContaining({ code: 'wrong_item_kind' }),
+    );
+    expect(() => inventory.createItem({ name: 'בר', kind: 'camp_equipment', lotSize: 2 })).toThrow(
+      expect.objectContaining({ code: 'invalid_lot_size' }),
+    );
+    expect(inventory.listLedger().map((event) => event.kind)).toEqual([
+      'stock_removed',
+      'stock_added',
+    ]);
     db.close();
   });
 

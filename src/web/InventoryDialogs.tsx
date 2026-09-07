@@ -6,7 +6,7 @@ export type Item = {
   id: number;
   code: number;
   name: string;
-  kind: 'consumable' | 'non_consumable';
+  kind: 'consumable' | 'non_consumable' | 'camp_equipment';
   lotSize: number | null;
   locationId: number | null;
   aliases: string[];

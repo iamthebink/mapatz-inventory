@@ -1,5 +1,5 @@
 export type Role = 'operator' | 'admin';
-export type ItemKind = 'consumable' | 'non_consumable';
+export type ItemKind = 'consumable' | 'non_consumable' | 'camp_equipment';
 export type BorrowerType = 'individual' | 'camp_organization' | 'other';
 export type EventKind =
   | 'stock_added'

@@ -183,8 +183,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery Items contains duplicate Item Code ${item.code}`);
     if (item.location != null && !locations.has(item.location.toLocaleLowerCase()))
       invalidWorkbook(`Recovery item ${item.code} references unknown Location "${item.location}"`);
-    if (item.kind === 'non_consumable' && item.lotSize != null)
-      invalidWorkbook(`Recovery item ${item.code} defines a Lot Size but is non_consumable`);
+    if (item.kind !== 'consumable' && item.lotSize != null)
+      invalidWorkbook(`Recovery item ${item.code} defines a Lot Size but is not consumable`);
     if (item.startingStock < 0)
       invalidWorkbook(`Recovery item ${item.code} Starting Stock must be nonnegative`);
     items.set(item.code, item);
@@ -246,13 +246,13 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       if (event.borrowerUsername != null || event.relatedEventId != null)
         invalidWorkbook(`Recovery stock event ${event.id} cannot reference a borrower or event`);
       if (event.kind === 'issued' && item.kind !== 'consumable')
-        invalidWorkbook(`Recovery event ${event.id} issues a non-consumable item`);
+        invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
       if (event.quantity > state.available)
         invalidWorkbook(`Recovery event ${event.id} would make available stock negative`);
       state.available -= event.quantity;
     } else if (event.kind === 'checked_out') {
       if (item.kind !== 'non_consumable')
-        invalidWorkbook(`Recovery event ${event.id} checks out a consumable item`);
+        invalidWorkbook(`Recovery event ${event.id} checks out an item that is not borrowable`);
       if (!borrower || event.relatedEventId != null)
         invalidWorkbook(`Recovery checkout ${event.id} requires a borrower and no related event`);
       if (event.quantity > state.available)

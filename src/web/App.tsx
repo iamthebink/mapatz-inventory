@@ -75,6 +75,11 @@ const borrowerTypeNames: Record<Borrower['type'], string> = {
   camp_organization: 'ארגון מחנה',
   other: 'אחר',
 };
+const itemKindNames: Record<Item['kind'], string> = {
+  consumable: 'מתכלה',
+  non_consumable: 'מושאל',
+  camp_equipment: 'ציוד מחנה',
+};
 const eventNames: Record<string, string> = {
   stock_added: 'קליטת מלאי',
   stock_removed: 'תיקון מלאי',
@@ -523,8 +528,12 @@ export function App() {
       key: 'kind',
       label: 'סוג',
       render: (item) => (
-        <StatusBadge tone={item.kind === 'consumable' ? 'blue' : 'mauve'}>
-          {item.kind === 'consumable' ? 'מתכלה' : 'מושאל'}
+        <StatusBadge
+          tone={
+            item.kind === 'consumable' ? 'blue' : item.kind === 'non_consumable' ? 'mauve' : 'green'
+          }
+        >
+          {itemKindNames[item.kind]}
         </StatusBadge>
       ),
       sortValue: (item) => item.kind,
@@ -1167,6 +1176,7 @@ export function App() {
                         <select name="kind" className="input-field">
                           <option value="consumable">מתכלה</option>
                           <option value="non_consumable">מושאל</option>
+                          <option value="camp_equipment">ציוד מחנה</option>
                         </select>
                       </label>
                       <Field

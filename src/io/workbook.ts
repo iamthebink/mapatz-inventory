@@ -294,8 +294,10 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
       usedCodes.add(suppliedCode);
     } else blankCodeRows.push(index);
     const kind = requiredText(row[2], `Reset Items row ${rowNumber} Kind`) as ItemKind;
-    if (kind !== 'consumable' && kind !== 'non_consumable')
-      return importError(`Reset Items row ${rowNumber} Kind must be consumable or non_consumable`);
+    if (kind !== 'consumable' && kind !== 'non_consumable' && kind !== 'camp_equipment')
+      return importError(
+        `Reset Items row ${rowNumber} Kind must be consumable, non_consumable, or camp_equipment`,
+      );
     const locationInput = optionalText(row[3], `Reset Items row ${rowNumber} Location`);
     const location =
       locationInput == null
@@ -305,7 +307,7 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
             `Reset Items row ${rowNumber} references unknown Location "${locationInput}"`,
           ));
     const lotSize = optionalInteger(row[5], `Reset Items row ${rowNumber} Lot Size`, 1);
-    if (kind === 'non_consumable' && lotSize != null)
+    if (kind !== 'consumable' && lotSize != null)
       return importError(`Reset Items row ${rowNumber} Lot Size is only valid for consumables`);
     items.push({
       ...(suppliedCode == null ? {} : { code: suppliedCode }),
@@ -364,9 +366,9 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
   const items = dataRows(itemSheet, 10).map((row, index) => {
     const rowNumber = index + 2;
     const kind = requiredText(row[2], `Recovery Items row ${rowNumber} Kind`) as ItemKind;
-    if (kind !== 'consumable' && kind !== 'non_consumable')
+    if (kind !== 'consumable' && kind !== 'non_consumable' && kind !== 'camp_equipment')
       return importError(
-        `Recovery Items row ${rowNumber} Kind must be consumable or non_consumable`,
+        `Recovery Items row ${rowNumber} Kind must be consumable, non_consumable, or camp_equipment`,
       );
     return {
       code: integer(row[0], `Recovery Items row ${rowNumber} Item Code`),

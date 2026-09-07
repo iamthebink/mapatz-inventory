@@ -12,7 +12,7 @@ const id = z.coerce.number().int().positive();
 const aliases = z.array(z.string().trim().min(1).max(100)).max(20);
 const itemInput = z.object({
   name: z.string().trim().min(1).max(100),
-  kind: z.enum(['consumable', 'non_consumable']),
+  kind: z.enum(['consumable', 'non_consumable', 'camp_equipment']),
   lotSize: positive.nullish(),
   locationId: positive.nullish(),
   aliases: aliases.optional(),

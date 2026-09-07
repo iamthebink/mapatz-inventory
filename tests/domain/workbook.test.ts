@@ -7,7 +7,11 @@ import {
 } from '../../src/domain/import-export.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 import { WORKBOOK_CONTRACT } from '../../src/io/workbook-contract.js';
-import { exportWorkbook, parseResetWorkbook } from '../../src/io/workbook.js';
+import {
+  exportWorkbook,
+  parseRecoveryWorkbook,
+  parseResetWorkbook,
+} from '../../src/io/workbook.js';
 
 async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
@@ -29,6 +33,75 @@ const emptySnapshot: InventoryTransferSnapshot = {
 };
 
 describe('inventory XLSX workbook', () => {
+  it('round-trips camp equipment through reset and recovery workbooks', async () => {
+    const db = openDatabase(':memory:');
+    const transfers = new InventoryTransferService(db);
+    transfers.replaceWithReset({
+      locations: [{ name: 'Main', archived: false }],
+      items: [
+        {
+          code: 100,
+          name: 'Permanent table',
+          kind: 'camp_equipment',
+          location: 'Main',
+          aliases: ['Table'],
+          lotSize: null,
+          archived: false,
+          total: 6,
+        },
+      ],
+    });
+    const item = new InventoryService(db).listItems('Permanent')[0]!;
+    new InventoryService(db).removeStock(item.id, 1, 'count correction');
+    const snapshot = transfers.snapshot();
+    const exported = await exportWorkbook(snapshot);
+
+    await expect(parseResetWorkbook(exported)).resolves.toEqual({
+      locations: [{ name: 'Main', archived: false }],
+      items: [
+        {
+          code: 100,
+          name: 'Permanent table',
+          kind: 'camp_equipment',
+          location: 'Main',
+          aliases: ['Table'],
+          lotSize: null,
+          archived: false,
+          total: 5,
+        },
+      ],
+    });
+    const recovery = await parseRecoveryWorkbook(exported);
+    const destination = openDatabase(':memory:');
+    new InventoryTransferService(destination).replaceWithRecovery(recovery);
+    expect(new InventoryTransferService(destination).snapshot()).toEqual(snapshot);
+
+    const impossibleIssue = await load(exported);
+    impossibleIssue
+      .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!
+      .getRow(2)
+      .getCell(2).value = 'issued';
+    await expect(parseRecoveryWorkbook(await save(impossibleIssue))).rejects.toThrow(
+      /not consumable/,
+    );
+    const impossibleCheckout = await load(exported);
+    impossibleCheckout
+      .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!
+      .getRow(2)
+      .getCell(2).value = 'checked_out';
+    await expect(parseRecoveryWorkbook(await save(impossibleCheckout))).rejects.toThrow(
+      /not borrowable/,
+    );
+    const invalidLot = await load(exported);
+    invalidLot
+      .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
+      .getRow(2)
+      .getCell(6).value = 2;
+    await expect(parseRecoveryWorkbook(await save(invalidLot))).rejects.toThrow(/not consumable/);
+    db.close();
+    destination.close();
+  });
+
   it('exports the fixed reset/recovery structure and state-complete mixed inventory without secrets', async () => {
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);

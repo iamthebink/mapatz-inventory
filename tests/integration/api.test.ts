@@ -222,6 +222,44 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
+  it('keeps camp equipment admin-counted and outside issue and checkout operations', async () => {
+    const { db, inventory, agent } = fixture();
+    await agent.post('/api/items').send({ name: 'שולחן קבוע', kind: 'camp_equipment' }).expect(403);
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    const created = await agent
+      .post('/api/items')
+      .send({ name: 'שולחן קבוע', kind: 'camp_equipment' })
+      .expect(201);
+    const itemId = Number(created.body.id);
+    await agent.post('/api/stock/add').send({ itemId, quantity: 7 }).expect(201);
+    await agent.post('/api/stock/remove').send({ itemId, quantity: 2 }).expect(201);
+    await agent
+      .post('/api/stock/remove')
+      .send({ itemId, quantity: 6 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('insufficient_stock'));
+    await agent
+      .post('/api/issue')
+      .send({ itemId, quantity: 1 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('wrong_item_kind'));
+    await agent
+      .post('/api/checkout')
+      .send({ itemId, borrowerId: 999, quantity: 1 })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('wrong_item_kind'));
+    expect(inventory.listItems(String(created.body.code))[0]).toMatchObject({
+      kind: 'camp_equipment',
+      available: 5,
+      damaged: 0,
+    });
+    expect(inventory.listLedger().map((event) => event.kind)).toEqual([
+      'stock_removed',
+      'stock_added',
+    ]);
+    db.close();
+  });
+
   it('issues consumables borrower-free and rejects borrower fields, invalid quantities, and insufficient stock', async () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'מים', kind: 'consumable' });
