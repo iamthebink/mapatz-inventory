@@ -17,7 +17,7 @@ Open `http://localhost:3000`. The application requires no internet connection at
 
 ## Develop and verify
 
-Node 22.12+ and pnpm are required because the application uses Node's built-in SQLite module and the locked Vite toolchain requires Node 22.12 or newer.
+Node 22.16+ and pnpm are required because the application uses Node's built-in SQLite module, including transaction-state inspection, and the locked Vite toolchain requires a current Node 22 release.
 
 ```sh
 pnpm install

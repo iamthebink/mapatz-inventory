@@ -436,6 +436,8 @@ export class InventoryTransferService {
 
   replaceWithReset(payload: ResetPayload): void {
     transaction(this.db, () => {
+      this.rotateLedgerEpoch();
+      this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
@@ -498,6 +500,8 @@ export class InventoryTransferService {
   replaceWithRecovery(payload: RecoveryPayload): void {
     validateRecoveryPayload(payload);
     transaction(this.db, () => {
+      this.rotateLedgerEpoch();
+      this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
@@ -600,5 +604,15 @@ export class InventoryTransferService {
         .run(Math.max(100, highestGeneratedRangeCode + 1));
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
     });
+  }
+
+  private rotateLedgerEpoch(): void {
+    const result = this.db
+      .prepare(
+        'UPDATE inventory_replacement_guard SET ledger_epoch=ledger_epoch+1 WHERE singleton=1',
+      )
+      .run();
+    if (result.changes !== 1)
+      throw new DomainError('internal_error', 'Inventory replacement guard is missing', 500);
   }
 }

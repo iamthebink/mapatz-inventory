@@ -1,5 +1,9 @@
 import express, { Router, type RequestHandler } from 'express';
 import { z, type ZodType } from 'zod';
+import type {
+  BorrowerDeskSnapshot,
+  BorrowerSearchSnapshot,
+} from '../contracts/borrower-workflow.js';
 import type { InventoryService } from '../domain/inventory.js';
 import type { InventoryTransferService } from '../domain/import-export.js';
 import { DomainError, type Role } from '../domain/types.js';
@@ -139,6 +143,22 @@ export function apiRouter(
 
   api.get('/borrowers', (req, res) =>
     res.json(service.listBorrowers(String(req.query.q ?? ''), req.query.all === '1')),
+  );
+  api.get(
+    '/borrowers/search',
+    route((req, res) => {
+      const snapshot: BorrowerSearchSnapshot = service.searchBorrowers(String(req.query.q ?? ''));
+      res.json(snapshot);
+    }),
+  );
+  api.get(
+    '/borrowers/:id/desk-snapshot',
+    route((req, res) => {
+      const snapshot: BorrowerDeskSnapshot = service.getBorrowerDeskSnapshot(
+        parse(id, req.params.id),
+      );
+      res.json(snapshot);
+    }),
   );
   api.post(
     '/borrowers',

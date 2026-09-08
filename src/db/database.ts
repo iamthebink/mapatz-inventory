@@ -30,6 +30,7 @@ export function migrate(db: InventoryDatabase): void {
     { version: 2, filename: '002_import_export.sql', disableForeignKeys: true },
     { version: 3, filename: '003_admin_only_credentials.sql', disableForeignKeys: false },
     { version: 4, filename: '004_camp_equipment.sql', disableForeignKeys: true },
+    { version: 5, filename: '005_idempotency.sql', disableForeignKeys: false },
   ];
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
@@ -62,6 +63,21 @@ export function transaction<T>(db: InventoryDatabase, operation: () => T): T {
     return result;
   } catch (error) {
     db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+export function readTransaction<Operation extends () => unknown>(
+  db: InventoryDatabase,
+  operation: Operation & (ReturnType<Operation> extends PromiseLike<unknown> ? never : unknown),
+): ReturnType<Operation> {
+  db.exec('BEGIN');
+  try {
+    const result = operation() as ReturnType<Operation>;
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    if (db.isTransaction) db.exec('ROLLBACK');
     throw error;
   }
 }

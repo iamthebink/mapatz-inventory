@@ -1,5 +1,10 @@
 import type { InventoryDatabase } from '../db/database.js';
-import { transaction } from '../db/database.js';
+import { readTransaction, transaction } from '../db/database.js';
+import type {
+  BorrowerDeskSnapshot,
+  BorrowerMatchKind,
+  BorrowerSearchSnapshot,
+} from '../contracts/borrower-workflow.js';
 import {
   DomainError,
   type Borrower,
@@ -16,6 +21,14 @@ const eventEffect = `CASE kind
   WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
 const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
 const maxAliases = 20;
+
+export function normalizeBorrowerText(value: string): string {
+  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 function integer(value: number, label = 'quantity'): number {
   if (!Number.isSafeInteger(value) || value <= 0)
@@ -174,6 +187,63 @@ export class InventoryService {
         )
         .all(Number(includeArchived), fragment, fragment) as Row[]
     ).map(this.borrowerFromRow);
+  }
+
+  searchBorrowers(query: string): BorrowerSearchSnapshot {
+    return readTransaction(this.db, () => {
+      const ledgerEpoch = this.ledgerEpochInTransaction();
+      const normalizedQuery = normalizeBorrowerText(query);
+      if (normalizedQuery.length === 0) return { ledgerEpoch, active: [], archivedMatches: [] };
+
+      const rows = this.db.prepare('SELECT * FROM borrowers ORDER BY id').all() as Row[];
+      const active: Borrower[] = [];
+      const archivedMatches: BorrowerSearchSnapshot['archivedMatches'] = [];
+      for (const row of rows) {
+        const borrower = this.borrowerFromRow(row);
+        const username = normalizeBorrowerText(borrower.username);
+        const name = normalizeBorrowerText(borrower.name);
+        const contact = normalizeBorrowerText(borrower.contact);
+        if (!borrower.archived) {
+          if (
+            username.includes(normalizedQuery) ||
+            name.includes(normalizedQuery) ||
+            contact.includes(normalizedQuery)
+          )
+            active.push(borrower);
+          continue;
+        }
+
+        let matchedBy: BorrowerMatchKind | undefined;
+        if (username === normalizedQuery) matchedBy = 'username';
+        else if (contact.length > 0 && contact === normalizedQuery) matchedBy = 'contact';
+        else if (name === normalizedQuery) matchedBy = 'full_name';
+        if (matchedBy) archivedMatches.push({ borrower, matchedBy });
+      }
+
+      const borrowerOrder = (left: Borrower, right: Borrower): number =>
+        compareText(normalizeBorrowerText(left.name), normalizeBorrowerText(right.name)) ||
+        compareText(normalizeBorrowerText(left.username), normalizeBorrowerText(right.username)) ||
+        left.id - right.id;
+      active.sort(borrowerOrder);
+      const matchOrder: Record<BorrowerMatchKind, number> = {
+        username: 0,
+        contact: 1,
+        full_name: 2,
+      };
+      archivedMatches.sort(
+        (left, right) =>
+          matchOrder[left.matchedBy] - matchOrder[right.matchedBy] ||
+          borrowerOrder(left.borrower, right.borrower),
+      );
+      return { ledgerEpoch, active, archivedMatches };
+    });
+  }
+
+  getBorrowerDeskSnapshot(borrowerId: number): BorrowerDeskSnapshot {
+    return readTransaction(this.db, () => {
+      this.requireBorrower(borrowerId);
+      return this.borrowerDeskSnapshotInTransaction(borrowerId);
+    });
   }
 
   addStock(itemId: number, quantity: number, note = ''): number {
@@ -353,6 +423,63 @@ export class InventoryService {
     const row = this.db.prepare('SELECT * FROM borrowers WHERE id=?').get(id) as Row | undefined;
     if (!row) throw new DomainError('not_found', 'Borrower not found', 404);
     return this.borrowerFromRow(row);
+  }
+
+  private ledgerEpochInTransaction(): number {
+    const row = this.db
+      .prepare('SELECT ledger_epoch FROM inventory_replacement_guard WHERE singleton=1')
+      .get() as Row | undefined;
+    if (!row)
+      throw new DomainError('internal_error', 'Inventory replacement guard is missing', 500);
+    return Number(row.ledger_epoch);
+  }
+
+  private borrowerDeskSnapshotInTransaction(borrowerId: number): BorrowerDeskSnapshot {
+    const borrower = this.getBorrower(borrowerId);
+    const inventory = (
+      this.db
+        .prepare(
+          `SELECT i.*,
+          COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
+          COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged
+          FROM items i WHERE i.kind='non_consumable' ORDER BY i.code`,
+        )
+        .all() as Row[]
+    ).map((row) => ({ ...this.itemFromRow(row), selectable: !row.archived }));
+    const holdings = (
+      this.db
+        .prepare(
+          `SELECT e.item_id item_id,
+          SUM(e.quantity-COALESCE((SELECT SUM(CASE
+            WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity
+            WHEN x.kind='unmarked_lost' THEN -x.quantity ELSE 0 END)
+          FROM inventory_events x WHERE x.related_event_id=e.id),0)) returnable,
+          SUM(COALESCE((SELECT SUM(CASE
+            WHEN x.kind='marked_lost' THEN x.quantity
+            WHEN x.kind='unmarked_lost' THEN -x.quantity ELSE 0 END)
+          FROM inventory_events x WHERE x.related_event_id=e.id),0)) lost
+          FROM inventory_events e JOIN items i ON i.id=e.item_id
+          WHERE e.kind='checked_out' AND e.borrower_id=?
+          GROUP BY e.item_id
+          HAVING returnable > 0 OR lost > 0
+          ORDER BY i.code`,
+        )
+        .all(borrowerId) as Row[]
+    ).map((row) => ({
+      itemId: Number(row.item_id),
+      returnable: Number(row.returnable),
+      lost: Number(row.lost),
+    }));
+    const watermark = this.db
+      .prepare('SELECT COALESCE(MAX(id),0) value FROM inventory_events')
+      .get() as Row;
+    return {
+      borrower,
+      inventory,
+      holdings,
+      asOfEventId: Number(watermark.value),
+      ledgerEpoch: this.ledgerEpochInTransaction(),
+    };
   }
 
   private requireBorrower(id: number, allowArchived = false): Borrower {

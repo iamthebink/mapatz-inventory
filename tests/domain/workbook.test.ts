@@ -159,8 +159,24 @@ describe('inventory XLSX workbook', () => {
     const checkout = inventory.checkout(tent.id, borrower.id, 5, 'loan');
     inventory.markLost(checkout, 1, true, 'lost');
     inventory.returnCheckout(checkout, 0, 1, 'damaged');
+    db.prepare(
+      `INSERT INTO idempotency_receipts(
+        key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+      ) VALUES (?,?,?,?,?,?,?,?)`,
+    ).run(
+      'never-export-this-receipt',
+      'borrower_operation',
+      2,
+      1,
+      'hash',
+      'committed',
+      borrower.id,
+      '{}',
+    );
 
     const snapshot = transfers.snapshot();
+    expect(snapshot).not.toHaveProperty('ledgerEpoch');
+    expect(snapshot).not.toHaveProperty('receipts');
     expect(snapshot.items.find((item) => item.code === 7)).toMatchObject({
       startingStock: 100,
       resetTotal: 85,
@@ -212,6 +228,7 @@ describe('inventory XLSX workbook', () => {
     expect(serialized).not.toContain('password');
     expect(serialized).not.toContain('admin-pass');
     expect(serialized).not.toContain('operator-pass');
+    expect(serialized).not.toContain('never-export-this-receipt');
     db.close();
   });
 
@@ -324,6 +341,11 @@ describe('inventory XLSX workbook', () => {
     const credentialsBefore = db
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
+    db.prepare(
+      `INSERT INTO idempotency_receipts(
+        key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+      ) VALUES (?,?,?,?,?,?,?,?)`,
+    ).run('obsolete-reset', 'borrower_operation', 1, 1, 'hash', 'committed', 1, '{}');
     const payload = {
       locations: [{ name: 'Named Location', archived: false }],
       items: [
@@ -344,18 +366,53 @@ describe('inventory XLSX workbook', () => {
     expect(inventory.listLedger()).toHaveLength(1);
     expect(transfers.snapshot().items[0]).toMatchObject({ startingStock: 6, resetTotal: 6 });
     expect(
+      db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual({
+      enabled: 0,
+      ledger_epoch: 2,
+    });
+    expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
+      count: 0,
+    });
+    expect(
       db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
     ).toEqual(credentialsBefore);
+    db.prepare(
+      `INSERT INTO idempotency_receipts(
+        key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+      ) VALUES (?,?,?,?,?,?,?,?)`,
+    ).run('obsolete-second-reset', 'borrower_operation', 2, 1, 'hash', 'committed', 1, '{}');
+    transfers.replaceWithReset(payload);
+    expect(
+      db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual({
+      enabled: 0,
+      ledger_epoch: 3,
+    });
+    expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
+      count: 0,
+    });
 
+    db.prepare(
+      `INSERT INTO idempotency_receipts(
+        key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+      ) VALUES (?,?,?,?,?,?,?,?)`,
+    ).run('preserved-reset', 'borrower_operation', 3, 1, 'hash', 'committed', 1, '{}');
+    const beforeFailure = {
+      snapshot: transfers.snapshot(),
+      guard: db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),
+      receipts: db.prepare('SELECT * FROM idempotency_receipts').all(),
+    };
     db.exec(`CREATE TRIGGER reject_reset_baseline BEFORE INSERT ON inventory_baselines
       BEGIN SELECT RAISE(ABORT, 'test commit failure'); END;`);
     expect(() =>
       transfers.replaceWithReset({ ...payload, items: [{ ...payload.items[0]!, name: 'Broken' }] }),
     ).toThrow(/test commit failure/);
-    expect(inventory.listItems('', true)[0]).toMatchObject({ name: 'New', available: 6 });
-    expect(db.prepare('SELECT enabled FROM inventory_replacement_guard').get()).toMatchObject({
-      enabled: 0,
-    });
+    expect({
+      snapshot: transfers.snapshot(),
+      guard: db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),
+      receipts: db.prepare('SELECT * FROM idempotency_receipts').all(),
+    }).toEqual(beforeFailure);
     db.close();
   });
 });

@@ -122,14 +122,47 @@ describe('complete inventory recovery', () => {
     const credentialsBefore = destination
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
+    destination
+      .prepare(
+        `INSERT INTO idempotency_receipts(
+          key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+        ) VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .run('obsolete-recovery', 'borrower_operation', 1, 1, 'hash', 'committed', 1, '{}');
+    const epochBefore = destination
+      .prepare('SELECT ledger_epoch FROM inventory_replacement_guard')
+      .get();
 
     destinationTransfers.replaceWithRecovery(payload);
     expect(destinationTransfers.snapshot()).toEqual(expected);
+    expect(
+      destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual({
+      ledger_epoch: (epochBefore as { ledger_epoch: number }).ledger_epoch + 1,
+    });
+    expect(destination.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
+      count: 0,
+    });
     expect(
       destination
         .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
         .all(),
     ).toEqual(credentialsBefore);
+    destination
+      .prepare(
+        `INSERT INTO idempotency_receipts(
+          key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+        ) VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .run('obsolete-second-recovery', 'borrower_operation', 2, 1, 'hash', 'committed', 1, '{}');
+    destinationTransfers.replaceWithRecovery(payload);
+    expect(destinationTransfers.snapshot()).toEqual(expected);
+    expect(
+      destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual({ ledger_epoch: 3 });
+    expect(destination.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
+      count: 0,
+    });
 
     const water = destinationInventory.listItems(String(source.waterCode), true)[0]!;
     destinationInventory.issue(water.id, 1, 'future issue');
@@ -210,15 +243,31 @@ describe('complete inventory recovery', () => {
     const transfers = new InventoryTransferService(destination);
     const old = inventory.createItem({ name: 'Keep me', kind: 'consumable' });
     inventory.addStock(old.id, 3);
+    destination
+      .prepare(
+        `INSERT INTO idempotency_receipts(
+          key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+        ) VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .run('preserved-recovery', 'borrower_operation', 1, 1, 'hash', 'committed', 1, '{}');
     const before = transfers.snapshot();
+    const protocolBefore = {
+      guard: destination
+        .prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard')
+        .get(),
+      receipts: destination.prepare('SELECT * FROM idempotency_receipts').all(),
+    };
     destination.exec(`CREATE TRIGGER reject_recovered_event BEFORE INSERT ON inventory_events
       BEGIN SELECT RAISE(ABORT, 'forced recovery failure'); END;`);
 
     expect(() => transfers.replaceWithRecovery(payload)).toThrow(/forced recovery failure/);
     expect(transfers.snapshot()).toEqual(before);
-    expect(destination.prepare('SELECT enabled FROM inventory_replacement_guard').get()).toEqual({
-      enabled: 0,
-    });
+    expect({
+      guard: destination
+        .prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard')
+        .get(),
+      receipts: destination.prepare('SELECT * FROM idempotency_receipts').all(),
+    }).toEqual(protocolBefore);
     source.db.close();
     destination.close();
   });

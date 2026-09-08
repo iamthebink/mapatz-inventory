@@ -89,7 +89,7 @@ describe('inventory domain', () => {
     legacy.close();
 
     const migrated = openDatabase(filename);
-    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 4 });
+    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 5 });
     expect(migrated.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(migrated.prepare('SELECT code,name,kind,location_id FROM items').all()).toEqual([
       { code: 100, name: 'Existing', kind: 'non_consumable', location_id: locationId },
@@ -128,7 +128,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(4);
+    ).toBe(5);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);
