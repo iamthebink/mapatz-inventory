@@ -128,7 +128,11 @@ function FormDialog({
     <Dialog
       title={title}
       description={description}
-      pending={pending}
+      level="root"
+      role="dialog"
+      variant="standard"
+      busy={pending}
+      dismissible={!pending}
       onClose={onClose}
       initialFocusRef={initialFocusRef}
       returnFocusRef={returnFocusRef}
@@ -532,12 +536,15 @@ function ImportDialog({
     <Dialog
       title={reset ? 'אישור ייבוא איפוס' : 'אישור שחזור מלא'}
       description={reset ? RESET_IMPORT_CONFIRMATION : RECOVERY_IMPORT_CONFIRMATION}
-      pending={pending}
+      level="root"
+      role="alertdialog"
+      variant="destructive"
+      busy={pending}
+      dismissible={!pending}
       onClose={onClose}
       initialFocusRef={cancelRef}
       returnFocusRef={returnFocusRef}
       returnFocusFallbackRef={fallbackFocusRef}
-      destructive
       showClose={false}
     >
       <p className="dialog-file-name">

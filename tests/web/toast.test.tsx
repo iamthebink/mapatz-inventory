@@ -1,18 +1,27 @@
-import { readFileSync } from 'node:fs';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import { Toast, type ToastMessage } from '../../src/web/Toast';
+// @vitest-environment jsdom
 
-const styles = readFileSync(new URL('../../src/web/styles.css', import.meta.url), 'utf8');
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { cleanup, render } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import { Toast, type ToastMessage } from '../../src/web/Toast';
+import { DialogStackProvider } from '../../src/web/Dialog';
+
+const styles = readFileSync(resolve(process.cwd(), 'src/web/styles.css'), 'utf8');
 
 function renderToast(tone: ToastMessage['tone']) {
-  return renderToStaticMarkup(
-    <Toast
-      toast={{ id: 1, title: 'הוספת פריט חדש', message: 'הודעת בדיקה', tone }}
-      onDismiss={() => undefined}
-    />,
+  render(
+    <DialogStackProvider>
+      <Toast
+        toast={{ id: 1, title: 'הוספת פריט חדש', message: 'הודעת בדיקה', tone }}
+        onDismiss={() => undefined}
+      />
+    </DialogStackProvider>,
   );
+  return document.body.innerHTML;
 }
+
+afterEach(() => cleanup());
 
 describe('Toast', () => {
   it.each([

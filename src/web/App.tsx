@@ -824,7 +824,7 @@ export function App() {
 
   return (
     <div className={`app-shell ${isAdmin ? 'admin-mode-active' : ''}`}>
-      <header className="app-header" data-dialog-background>
+      <header className="app-header">
         <div className="app-header-inner">
           <div className="app-brand">
             <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-ctp-lavender text-white shadow-sm">
@@ -856,7 +856,7 @@ export function App() {
           />
         </div>
       </header>
-      <nav className="app-nav" aria-label="ניווט ראשי" data-dialog-background>
+      <nav className="app-nav" aria-label="ניווט ראשי">
         <div className="mx-auto flex max-w-screen-2xl items-center gap-1 overflow-x-auto px-3 py-2 sm:px-6 lg:px-8">
           {navigation.map(({ key, label, icon: Icon }) => (
             <div className="contents" key={key}>
@@ -882,7 +882,6 @@ export function App() {
       </nav>
       <div
         key={`announcement-${announcement.id}`}
-        data-dialog-background
         className="sr-only"
         role="status"
         aria-live={isAdmin && remaining != null && remaining <= 10 ? 'assertive' : 'polite'}
@@ -891,10 +890,7 @@ export function App() {
         {announcement.text}
       </div>
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
-      <main
-        className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
-        data-dialog-background
-      >
+      <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'inventory' && (
           <PageSection
             title="מצב מלאי"

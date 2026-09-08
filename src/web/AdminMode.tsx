@@ -67,7 +67,11 @@ export function AdminPasswordDialog({
     <Dialog
       title="הפעלת מצב מנהל"
       description="הזינו את סיסמת המנהל כדי להפעיל הרשאות מנהל."
-      pending={pending}
+      level="root"
+      role="dialog"
+      variant="standard"
+      busy={pending}
+      dismissible={!pending}
       onClose={onClose}
       initialFocusRef={passwordRef}
       returnFocusRef={returnFocusRef}

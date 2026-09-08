@@ -1,5 +1,7 @@
 import { CheckCircle2, CircleX, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDialogStack } from './Dialog';
 
 export type ToastTone = 'success' | 'warning' | 'error';
 
@@ -32,6 +34,8 @@ export function Toast({
   const presentation = toastPresentation[toast.tone];
   const Icon = presentation.icon;
   const [exiting, setExiting] = useState(false);
+  const { depth } = useDialogStack();
+  const modalOpen = depth > 0;
 
   const requestDismiss = useCallback(() => {
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
@@ -53,10 +57,13 @@ export function Toast({
     return () => window.clearTimeout(fallback);
   }, [exiting, onDismiss, toast.id]);
 
-  return (
+  const host = document.getElementById('toast-root');
+  if (!host) throw new Error('Dialog stack invariant violation: #toast-root is missing');
+
+  return createPortal(
     <div className="toast-viewport">
       <div
-        className={`toast toast-${toast.tone}${exiting ? ' toast-exiting' : ''}`}
+        className={`toast toast-${toast.tone}${exiting ? ' toast-exiting' : ''}${modalOpen ? ' toast-modal-open' : ''}`}
         role={presentation.role}
         aria-atomic="true"
         aria-label={`${presentation.accessibleTone}: ${toast.title}. ${toast.message}`}
@@ -79,12 +86,14 @@ export function Toast({
           type="button"
           className="icon-button -m-1 shrink-0"
           aria-label="סגירת הודעה"
-          disabled={exiting}
+          disabled={exiting || modalOpen}
+          tabIndex={modalOpen ? -1 : undefined}
           onClick={requestDismiss}
         >
           <X className="size-4" />
         </button>
       </div>
-    </div>
+    </div>,
+    host,
   );
 }

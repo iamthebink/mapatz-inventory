@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/web/App';
+import { DialogStackProvider } from '../../src/web/Dialog';
 
 const item = {
   id: 11,
@@ -143,7 +144,11 @@ function installApiMock({
 
 async function renderReadyApp() {
   const user = userEvent.setup();
-  render(<App />);
+  render(
+    <DialogStackProvider>
+      <App />
+    </DialogStackProvider>,
+  );
   await screen.findByText('פטיש');
   return user;
 }
@@ -238,12 +243,10 @@ describe('App dialog workflows', () => {
     const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
     const usable = within(dialog).getByLabelText('כמות תקינה') as HTMLInputElement;
     const damaged = within(dialog).getByLabelText('כמות פגומה');
-    const backgrounds = [...document.querySelectorAll<HTMLElement>('[data-dialog-background]')];
-    expect(backgrounds).toHaveLength(4);
-    for (const background of backgrounds) {
-      expect(background.inert).toBe(true);
-      expect(background.getAttribute('aria-hidden')).toBe('true');
-    }
+    const appContent = document.getElementById('app-content')!;
+    expect(appContent.hasAttribute('inert')).toBe(true);
+    expect(appContent.getAttribute('aria-hidden')).toBe('true');
+    expect(dialog.parentElement?.parentElement?.id).toBe('dialog-stack-root');
     await waitFor(() => expect(document.activeElement).toBe(usable));
     await user.keyboard('1');
     expect(usable.value).toBe('1');
@@ -276,10 +279,8 @@ describe('App dialog workflows', () => {
     expect(request.init.method).toBe('POST');
     expect(bodyOf(request)).toEqual({ checkoutId: 41, usable: 1, damaged: 1, note: 'תקין' });
     expect(document.activeElement).toBe(returnsTab);
-    for (const background of backgrounds) {
-      expect(background.inert).toBe(false);
-      expect(background.hasAttribute('aria-hidden')).toBe(false);
-    }
+    expect(appContent.hasAttribute('inert')).toBe(false);
+    expect(appContent.hasAttribute('aria-hidden')).toBe(false);
   });
 
   it('keeps a failed return available with its values intact', async () => {
@@ -299,7 +300,8 @@ describe('App dialog workflows', () => {
     expect(screen.getByRole('dialog')).toBe(dialog);
     expect((note as HTMLTextAreaElement).value).toBe('ניסיון חוזר');
     await waitFor(() => expect(document.activeElement).toBe(save));
-    expect(toastText.closest('[data-dialog-background]')).toBeNull();
+    expect(toastText.closest('#app-content')).toBeNull();
+    expect(toastText.closest('#toast-root')).toBeTruthy();
     expect(toastText.closest('.toast')?.hasAttribute('inert')).toBe(false);
 
     await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
@@ -640,7 +642,7 @@ describe('App dialog workflows', () => {
 
     api.expireAdmin();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(document.activeElement).toBe(managementTab);
+    await waitFor(() => expect(document.activeElement).toBe(managementTab));
   });
 
   it('blocks representative invalid lost, item, borrower, and location edits inline', async () => {

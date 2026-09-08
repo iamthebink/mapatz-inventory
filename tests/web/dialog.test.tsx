@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Dialog } from '../../src/web/Dialog';
+import { Dialog, DialogStackProvider } from '../../src/web/Dialog';
 
 afterEach(() => cleanup());
 
@@ -22,7 +22,7 @@ function Harness({
   const initialRef = useRef<HTMLInputElement>(null);
   return (
     <>
-      <div data-dialog-background>
+      <div>
         {!removeTrigger && (
           <button ref={triggerRef} onClick={() => setOpen(true)}>
             פתיחה
@@ -33,7 +33,11 @@ function Harness({
       {open && (
         <Dialog
           title="בדיקת דיאלוג"
-          pending={pending}
+          level="root"
+          role="dialog"
+          variant="standard"
+          busy={pending}
+          dismissible={!pending}
           initialFocusRef={initialRef}
           returnFocusFallbackRef={fallbackRef}
           onClose={() => {
@@ -52,16 +56,24 @@ function Harness({
   );
 }
 
+function Scene(props: Parameters<typeof Harness>[0]) {
+  return (
+    <DialogStackProvider>
+      <Harness {...props} />
+    </DialogStackProvider>
+  );
+}
+
 describe('Dialog', () => {
   it('isolates the page, traps focus, and restores an explicit fallback', async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    render(<Scene />);
 
     await user.click(screen.getByRole('button', { name: 'פתיחה' }));
     const dialog = screen.getByRole('dialog');
-    const background = document.querySelector<HTMLElement>('[data-dialog-background]')!;
+    const background = document.getElementById('app-content')!;
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('ראשון')));
-    expect(background.inert).toBe(true);
+    expect(background.hasAttribute('inert')).toBe(true);
     expect(background.getAttribute('aria-hidden')).toBe('true');
     expect(document.body.style.overflow).toBe('hidden');
 
@@ -74,17 +86,19 @@ describe('Dialog', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(dialog.isConnected).toBe(false);
-    expect(background.inert).toBe(false);
+    expect(background.hasAttribute('inert')).toBe(false);
     expect(document.body.style.overflow).toBe('');
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'חזרה בטוחה' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'חזרה בטוחה' })),
+    );
   });
 
   it('locks every dismissal path and excludes fieldset-disabled controls while pending', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    const { rerender } = render(<Harness onClose={onClose} />);
+    const { rerender } = render(<Scene onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'פתיחה' }));
-    rerender(<Harness pending onClose={onClose} />);
+    rerender(<Scene pending onClose={onClose} />);
 
     const dialog = screen.getByRole('dialog');
     await waitFor(() => expect(document.activeElement).toBe(dialog));
@@ -95,7 +109,7 @@ describe('Dialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBe(dialog);
 
-    rerender(<Harness pending={false} onClose={onClose} />);
+    rerender(<Scene pending={false} onClose={onClose} />);
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('ראשון')));
     dialog.focus();
     await user.tab({ shift: true });
@@ -105,7 +119,7 @@ describe('Dialog', () => {
   it('does not consume or act on prevented and composing Escape events', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<Harness onClose={onClose} />);
+    render(<Scene onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'פתיחה' }));
 
     const prevented = new KeyboardEvent('keydown', {

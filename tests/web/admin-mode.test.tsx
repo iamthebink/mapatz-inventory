@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from '../../src/web/AdminMode';
 import { formatAdminCountdown } from '../../src/web/admin-mode';
+import { DialogStackProvider } from '../../src/web/Dialog';
 
 afterEach(() => cleanup());
 
@@ -43,15 +44,18 @@ describe('admin mode presentation', () => {
   });
 
   it('associates wrong-password feedback with the password field', () => {
-    const markup = renderToStaticMarkup(
-      <AdminPasswordDialog
-        pending={false}
-        error="הסיסמה אינה נכונה."
-        returnFocusRef={createRef<HTMLButtonElement>()}
-        onClose={() => undefined}
-        onSubmit={() => undefined}
-      />,
+    render(
+      <DialogStackProvider>
+        <AdminPasswordDialog
+          pending={false}
+          error="הסיסמה אינה נכונה."
+          returnFocusRef={createRef<HTMLButtonElement>()}
+          onClose={() => undefined}
+          onSubmit={() => undefined}
+        />
+      </DialogStackProvider>,
     );
+    const markup = document.body.innerHTML;
 
     expect(markup).toContain('aria-modal="true"');
     expect(markup).toContain('aria-invalid="true"');
@@ -61,15 +65,18 @@ describe('admin mode presentation', () => {
   });
 
   it('prevents dismissing the password dialog while authentication is pending', () => {
-    const markup = renderToStaticMarkup(
-      <AdminPasswordDialog
-        pending
-        error=""
-        returnFocusRef={createRef<HTMLButtonElement>()}
-        onClose={() => undefined}
-        onSubmit={() => undefined}
-      />,
+    render(
+      <DialogStackProvider>
+        <AdminPasswordDialog
+          pending
+          error=""
+          returnFocusRef={createRef<HTMLButtonElement>()}
+          onClose={() => undefined}
+          onSubmit={() => undefined}
+        />
+      </DialogStackProvider>,
     );
+    const markup = document.body.innerHTML;
 
     expect(markup).toContain('<fieldset disabled="">');
     expect(markup.match(/disabled=""/g)).toHaveLength(4);
@@ -79,10 +86,8 @@ describe('admin mode presentation', () => {
     const onClose = vi.fn();
     const returnFocusRef = createRef<HTMLButtonElement>();
     render(
-      <>
-        <button ref={returnFocusRef} data-dialog-background>
-          הפעלת מנהל
-        </button>
+      <DialogStackProvider>
+        <button ref={returnFocusRef}>הפעלת מנהל</button>
         <AdminPasswordDialog
           pending
           error=""
@@ -90,7 +95,7 @@ describe('admin mode presentation', () => {
           onClose={onClose}
           onSubmit={() => undefined}
         />
-      </>,
+      </DialogStackProvider>,
     );
 
     const dialog = screen.getByRole('dialog');
