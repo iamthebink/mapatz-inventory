@@ -1,0 +1,54 @@
+[workflow]
+
+activation_steps_append = [
+  """
+Apply the repository's bounded execution policy:
+
+- Treat the approved intent contract and acceptance criteria as frozen.
+- Use exactly one implementation agent.
+- Run exactly one consolidated review with no minimum finding quota.
+- Accept only demonstrated, reachable defects with concrete file evidence.
+- Do not expand or rewrite the specification during review.
+- Defer speculative concurrency and cross-tab concerns unless a deterministic reproduction exists.
+- Permit at most one correction pass, performed by re-engaging the original implementation agent.
+- After correction, run the specification's formatting, lint, typecheck, test, build, diff-hygiene, and protected-path gates once.
+- If those gates pass, finalize without another review pass.
+- If a verified defect cannot be corrected within the frozen contract, halt once with evidence instead of entering a re-derivation loop.
+"""
+]
+
+implementation_handoff = """
+Launch exactly one context-free subagent with this prompt:
+
+Read {spec_file} fully and implement it. The frozen intent contract and acceptance criteria are the sole source of truth. Load every file listed in frontmatter `context:` before starting.
+
+Do not spawn subagents. Preserve existing architecture and keep the change bounded. Run focused verification, then report the changes, evidence, and any unresolved risk.
+"""
+
+[[workflow.review_layers]]
+id = "blind-hunter"
+name = "Consolidated Adversarial Review"
+instruction = """
+Launch exactly one context-free subagent with this prompt:
+
+Read the frozen specification at `{claims_file}` and the unified diff at `{diff_file}`.
+
+Perform one consolidated adversarial review. Report only demonstrated defects that violate the frozen intent or acceptance criteria. Every finding must include an exact location, reachable failure scenario, and supporting code or test evidence.
+
+Do not invent requirements, propose specification expansion, impose a finding quota, or spawn subagents. Zero findings is acceptable. Classify speculative concurrency or cross-tab concerns as deferred unless you can provide a deterministic reproduction.
+"""
+
+[[workflow.review_layers]]
+id = "edge-case-hunter"
+name = "Edge Case Hunter"
+instruction = ""
+
+[[workflow.review_layers]]
+id = "verification-gap"
+name = "Verification Gap Reviewer"
+instruction = ""
+
+[[workflow.review_layers]]
+id = "intent-alignment"
+name = "Intent Alignment Auditor"
+instruction = ""
