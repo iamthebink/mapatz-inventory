@@ -331,6 +331,12 @@
   .dialog-workspace .dialog-shell-actions {
     overflow: visible;
   }
+  .dialog-shell-body {
+    min-width: 0;
+  }
+  .dialog-shell-actions {
+    @apply mt-5 flex flex-wrap gap-2;
+  }
   .dialog:focus {
     outline: 3px solid color-mix(in srgb, var(--color-ctp-lavender) 45%, transparent);
     outline-offset: -3px;
@@ -392,6 +398,108 @@
   .danger-button {
     @apply inline-flex items-center justify-center rounded-xl bg-ctp-red px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-maroon;
   }
+  .borrower-workflow-entry {
+    min-width: 0;
+  }
+  .borrower-workflow-entry > h2 {
+    @apply text-2xl font-bold tracking-tight;
+  }
+  .borrower-workflow-entry > p {
+    @apply mt-1 text-sm text-ctp-subtext;
+  }
+  .borrower-search-row {
+    @apply mt-6 grid items-end gap-3 rounded-2xl border border-ctp-surface bg-white p-4 shadow-sm;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .active-combobox {
+    position: relative;
+    min-width: 0;
+  }
+  .combobox-list {
+    @apply absolute inset-x-0 z-30 mt-1 max-h-72 overflow-y-auto rounded-xl border border-ctp-surface bg-white p-1 shadow-xl;
+  }
+  .combobox-group-label {
+    @apply px-3 py-2 text-xs font-semibold text-ctp-subtext;
+  }
+  .combobox-option {
+    @apply grid min-h-10 cursor-pointer gap-0.5 rounded-lg px-3 py-2 text-sm;
+  }
+  .combobox-option small {
+    @apply text-xs text-ctp-subtext;
+  }
+  .combobox-option.active {
+    @apply bg-ctp-lavender/10 text-ctp-blue;
+  }
+  .combobox-option.disabled {
+    @apply cursor-not-allowed text-ctp-overlay;
+  }
+  .combobox-empty,
+  .operational-empty {
+    @apply px-3 py-4 text-sm text-ctp-subtext;
+  }
+  .borrower-workspace {
+    display: grid;
+    min-width: 0;
+    gap: 16px;
+  }
+  .borrower-work-segment {
+    display: grid;
+    min-width: 0;
+    gap: 16px;
+  }
+  .operational-section {
+    min-width: 0;
+    border: 1px solid var(--color-ctp-surface);
+    border-radius: 16px;
+    background: white;
+  }
+  .operational-section h3 {
+    @apply px-4 pt-4 font-semibold;
+  }
+  .operational-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .operational-table th,
+  .operational-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-ctp-surface);
+    overflow-wrap: anywhere;
+    text-align: right;
+    vertical-align: top;
+  }
+  .operational-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .signed-quantity {
+    font-variant-numeric: tabular-nums;
+    unicode-bidi: isolate;
+  }
+  .field-error {
+    @apply mt-1 text-sm text-ctp-red;
+  }
+  .card-load-failure,
+  .creation-matches {
+    @apply grid gap-3 rounded-xl border border-ctp-yellow/30 bg-ctp-yellow/5 p-3 text-sm;
+  }
+  .workflow-command-state {
+    min-height: 40px;
+  }
+  .workflow-recovery-action {
+    @apply flex flex-wrap gap-2;
+  }
+  .dialog-form {
+    @apply grid gap-4;
+  }
+  .borrower-workflow-entry button,
+  .borrower-workflow-entry input,
+  .borrower-workflow-entry select,
+  .dialog-workspace button,
+  .dialog-workspace input {
+    min-height: 40px;
+  }
   .admin-password-error {
     padding: 8px 12px;
     border-radius: 10px;
@@ -402,6 +510,34 @@
   [inert][aria-hidden='true'] {
     pointer-events: none;
     user-select: none;
+  }
+}
+
+@media (min-width: 761px) {
+  .borrower-work-segment {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .staged-section {
+    grid-column: 1;
+  }
+  .holdings-section {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 760px) {
+  .borrower-search-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dialog-workspace {
+    max-height: calc(100dvh - 1rem);
+  }
+  .dialog-workspace .dialog-shell-actions {
+    flex-wrap: wrap;
+  }
+  .operational-table th,
+  .operational-table td {
+    padding-inline: 8px;
   }
 }
 

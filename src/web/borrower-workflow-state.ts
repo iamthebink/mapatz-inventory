@@ -309,7 +309,8 @@ function announcement(
 ): string | null {
   const resulting = holdingAfter(state, itemId, staged);
   if (resulting === null) return null;
-  return `${itemName(state, itemId)}: ${direction} ${quantity}; holding ${resulting}`;
+  const directionLabel = direction === 'borrow' ? 'השאלה' : 'החזרה';
+  return `${itemName(state, itemId)}: ${directionLabel}, כמות ${quantity}; באחריות השואל כעת ${resulting}`;
 }
 
 function updateGroup(

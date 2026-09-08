@@ -9,6 +9,9 @@ import {
   ApiError,
   classifyBorrowerCreateResponse,
   classifyBorrowerOperationResponse,
+  fetchBorrowerDeskSnapshot,
+  fetchBorrowerSearch,
+  sendBorrowerOperationCommand,
   sendClassifiedCommand,
 } from '../../src/web/api.js';
 
@@ -542,5 +545,37 @@ describe('generic api compatibility', () => {
     const error = await api('/bad').catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 400, code: 'bad' });
+  });
+});
+
+describe('borrower workflow transport', () => {
+  it('runtime-validates search and card truth before exposing it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          json(200, { ledgerEpoch: 3, active: [snapshot().borrower], archivedMatches: [] }),
+        )
+        .mockResolvedValueOnce(json(200, snapshot()))
+        .mockResolvedValueOnce(json(200, { ledgerEpoch: 3, active: [] })),
+    );
+    await expect(fetchBorrowerSearch('Or')).resolves.toMatchObject({ ledgerEpoch: 3 });
+    await expect(fetchBorrowerDeskSnapshot(7)).resolves.toMatchObject({ asOfEventId: 4 });
+    await expect(fetchBorrowerSearch('bad')).rejects.toMatchObject({
+      code: 'invalid_server_truth',
+    });
+  });
+
+  it('signals classified authorization staleness while preserving the typed outcome', async () => {
+    vi.stubGlobal('window', new EventTarget());
+    const stale = vi.fn();
+    window.addEventListener('mapatz-auth-stale', stale);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(401, { error: 'forbidden' })));
+    await expect(sendBorrowerOperationCommand(operationContext)).resolves.toEqual({
+      kind: 'authorization',
+      status: 401,
+    });
+    expect(stale).toHaveBeenCalledTimes(1);
   });
 });

@@ -96,7 +96,7 @@ describe('borrower operation state', () => {
       projectedAvailability: 4,
       compatible: true,
     });
-    expect(state.announcement).toContain('borrow 1; holding 6');
+    expect(state.announcement).toContain('השאלה, כמות 1; באחריות השואל כעת 6');
     expect(base.holdings[0]).toEqual({ itemId: 11, returnable: 5, lost: 2 });
 
     state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'return' });

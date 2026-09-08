@@ -53,6 +53,7 @@ import {
   type Location,
 } from './InventoryDialogs';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
+import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -66,7 +67,7 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'inventory' | 'issue' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
+type Tab = 'inventory' | 'desk' | 'issue' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
 const borrowerTypeNames: Record<Borrower['type'], string> = {
@@ -94,6 +95,7 @@ const eventNames: Record<string, string> = {
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'checkout', label: 'השאלה', icon: ArrowLeftRight },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
+  { key: 'desk', label: 'דלפק השאלות', icon: Users },
   { key: 'returns', label: 'החזרות', icon: PackageCheck },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
@@ -163,6 +165,7 @@ export function App() {
   const imminentAnnouncedRef = useRef(false);
   const resetFileRef = useRef<HTMLInputElement>(null);
   const recoveryFileRef = useRef<HTMLInputElement>(null);
+  const borrowerWorkflowRef = useRef<BorrowerWorkflowHandle>(null);
   const [now, setNow] = useState(Date.now());
   const remaining =
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
@@ -871,7 +874,12 @@ export function App() {
                 }
                 className={`nav-item ${tab === key ? 'active' : ''}`}
                 aria-current={tab === key ? 'page' : undefined}
-                onClick={() => setTab(key)}
+                onClick={() => {
+                  if (key === tab) return;
+                  const complete = () => setTab(key);
+                  if (tab === 'desk') borrowerWorkflowRef.current?.requestNavigation(complete);
+                  else complete();
+                }}
               >
                 <Icon className="size-4" />
                 {label}
@@ -891,6 +899,19 @@ export function App() {
       </div>
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        {tab === 'desk' && (
+          <BorrowerWorkflow
+            ref={borrowerWorkflowRef}
+            showToast={showToast}
+            destinations={navigation
+              .filter(({ key }) => key !== 'desk')
+              .map(({ key, label }) => ({
+                id: key,
+                label,
+                navigate: () => setTab(key),
+              }))}
+          />
+        )}
         {tab === 'inventory' && (
           <PageSection
             title="מצב מלאי"

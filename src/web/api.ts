@@ -1,8 +1,10 @@
 import type {
   BorrowerCreateRequest,
   BorrowerCreateResult,
+  BorrowerDeskSnapshot,
   BorrowerOperationRequest,
   BorrowerOperationResult,
+  BorrowerSearchSnapshot,
   CommandProtocolError,
 } from '../contracts/borrower-workflow.js';
 import type { Borrower } from '../domain/types.js';
@@ -11,6 +13,8 @@ import {
   isExactBorrowerOperationConflictSet,
   isNormalizedBorrowerCreateRequest,
   isNormalizedBorrowerOperationRequest,
+  type FrozenAttempt,
+  type FrozenTransport,
 } from './borrower-workflow-recovery.js';
 import { isBorrowerDeskSnapshot } from './borrower-workflow-state.js';
 
@@ -55,6 +59,32 @@ function validBorrower(value: unknown): value is Borrower {
     ['individual', 'camp_organization', 'other'].includes(String(value.type)) &&
     isBoolean(value.archived)
   );
+}
+
+function validBorrowerSearchSnapshot(value: unknown): value is BorrowerSearchSnapshot {
+  if (
+    !isObject(value) ||
+    !exactKeys(value, ['ledgerEpoch', 'active', 'archivedMatches']) ||
+    !isSafePositive(value.ledgerEpoch) ||
+    !Array.isArray(value.active) ||
+    !value.active.every((borrower) => validBorrower(borrower) && !borrower.archived) ||
+    !Array.isArray(value.archivedMatches)
+  )
+    return false;
+  const archivedValid = value.archivedMatches.every(
+    (match) =>
+      isObject(match) &&
+      exactKeys(match, ['borrower', 'matchedBy']) &&
+      validBorrower(match.borrower) &&
+      match.borrower.archived &&
+      ['username', 'contact', 'full_name'].includes(String(match.matchedBy)),
+  );
+  if (!archivedValid) return false;
+  const ids = [
+    ...value.active.map((candidate) => candidate.id),
+    ...value.archivedMatches.map((match) => (match as { borrower: Borrower }).borrower.id),
+  ];
+  return new Set(ids).size === ids.length;
 }
 
 function validFieldErrors(value: unknown): boolean {
@@ -410,11 +440,84 @@ export async function sendClassifiedCommand<T>(
       ...init,
       headers: commandHeaders(init.headers),
     });
-    return await classify(response);
+    const result = await classify(response);
+    if (result.kind === 'authorization') window.dispatchEvent(new Event('mapatz-auth-stale'));
+    return result;
   } catch {
     return { kind: 'ambiguous', reason: 'network' };
   }
 }
+
+async function workflowRead(path: string): Promise<unknown> {
+  const response = await fetch(`/api${path}`, { headers: commandHeaders() });
+  await requireSuccess(response);
+  try {
+    return await response.json();
+  } catch {
+    throw new ApiError(response.status, 'invalid_server_truth', 'השרת החזיר מידע לא תקין');
+  }
+}
+
+export async function fetchBorrowerSearch(query: string): Promise<BorrowerSearchSnapshot> {
+  const value = await workflowRead(`/borrowers/search?q=${encodeURIComponent(query)}`);
+  if (!validBorrowerSearchSnapshot(value))
+    throw new ApiError(200, 'invalid_server_truth', 'השרת החזיר תוצאות חיפוש לא תקינות');
+  return value;
+}
+
+export async function fetchBorrowerDeskSnapshot(borrowerId: number): Promise<BorrowerDeskSnapshot> {
+  if (!isSafePositive(borrowerId))
+    throw new ApiError(400, 'invalid_borrower_id', 'מזהה השואל אינו תקין');
+  const value = await workflowRead(`/borrowers/${borrowerId}/desk-snapshot`);
+  if (!isBorrowerDeskSnapshot(value, borrowerId))
+    throw new ApiError(200, 'invalid_server_truth', 'השרת החזיר כרטיס שואל לא תקין');
+  return value;
+}
+
+export function sendBorrowerOperationCommand(context: {
+  idempotencyKey: string;
+  borrowerId: number;
+  request: BorrowerOperationRequest;
+  asOfEventId: number;
+}): Promise<CommandClassification<BorrowerOperationResult>> {
+  return sendClassifiedCommand(
+    `/borrowers/${context.borrowerId}/operations`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': context.idempotencyKey },
+      body: JSON.stringify(context.request),
+    },
+    (response) => classifyBorrowerOperationResponse(response, context),
+  );
+}
+
+export function sendBorrowerCreateCommand(context: {
+  idempotencyKey: string;
+  request: BorrowerCreateRequest;
+}): Promise<CommandClassification<BorrowerCreateResult>> {
+  return sendClassifiedCommand(
+    '/borrowers',
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': context.idempotencyKey },
+      body: JSON.stringify(context.request),
+    },
+    (response) => classifyBorrowerCreateResponse(response, context),
+  );
+}
+
+export const sendFrozenBorrowerAttempt: FrozenTransport = (attempt: FrozenAttempt) =>
+  attempt.kind === 'operation'
+    ? sendBorrowerOperationCommand({
+        idempotencyKey: attempt.idempotencyKey,
+        borrowerId: attempt.subjectId,
+        request: attempt.body,
+        asOfEventId: attempt.asOfEventId,
+      })
+    : sendBorrowerCreateCommand({
+        idempotencyKey: attempt.idempotencyKey,
+        request: attempt.body,
+      });
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
