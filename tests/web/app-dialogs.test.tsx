@@ -466,7 +466,7 @@ describe('App dialog workflows', () => {
     const creation = api.requests.find((entry) => entry.path === '/api/borrowers')!;
     expect(api.reads.some((entry) => entry.path === '/api/borrowers/search?q=')).toBe(true);
     expect(creation.init.method).toBe('POST');
-    expect(creation.init.headers).toMatchObject({ 'Idempotency-Key': idempotencyKey });
+    expect(new Headers(creation.init.headers).get('Idempotency-Key')).toBe(idempotencyKey);
     expect(bodyOf(creation)).toEqual({
       contractVersion: 1,
       ledgerEpoch: 37,
