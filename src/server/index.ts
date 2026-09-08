@@ -18,6 +18,7 @@ export interface AppOptions {
 
 export function createApp(options: AppOptions): Express {
   const app = express();
+  const legacyJson = express.json({ limit: '32kb' });
   const sessions = new SessionStore(
     options.database,
     options.adminPassword,
@@ -26,9 +27,16 @@ export function createApp(options: AppOptions): Express {
   );
   const service = new InventoryService(options.database);
   const transfers = new InventoryTransferService(options.database);
-  app.use(express.json({ limit: '32kb' }));
   app.use(
     '/api',
+    (req, res, next) => {
+      const path = req.path.toLowerCase();
+      const commandRoute =
+        req.method === 'POST' &&
+        (/^\/borrowers\/?$/.test(path) || /^\/borrowers\/[^/]+\/operations\/?$/.test(path));
+      if (commandRoute) return next();
+      legacyJson(req, res, next);
+    },
     (req, res, next) => {
       const session = sessions.get(readCookie(req.headers.cookie, 'mapatz_session'));
       res.cookie('mapatz_session', session.token, {
@@ -65,6 +73,8 @@ export function createApp(options: AppOptions): Express {
       return void res
         .status(400)
         .json({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
+    if (error instanceof URIError && 'status' in error && error.status === 400)
+      return void res.status(400).json({ error: 'invalid_path', message: 'Invalid request path' });
     if (
       error &&
       typeof error === 'object' &&

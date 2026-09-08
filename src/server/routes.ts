@@ -18,9 +18,9 @@ import { WORKBOOK_CONTRACT } from '../io/workbook-contract.js';
 import type { SessionStore } from './session.js';
 
 const positive = z.number().int().positive();
-const safePositive = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const safePositive = z.number().int().positive();
 const id = z.coerce.number().int().positive();
-const commandRouteId = z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const commandRouteId = z.coerce.number().int().positive();
 const aliases = z.array(z.string().trim().min(1).max(100)).max(20);
 const itemInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -226,6 +226,7 @@ export function apiRouter(
   sessions: SessionStore,
 ): Router {
   const api = Router();
+  const commandJson = express.json({ limit: '32kb' });
 
   api.get('/session', (req, res) =>
     res.json({ role: res.locals.session.role, deadline: res.locals.session.deadline }),
@@ -329,6 +330,7 @@ export function apiRouter(
   api.post(
     '/borrowers',
     requireRole('operator', 'admin'),
+    commandJson,
     route((req, res) => {
       const parsed = parseCommand<BorrowerCreateRequest>(
         borrowerCreateInput,
@@ -343,6 +345,7 @@ export function apiRouter(
   api.post(
     '/borrowers/:id/operations',
     requireRole('operator', 'admin'),
+    commandJson,
     route((req, res) => {
       const routeId = commandRouteId.safeParse(req.params.id);
       const parsed = parseCommand<BorrowerOperationRequest>(

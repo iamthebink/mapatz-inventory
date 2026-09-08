@@ -145,6 +145,90 @@ describe('atomic borrower commands', () => {
     ]);
   });
 
+  it('breaks equal checkout timestamps by event ID and commits the complete result once', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Tie breaker', kind: 'non_consumable' });
+    inventory.addStock(item.id, 2);
+    const insertCheckout = db.prepare(
+      `INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,note,created_at)
+       VALUES ('checked_out',?,?,?,?,?)`,
+    );
+    const first = Number(
+      insertCheckout.run(item.id, borrower.id, 1, 'first', '2026-01-01 00:00:00').lastInsertRowid,
+    );
+    const second = Number(
+      insertCheckout.run(item.id, borrower.id, 1, 'second', '2026-01-01 00:00:00').lastInsertRowid,
+    );
+    expect(second).toBeGreaterThan(first);
+    const beforeEvents = Number(
+      (db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as { count: number }).count,
+    );
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(16), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: item.id, return: [{ usable: 1, damaged: 0, note: 'tie' }] }],
+      }),
+    ).toEqual({ outcome: 'committed', idempotencyKey: key(16), replayed: false });
+    expect(
+      db
+        .prepare(
+          `SELECT related_event_id relatedId,quantity,note FROM inventory_events
+           WHERE kind='returned_usable'`,
+        )
+        .all(),
+    ).toEqual([{ relatedId: first, quantity: 1, note: 'tie' }]);
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({
+      count: beforeEvents + 1,
+    });
+    expect(db.prepare('SELECT outcome FROM idempotency_receipts').all()).toEqual([
+      { outcome: 'committed' },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toContainEqual({
+      itemId: item.id,
+      returnable: 1,
+      lost: 0,
+    });
+  });
+
+  it('does not count damaged returns as stock for a same-command borrow', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Damaged only', kind: 'non_consumable' });
+    inventory.addStock(item.id, 1);
+    inventory.checkout(item.id, borrower.id, 1);
+    const beforeEvents = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(17), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            return: [{ usable: 0, damaged: 1, note: 'damaged' }],
+            borrow: [{ quantity: 1, note: 'must not be funded' }],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      error: 'borrower_operation_conflict',
+      conflicts: [
+        {
+          scope: 'borrow',
+          code: 'insufficient_stock',
+          itemId: item.id,
+          requested: 1,
+          availableAfterUsableReturns: 0,
+        },
+      ],
+    });
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(beforeEvents);
+    expect(db.prepare('SELECT outcome FROM idempotency_receipts').all()).toEqual([
+      { outcome: 'rejected' },
+    ]);
+  });
+
   it('records ordered conflicts with direction precedence and revalidates rejected retries', () => {
     const { db, inventory, borrower } = fixture();
     const item = inventory.createItem({ name: 'Limited', kind: 'non_consumable' });
@@ -184,23 +268,60 @@ describe('atomic borrower commands', () => {
     });
     expect(counted.beginCount()).toBe(1);
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({ count: 2 });
+    const rejectedReceipt = db
+      .prepare('SELECT * FROM idempotency_receipts WHERE key=?')
+      .get(key(2));
+    expect(rejectedReceipt).toMatchObject({
+      request_hash: expect.any(String),
+      outcome: 'rejected',
+      result_json: null,
+    });
 
-    expect(inventory.commitBorrowerOperations(borrower.id, key(2), request)).toMatchObject({
+    const unchangedReplay = inventory.commitBorrowerOperations(borrower.id, key(2), request);
+    expect(unchangedReplay).toMatchObject({
       error: 'borrower_operation_attempt_rejected',
       replayed: true,
-      currentValidation: { status: 'conflicted' },
+      currentValidation: {
+        status: 'conflicted',
+        snapshot: {
+          asOfEventId: checkout,
+          holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
+        },
+      },
     });
     inventory.addStock(item.id, 100);
+    const freshConflict = inventory.commitBorrowerOperations(borrower.id, key(2), request);
+    expect(freshConflict).toMatchObject({
+      currentValidation: {
+        status: 'conflicted',
+        snapshot: {
+          asOfEventId: checkout + 1,
+          inventory: [expect.objectContaining({ id: item.id, available: 100 })],
+          holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
+        },
+      },
+    });
     inventory.checkout(item.id, borrower.id, 1);
     const replay = inventory.commitBorrowerOperations(borrower.id, key(2), request);
     expect(replay).toMatchObject({
       error: 'borrower_operation_attempt_rejected',
       replayed: true,
-      currentValidation: { status: 'now_valid', conflicts: [] },
+      currentValidation: {
+        status: 'now_valid',
+        conflicts: [],
+        snapshot: {
+          asOfEventId: checkout + 2,
+          inventory: [expect.objectContaining({ id: item.id, available: 99 })],
+          holdings: [{ itemId: item.id, returnable: 2, lost: 0 }],
+        },
+      },
     });
     expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
       count: 1,
     });
+    expect(db.prepare('SELECT * FROM idempotency_receipts WHERE key=?').get(key(2))).toEqual(
+      rejectedReceipt,
+    );
   });
 
   it('orders item prerequisites and stock conflicts while inactive borrowers suppress item detail', () => {
