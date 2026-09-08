@@ -1,8 +1,14 @@
 import express, { Router, type RequestHandler } from 'express';
 import { z, type ZodType } from 'zod';
 import type {
+  BorrowerCreateRequest,
+  BorrowerCreateResult,
   BorrowerDeskSnapshot,
+  BorrowerOperationRequest,
+  BorrowerOperationResult,
   BorrowerSearchSnapshot,
+  CommandProtocolError,
+  ValidationFieldError,
 } from '../contracts/borrower-workflow.js';
 import type { InventoryService } from '../domain/inventory.js';
 import type { InventoryTransferService } from '../domain/import-export.js';
@@ -12,7 +18,9 @@ import { WORKBOOK_CONTRACT } from '../io/workbook-contract.js';
 import type { SessionStore } from './session.js';
 
 const positive = z.number().int().positive();
+const safePositive = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const id = z.coerce.number().int().positive();
+const commandRouteId = z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const aliases = z.array(z.string().trim().min(1).max(100)).max(20);
 const itemInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -27,6 +35,106 @@ const borrowerInput = z.object({
   contact: z.string().max(500).optional(),
   type: z.enum(['individual', 'camp_organization', 'other']),
 });
+const note = z.string().max(500).default('');
+const borrowerOperationInput = z
+  .object({
+    contractVersion: z.literal(1),
+    ledgerEpoch: safePositive,
+    items: z
+      .array(
+        z
+          .object({
+            itemId: safePositive,
+            borrow: z
+              .array(z.object({ quantity: safePositive, note }).strict())
+              .min(1)
+              .optional(),
+            return: z
+              .array(
+                z
+                  .object({
+                    usable: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+                    damaged: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+                    note,
+                  })
+                  .strict()
+                  .refine((part) => part.usable + part.damaged > 0, {
+                    message: 'A return part must return at least one item',
+                  }),
+              )
+              .min(1)
+              .optional(),
+          })
+          .strict()
+          .refine((group) => group.borrow !== undefined || group.return !== undefined, {
+            message: 'An item group must include borrow or return parts',
+          }),
+      )
+      .min(1),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    const seen = new Set<number>();
+    const commandBorrow: number[] = [];
+    const commandReturn: number[] = [];
+    const commandUsable: number[] = [];
+    request.items.forEach((group, index) => {
+      if (seen.has(group.itemId))
+        context.addIssue({
+          code: 'custom',
+          path: ['items', index, 'itemId'],
+          message: 'Item groups must have unique item IDs',
+        });
+      seen.add(group.itemId);
+      const borrow = (group.borrow ?? []).map((part) => part.quantity);
+      const returned = (group.return ?? []).map((part) => part.usable + part.damaged);
+      const usable = (group.return ?? []).map((part) => part.usable);
+      group.return?.forEach((part, partIndex) => {
+        if (!Number.isSafeInteger(part.usable + part.damaged))
+          context.addIssue({
+            code: 'custom',
+            path: ['items', index, 'return', partIndex],
+            message: 'Return part total must be a safe integer',
+          });
+      });
+      for (const [values, path, message] of [
+        [borrow, 'borrow', 'Per-item borrow total must be a safe integer'],
+        [returned, 'return', 'Per-item return total must be a safe integer'],
+        [usable, 'return', 'Per-item usable-return total must be a safe integer'],
+      ] as const)
+        if (!isSafeAggregate(values))
+          context.addIssue({ code: 'custom', path: ['items', index, path], message });
+      commandBorrow.push(...borrow);
+      commandReturn.push(...returned);
+      commandUsable.push(...usable);
+    });
+    for (const [values, message] of [
+      [commandBorrow, 'Command borrow total must be a safe integer'],
+      [commandReturn, 'Command return total must be a safe integer'],
+      [commandUsable, 'Command usable-return total must be a safe integer'],
+    ] as const)
+      if (!isSafeAggregate(values)) context.addIssue({ code: 'custom', path: ['items'], message });
+  });
+const borrowerCreateInput = z
+  .object({
+    contractVersion: z.literal(1),
+    ledgerEpoch: safePositive,
+    username: z.string().trim().min(2).max(40),
+    name: z.string().trim().min(1).max(100),
+    contact: z.string().trim().max(500).default(''),
+    type: z.enum(['individual', 'camp_organization', 'other']),
+  })
+  .strict();
+const idempotencyKeyInput = z.uuid();
+
+function isSafeAggregate(values: number[]): boolean {
+  let total = 0;
+  for (const value of values) {
+    total += value;
+    if (!Number.isSafeInteger(total)) return false;
+  }
+  return true;
+}
 
 const parse = <T>(schema: ZodType<T>, value: unknown): T => {
   const result = schema.safeParse(value);
@@ -34,6 +142,64 @@ const parse = <T>(schema: ZodType<T>, value: unknown): T => {
     throw new DomainError('validation_error', result.error.issues[0]?.message ?? 'Invalid input');
   return result.data;
 };
+
+function validationPath(pathSegments: PropertyKey[]): string {
+  return pathSegments.reduce<string>(
+    (path, segment) =>
+      typeof segment === 'number'
+        ? `${path}[${segment}]`
+        : path.length === 0
+          ? String(segment)
+          : `${path}.${String(segment)}`,
+    '',
+  );
+}
+
+function validationErrors(issue: z.core.$ZodIssue): ValidationFieldError[] {
+  if (issue.code === 'unrecognized_keys')
+    return issue.keys.map((key) => ({
+      field: validationPath([...issue.path, key]),
+      code: issue.code,
+      message: issue.message,
+    }));
+  return [{ field: validationPath(issue.path), code: issue.code, message: issue.message }];
+}
+
+function parseCommand<T>(
+  schema: ZodType<T>,
+  body: unknown,
+  key: string | undefined,
+):
+  | { data: T; key: string }
+  | { error: Extract<CommandProtocolError, { error: 'validation_error' }> } {
+  const fieldErrors: ValidationFieldError[] = [];
+  const keyResult = idempotencyKeyInput.safeParse(key);
+  if (!keyResult.success)
+    fieldErrors.push({
+      field: 'Idempotency-Key',
+      code: 'invalid_idempotency_key',
+      message: 'Idempotency-Key must be a UUID',
+    });
+  const bodyResult = schema.safeParse(body);
+  if (!bodyResult.success)
+    for (const issue of bodyResult.error.issues) fieldErrors.push(...validationErrors(issue));
+  if (fieldErrors.length > 0)
+    return {
+      error: {
+        error: 'validation_error',
+        message: 'The command transport is invalid',
+        fieldErrors,
+      },
+    };
+  return { data: bodyResult.data as T, key: keyResult.data as string };
+}
+
+function commandStatus(
+  result: BorrowerOperationResult | BorrowerCreateResult | CommandProtocolError,
+) {
+  if ('outcome' in result && result.outcome === 'committed') return 201;
+  return 409;
+}
 
 const route =
   (handler: RequestHandler): RequestHandler =>
@@ -162,9 +328,46 @@ export function apiRouter(
   );
   api.post(
     '/borrowers',
-    route((req, res) =>
-      res.status(201).json(service.createBorrower(parse(borrowerInput, req.body))),
-    ),
+    requireRole('operator', 'admin'),
+    route((req, res) => {
+      const parsed = parseCommand<BorrowerCreateRequest>(
+        borrowerCreateInput,
+        req.body,
+        req.header('Idempotency-Key'),
+      );
+      if ('error' in parsed) return void res.status(400).json(parsed.error);
+      const result = service.createBorrowerCommand(parsed.key, parsed.data);
+      res.status(commandStatus(result)).json(result);
+    }),
+  );
+  api.post(
+    '/borrowers/:id/operations',
+    requireRole('operator', 'admin'),
+    route((req, res) => {
+      const routeId = commandRouteId.safeParse(req.params.id);
+      const parsed = parseCommand<BorrowerOperationRequest>(
+        borrowerOperationInput,
+        req.body,
+        req.header('Idempotency-Key'),
+      );
+      if (!routeId.success || 'error' in parsed) {
+        const fieldErrors: ValidationFieldError[] = [];
+        if (!routeId.success)
+          fieldErrors.push({
+            field: 'borrowerId',
+            code: 'invalid_borrower_id',
+            message: 'Borrower ID must be a positive integer',
+          });
+        if ('error' in parsed) fieldErrors.push(...parsed.error.fieldErrors);
+        return void res.status(400).json({
+          error: 'validation_error',
+          message: 'The command transport is invalid',
+          fieldErrors,
+        });
+      }
+      const result = service.commitBorrowerOperations(routeId.data, parsed.key, parsed.data);
+      res.status(commandStatus(result)).json(result);
+    }),
   );
   api.put(
     '/borrowers/:id',

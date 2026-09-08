@@ -156,4 +156,5 @@ export type BorrowerCreateConflict =
     };
 
 export type BorrowerCreateResult =
-  { outcome: 'committed'; idempotencyKey: string; borrower: Borrower } | BorrowerCreateConflict;
+  | { outcome: 'committed'; idempotencyKey: string; replayed: boolean; borrower: Borrower }
+  | BorrowerCreateConflict;

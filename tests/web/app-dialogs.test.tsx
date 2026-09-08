@@ -80,6 +80,7 @@ function installApiMock({
   catalogLocations?: Array<typeof location>;
 } = {}) {
   const requests: RecordedRequest[] = [];
+  const reads: RecordedRequest[] = [];
   let role: 'operator' | 'admin' = 'admin';
   let loans = [loan];
   let releaseHeld: (() => void) | undefined;
@@ -101,6 +102,7 @@ function installApiMock({
         if (path === failRefreshAfterPath) failNextRefresh = true;
         return response(undefined, 204);
       }
+      reads.push({ path, init });
       if (failNextRefresh) {
         failNextRefresh = false;
         return response({ error: 'refresh_failed', message: 'הרענון נכשל' }, 500);
@@ -115,6 +117,7 @@ function installApiMock({
       if (path === '/api/items' || path === '/api/items?all=1') return response(inventoryItems);
       if (path === '/api/borrowers' || path === '/api/borrowers?all=1')
         return response(catalogBorrowers);
+      if (path === '/api/borrowers/search?q=') return response({ ledgerEpoch: 37 });
       if (path === '/api/locations?all=1') return response(catalogLocations);
       if (path === '/api/loans') return response(loans);
       if (path === '/api/ledger') return response([]);
@@ -124,6 +127,7 @@ function installApiMock({
 
   return {
     requests,
+    reads,
     releaseHeld: () => releaseHeld?.(),
     startSessionReconciliation: () => {
       holdNextSession = true;
@@ -441,6 +445,36 @@ describe('App dialog workflows', () => {
     expect(screen.queryByText('תיקון כמות')).toBeNull();
     expect(screen.getByText('הוספת מלאי')).toBeTruthy();
     expect(screen.getByText('טיפול בפגום')).toBeTruthy();
+  });
+
+  it('submits borrower creation with a fresh epoch, contract version, and idempotency key', async () => {
+    const idempotencyKey = '00000000-0000-4000-8000-000000000201';
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(idempotencyKey);
+    const api = installApiMock();
+    const user = await renderReadyApp();
+    await openManagement(user, 'שואלים');
+    const form = screen.getByText('שואל חדש').closest('form')!;
+    await user.type(within(form).getByLabelText('שם'), 'שואל חדש');
+    await user.type(within(form).getByLabelText('שם משתמש'), 'new-user');
+    await user.type(within(form).getByLabelText('פרטי קשר'), '050-123');
+    await user.selectOptions(within(form).getByLabelText('סוג'), 'camp_organization');
+    await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+
+    await waitFor(() =>
+      expect(api.requests.some((entry) => entry.path === '/api/borrowers')).toBe(true),
+    );
+    const creation = api.requests.find((entry) => entry.path === '/api/borrowers')!;
+    expect(api.reads.some((entry) => entry.path === '/api/borrowers/search?q=')).toBe(true);
+    expect(creation.init.method).toBe('POST');
+    expect(creation.init.headers).toMatchObject({ 'Idempotency-Key': idempotencyKey });
+    expect(bodyOf(creation)).toEqual({
+      contractVersion: 1,
+      ledgerEpoch: 37,
+      username: 'new-user',
+      name: 'שואל חדש',
+      contact: '050-123',
+      type: 'camp_organization',
+    });
   });
 
   it('submits exact item, borrower, and location update payloads from prefilled forms', async () => {

@@ -1,9 +1,17 @@
+import { createHash } from 'node:crypto';
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
 import type {
   BorrowerDeskSnapshot,
+  BorrowerCreateRequest,
+  BorrowerCreateResult,
+  BorrowerCreateValidation,
   BorrowerMatchKind,
+  BorrowerOperationConflict,
+  BorrowerOperationRequest,
+  BorrowerOperationResult,
   BorrowerSearchSnapshot,
+  CommandProtocolError,
 } from '../contracts/borrower-workflow.js';
 import {
   DomainError,
@@ -22,12 +30,34 @@ const eventEffect = `CASE kind
 const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
 const maxAliases = 20;
 
+type CommandKind = 'borrower_operation' | 'borrower_create';
+type Receipt = {
+  key: string;
+  command_kind: CommandKind;
+  ledger_epoch: number;
+  contract_version: number;
+  request_hash: string;
+  outcome: 'committed' | 'rejected';
+  subject_id: number | null;
+  result_json: string | null;
+};
+
 export function normalizeBorrowerText(value: string): string {
   return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
 }
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value !== null && typeof value === 'object')
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => compareText(left, right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(',')}}`;
+  return JSON.stringify(value);
 }
 
 function integer(value: number, label = 'quantity'): number {
@@ -142,6 +172,195 @@ export class InventoryService {
       .prepare('INSERT INTO borrowers(username,name,contact,type) VALUES (?,?,?,?)')
       .run(input.username.trim(), input.name.trim(), input.contact ?? '', input.type);
     return this.getBorrower(Number(result.lastInsertRowid));
+  }
+
+  commitBorrowerOperations(
+    borrowerId: number,
+    idempotencyKey: string,
+    request: BorrowerOperationRequest,
+  ): BorrowerOperationResult | CommandProtocolError {
+    return transaction(this.db, () => {
+      const epochError = this.requireCommandEpoch(request.ledgerEpoch, idempotencyKey);
+      if (epochError) return epochError;
+      const requestHash = this.commandHash('borrower_operation', borrowerId, request);
+      const receipt = this.findReceipt(idempotencyKey);
+      if (receipt) {
+        const mismatch = this.receiptMismatch(
+          receipt,
+          'borrower_operation',
+          borrowerId,
+          request,
+          requestHash,
+        );
+        if (mismatch) return mismatch;
+        if (receipt.outcome === 'committed')
+          return {
+            ...(JSON.parse(receipt.result_json ?? '{}') as BorrowerOperationResult),
+            replayed: true,
+          } as BorrowerOperationResult;
+        const validation = this.validateBorrowerOperation(borrowerId, request);
+        const snapshot = this.borrowerDeskSnapshotInTransaction(borrowerId);
+        return {
+          error: 'borrower_operation_attempt_rejected',
+          message: 'The original borrower operation was rejected',
+          outcome: 'rejected',
+          idempotencyKey,
+          replayed: true,
+          currentValidation:
+            validation.length > 0
+              ? { status: 'conflicted', conflicts: validation, snapshot }
+              : { status: 'now_valid', conflicts: [], snapshot },
+        };
+      }
+
+      // Preserve the existing unknown-borrower 404 contract without creating a receipt.
+      this.getBorrower(borrowerId);
+      const conflicts = this.validateBorrowerOperation(borrowerId, request);
+      if (conflicts.length > 0) {
+        const result: BorrowerOperationResult = {
+          error: 'borrower_operation_conflict',
+          message: 'The borrower operation conflicts with current inventory state',
+          outcome: 'rejected',
+          idempotencyKey,
+          replayed: false,
+          conflicts,
+          snapshot: this.borrowerDeskSnapshotInTransaction(borrowerId),
+        };
+        this.insertReceipt(
+          idempotencyKey,
+          'borrower_operation',
+          borrowerId,
+          request,
+          requestHash,
+          'rejected',
+          null,
+        );
+        return result;
+      }
+
+      for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId)) {
+        const checkouts = this.returnableCheckouts(borrowerId, group.itemId);
+        for (const part of group.return ?? []) {
+          this.allocateReturns(
+            checkouts,
+            group.itemId,
+            borrowerId,
+            'returned_usable',
+            part.usable,
+            part.note,
+          );
+          this.allocateReturns(
+            checkouts,
+            group.itemId,
+            borrowerId,
+            'returned_damaged',
+            part.damaged,
+            part.note,
+          );
+        }
+      }
+      for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
+        for (const part of group.borrow ?? [])
+          this.append('checked_out', group.itemId, part.quantity, borrowerId, null, part.note);
+
+      const result: BorrowerOperationResult = {
+        outcome: 'committed',
+        idempotencyKey,
+        replayed: false,
+      };
+      this.insertReceipt(
+        idempotencyKey,
+        'borrower_operation',
+        borrowerId,
+        request,
+        requestHash,
+        'committed',
+        result,
+      );
+      return result;
+    });
+  }
+
+  createBorrowerCommand(
+    idempotencyKey: string,
+    request: BorrowerCreateRequest,
+  ): BorrowerCreateResult | CommandProtocolError {
+    return transaction(this.db, () => {
+      const epochError = this.requireCommandEpoch(request.ledgerEpoch, idempotencyKey);
+      if (epochError) return epochError;
+      const requestHash = this.commandHash('borrower_create', null, request);
+      const receipt = this.findReceipt(idempotencyKey);
+      if (receipt) {
+        const mismatch = this.receiptMismatch(
+          receipt,
+          'borrower_create',
+          null,
+          request,
+          requestHash,
+        );
+        if (mismatch) return mismatch;
+        if (receipt.outcome === 'committed')
+          return {
+            ...(JSON.parse(receipt.result_json ?? '{}') as BorrowerCreateResult),
+            replayed: true,
+          } as BorrowerCreateResult;
+        const validation = this.validateBorrowerCreation(request);
+        return {
+          error: 'borrower_create_attempt_rejected',
+          message: 'The original borrower creation was rejected',
+          outcome: 'rejected',
+          idempotencyKey,
+          replayed: true,
+          currentValidation:
+            validation.fieldErrors.length > 0
+              ? { status: 'conflicted', ...validation }
+              : { status: 'now_valid', fieldErrors: [], matches: [] },
+        };
+      }
+
+      const validation = this.validateBorrowerCreation(request);
+      if (validation.fieldErrors.length > 0) {
+        const result: BorrowerCreateResult = {
+          error: 'borrower_conflict',
+          message: 'A borrower with the same normalized identity already exists',
+          outcome: 'rejected',
+          idempotencyKey,
+          replayed: false,
+          ...validation,
+        };
+        this.insertReceipt(
+          idempotencyKey,
+          'borrower_create',
+          null,
+          request,
+          requestHash,
+          'rejected',
+          null,
+        );
+        return result;
+      }
+
+      const inserted = this.db
+        .prepare('INSERT INTO borrowers(username,name,contact,type) VALUES (?,?,?,?)')
+        .run(request.username, request.name, request.contact, request.type);
+      const borrower = this.getBorrower(Number(inserted.lastInsertRowid));
+      const result: BorrowerCreateResult = {
+        outcome: 'committed',
+        idempotencyKey,
+        replayed: false,
+        borrower,
+      };
+      this.insertReceipt(
+        idempotencyKey,
+        'borrower_create',
+        null,
+        request,
+        requestHash,
+        'committed',
+        result,
+      );
+      return result;
+    });
   }
 
   updateBorrower(
@@ -364,6 +583,272 @@ export class InventoryService {
       JOIN items i ON i.id=e.item_id LEFT JOIN borrowers b ON b.id=e.borrower_id ORDER BY e.id DESC`,
       )
       .all();
+  }
+
+  private requireCommandEpoch(
+    requestedEpoch: number,
+    idempotencyKey: string,
+  ): CommandProtocolError | undefined {
+    if (requestedEpoch === this.ledgerEpochInTransaction()) return undefined;
+    return {
+      error: 'ledger_epoch_changed',
+      message: 'The inventory ledger has been replaced; refresh before retrying',
+      outcome: 'protocol_error',
+      idempotencyKey,
+    };
+  }
+
+  private commandHash(
+    commandKind: CommandKind,
+    subjectId: number | null,
+    request: BorrowerOperationRequest | BorrowerCreateRequest,
+  ): string {
+    const identity = {
+      commandKind,
+      subjectId,
+      ledgerEpoch: request.ledgerEpoch,
+      contractVersion: request.contractVersion,
+      request,
+    };
+    return createHash('sha256').update(stableJson(identity)).digest('hex');
+  }
+
+  private findReceipt(key: string): Receipt | undefined {
+    return this.db.prepare('SELECT * FROM idempotency_receipts WHERE key=?').get(key) as
+      Receipt | undefined;
+  }
+
+  private receiptMismatch(
+    receipt: Receipt,
+    commandKind: CommandKind,
+    subjectId: number | null,
+    request: BorrowerOperationRequest | BorrowerCreateRequest,
+    requestHash: string,
+  ): CommandProtocolError | undefined {
+    if (
+      receipt.command_kind === commandKind &&
+      receipt.subject_id === subjectId &&
+      receipt.ledger_epoch === request.ledgerEpoch &&
+      receipt.contract_version === request.contractVersion &&
+      receipt.request_hash === requestHash
+    )
+      return undefined;
+    return {
+      error: 'idempotency_key_reused',
+      message: 'The idempotency key was already used for a different command',
+      outcome: 'protocol_error',
+      idempotencyKey: receipt.key,
+    };
+  }
+
+  private insertReceipt(
+    key: string,
+    commandKind: CommandKind,
+    subjectId: number | null,
+    request: BorrowerOperationRequest | BorrowerCreateRequest,
+    requestHash: string,
+    outcome: 'committed' | 'rejected',
+    result: BorrowerOperationResult | BorrowerCreateResult | null,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO idempotency_receipts(
+          key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+        ) VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        key,
+        commandKind,
+        request.ledgerEpoch,
+        request.contractVersion,
+        requestHash,
+        outcome,
+        subjectId,
+        result == null ? null : JSON.stringify(result),
+      );
+  }
+
+  private validateBorrowerOperation(
+    borrowerId: number,
+    request: BorrowerOperationRequest,
+  ): BorrowerOperationConflict[] {
+    const borrower = this.getBorrower(borrowerId);
+    if (borrower.archived) return [{ scope: 'borrower', code: 'borrower_inactive', borrowerId }];
+
+    const conflicts: BorrowerOperationConflict[] = [];
+    for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId)) {
+      let item: Item;
+      try {
+        item = this.getItem(group.itemId);
+      } catch (error) {
+        if (error instanceof DomainError && error.code === 'not_found') {
+          conflicts.push({ scope: 'item', code: 'item_not_found', itemId: group.itemId });
+          continue;
+        }
+        throw error;
+      }
+      if (item.archived) {
+        conflicts.push({ scope: 'item', code: 'item_archived', itemId: group.itemId });
+        continue;
+      }
+      if (item.kind !== 'non_consumable') {
+        conflicts.push({ scope: 'item', code: 'wrong_item_kind', itemId: group.itemId });
+        continue;
+      }
+
+      const requestedReturn = (group.return ?? []).reduce(
+        (total, part) => total + part.usable + part.damaged,
+        0,
+      );
+      const returnable = this.returnableCheckouts(borrowerId, group.itemId).reduce(
+        (total, checkout) => total + checkout.remaining,
+        0,
+      );
+      if (requestedReturn > returnable) {
+        conflicts.push({
+          scope: 'return',
+          code: 'returnable_balance_changed',
+          itemId: group.itemId,
+          requested: requestedReturn,
+          returnable,
+        });
+        continue;
+      }
+      const requestedBorrow = (group.borrow ?? []).reduce(
+        (total, part) => total + part.quantity,
+        0,
+      );
+      const usableReturns = (group.return ?? []).reduce((total, part) => total + part.usable, 0);
+      const availableAfterUsableReturns = item.available + usableReturns;
+      if (requestedBorrow > availableAfterUsableReturns)
+        conflicts.push({
+          scope: 'borrow',
+          code: 'insufficient_stock',
+          itemId: group.itemId,
+          requested: requestedBorrow,
+          availableAfterUsableReturns,
+        });
+    }
+    return conflicts;
+  }
+
+  private validateBorrowerCreation(request: BorrowerCreateRequest): BorrowerCreateValidation {
+    const desired = {
+      username: normalizeBorrowerText(request.username),
+      contact: normalizeBorrowerText(request.contact),
+      full_name: normalizeBorrowerText(request.name),
+    };
+    const matches: BorrowerCreateValidation['matches'] = [];
+    const matchedKinds = new Set<BorrowerMatchKind>();
+    for (const row of this.db
+      .prepare('SELECT * FROM borrowers ORDER BY archived,id')
+      .all() as Row[]) {
+      const borrower = this.borrowerFromRow(row);
+      const borrowerMatches: BorrowerMatchKind[] = [];
+      if (normalizeBorrowerText(borrower.username) === desired.username)
+        borrowerMatches.push('username');
+      if (desired.contact.length > 0 && normalizeBorrowerText(borrower.contact) === desired.contact)
+        borrowerMatches.push('contact');
+      if (normalizeBorrowerText(borrower.name) === desired.full_name)
+        borrowerMatches.push('full_name');
+      const [matchedBy] = borrowerMatches;
+      if (!matchedBy) continue;
+      for (const kind of borrowerMatches) matchedKinds.add(kind);
+      matches.push({
+        borrower,
+        status: borrower.archived ? 'archived' : 'active',
+        matchedBy,
+      });
+    }
+    const matchOrder: Record<BorrowerMatchKind, number> = {
+      username: 0,
+      contact: 1,
+      full_name: 2,
+    };
+    matches.sort(
+      (left, right) =>
+        Number(left.borrower.archived) - Number(right.borrower.archived) ||
+        matchOrder[left.matchedBy] - matchOrder[right.matchedBy] ||
+        compareText(
+          normalizeBorrowerText(left.borrower.name),
+          normalizeBorrowerText(right.borrower.name),
+        ) ||
+        compareText(
+          normalizeBorrowerText(left.borrower.username),
+          normalizeBorrowerText(right.borrower.username),
+        ) ||
+        left.borrower.id - right.borrower.id,
+    );
+    const definitions: Array<{
+      kind: BorrowerMatchKind;
+      field: 'username' | 'contact' | 'name';
+      code: string;
+      message: string;
+    }> = [
+      {
+        kind: 'username',
+        field: 'username',
+        code: 'username_conflict',
+        message: 'Username matches an existing borrower',
+      },
+      {
+        kind: 'contact',
+        field: 'contact',
+        code: 'contact_conflict',
+        message: 'Contact matches an existing borrower',
+      },
+      {
+        kind: 'full_name',
+        field: 'name',
+        code: 'full_name_conflict',
+        message: 'Name matches an existing borrower',
+      },
+    ];
+    return {
+      fieldErrors: definitions
+        .filter(({ kind }) => matchedKinds.has(kind))
+        .map(({ field, code, message }) => ({ field, code, message })),
+      matches,
+    };
+  }
+
+  private returnableCheckouts(
+    borrowerId: number,
+    itemId: number,
+  ): Array<{ id: number; remaining: number }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT e.id,
+          e.quantity-COALESCE(SUM(CASE
+            WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity
+            WHEN x.kind='unmarked_lost' THEN -x.quantity ELSE 0 END),0) remaining
+          FROM inventory_events e LEFT JOIN inventory_events x ON x.related_event_id=e.id
+          WHERE e.kind='checked_out' AND e.borrower_id=? AND e.item_id=?
+          GROUP BY e.id HAVING remaining > 0 ORDER BY e.created_at,e.id`,
+        )
+        .all(borrowerId, itemId) as Row[]
+    ).map((row) => ({ id: Number(row.id), remaining: Number(row.remaining) }));
+  }
+
+  private allocateReturns(
+    checkouts: Array<{ id: number; remaining: number }>,
+    itemId: number,
+    borrowerId: number,
+    kind: 'returned_usable' | 'returned_damaged',
+    quantity: number,
+    note: string,
+  ): void {
+    let remaining = quantity;
+    for (const checkout of checkouts) {
+      if (remaining === 0) break;
+      const allocated = Math.min(remaining, checkout.remaining);
+      if (allocated === 0) continue;
+      this.append(kind, itemId, allocated, borrowerId, checkout.id, note);
+      checkout.remaining -= allocated;
+      remaining -= allocated;
+    }
+    if (remaining !== 0) throw new DomainError('internal_error', 'Return allocation failed', 500);
   }
 
   private setAliases(itemId: number, aliases: string[]): void {

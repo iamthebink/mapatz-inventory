@@ -1264,17 +1264,23 @@ export function App() {
                       icon={UserPlus}
                       disabled={pending}
                       onSubmit={(form) =>
-                        void action('הוספת שואל חדש', () =>
-                          api('/borrowers', {
+                        void action('הוספת שואל חדש', async () => {
+                          const { ledgerEpoch } = await api<{ ledgerEpoch: number }>(
+                            '/borrowers/search?q=',
+                          );
+                          return api('/borrowers', {
                             method: 'POST',
+                            headers: { 'Idempotency-Key': crypto.randomUUID() },
                             body: JSON.stringify({
+                              contractVersion: 1,
+                              ledgerEpoch,
                               username: form.get('username'),
                               name: form.get('name'),
                               contact: form.get('contact'),
                               type: form.get('type'),
                             }),
-                          }),
-                        )
+                          });
+                        })
                       }
                     >
                       <Field name="name" label="שם" />
