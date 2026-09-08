@@ -157,6 +157,13 @@ it('separates consumable issue and checkout while excluding camp equipment', asy
   const api = installApiMock({ inventoryItems: [item, consumable, campEquipment] });
   const user = await renderReadyApp();
   expect(screen.getByText('ציוד מחנה')).toBeTruthy();
+  const primaryNavigation = screen.getByRole('navigation', { name: 'ניווט ראשי' });
+  expect(
+    within(primaryNavigation)
+      .getAllByRole('button')
+      .slice(0, 2)
+      .map((button) => button.textContent),
+  ).toEqual(['השאלה', 'ציוד מתכלה']);
 
   const issueTab = screen.getByRole('button', { name: 'ציוד מתכלה' });
   await user.click(issueTab);
