@@ -93,8 +93,8 @@ const eventNames: Record<string, string> = {
   written_off: 'גריעה',
 };
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
-  { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
+  { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
   { key: 'catalogs', label: 'ניהול', icon: Settings2 },

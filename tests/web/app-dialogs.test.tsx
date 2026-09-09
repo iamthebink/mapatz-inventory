@@ -170,6 +170,7 @@ it('keeps consumable issue and the borrower desk while retiring legacy borrowing
   expect(within(primaryNavigation).queryByRole('button', { name: /^השאלה$/ })).toBeNull();
   expect(within(primaryNavigation).queryByRole('button', { name: 'החזרות' })).toBeNull();
   expect(within(primaryNavigation).getByRole('button', { name: 'דלפק השאלות' })).toBeTruthy();
+  expect(within(primaryNavigation).getAllByRole('button')[0]?.textContent).toContain('דלפק השאלות');
 
   const issueTab = screen.getByRole('button', { name: 'ציוד מתכלה' });
   await user.click(issueTab);
