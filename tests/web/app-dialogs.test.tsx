@@ -162,17 +162,14 @@ async function openManagement(user: ReturnType<typeof userEvent.setup>, tabName:
   await user.click(screen.getByRole('tab', { name: new RegExp(tabName) }));
 }
 
-it('separates consumable issue and checkout while excluding camp equipment', async () => {
+it('keeps consumable issue and the borrower desk while retiring legacy borrowing routes', async () => {
   const api = installApiMock({ inventoryItems: [item, consumable, campEquipment] });
   const user = await renderReadyApp();
   expect(screen.getByText('ציוד מחנה')).toBeTruthy();
   const primaryNavigation = screen.getByRole('navigation', { name: 'ניווט ראשי' });
-  expect(
-    within(primaryNavigation)
-      .getAllByRole('button')
-      .slice(0, 2)
-      .map((button) => button.textContent),
-  ).toEqual(['השאלה', 'ציוד מתכלה']);
+  expect(within(primaryNavigation).queryByRole('button', { name: /^השאלה$/ })).toBeNull();
+  expect(within(primaryNavigation).queryByRole('button', { name: 'החזרות' })).toBeNull();
+  expect(within(primaryNavigation).getByRole('button', { name: 'דלפק השאלות' })).toBeTruthy();
 
   const issueTab = screen.getByRole('button', { name: 'ציוד מתכלה' });
   await user.click(issueTab);
@@ -189,24 +186,6 @@ it('separates consumable issue and checkout while excluding camp equipment', asy
   await waitFor(() => expect(issue.querySelector('fieldset')?.disabled).toBe(false));
   const issueRequest = api.requests.find((request) => request.path === '/api/issue')!;
   expect(bodyOf(issueRequest)).toEqual({ itemId: 13, quantity: 2, note: '' });
-
-  const checkoutTab = screen.getByRole('button', { name: /^השאלה$/ });
-  await user.click(checkoutTab);
-  expect(issueTab.hasAttribute('aria-current')).toBe(false);
-  expect(checkoutTab.getAttribute('aria-current')).toBe('page');
-  expect((screen.getByLabelText('סינון פריטים') as HTMLInputElement).value).toBe('');
-  const checkout = screen.getByText('השאלת ציוד').closest('form')!;
-  expect(issue.isConnected).toBe(false);
-  expect(within(checkout).getByRole('option', { name: /פטיש/ })).toBeTruthy();
-  expect(within(checkout).queryByRole('option', { name: /כפפות/ })).toBeNull();
-  expect(within(checkout).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
-  await user.selectOptions(within(checkout).getByLabelText('פריט'), String(item.id));
-  await user.selectOptions(within(checkout).getByLabelText('שואל'), String(borrower.id));
-  await user.type(within(checkout).getByLabelText('כמות'), '1');
-  await user.click(within(checkout).getByRole('button', { name: 'בצע פעולה' }));
-  await waitFor(() => expect(checkout.querySelector('fieldset')?.disabled).toBe(false));
-  const checkoutRequest = api.requests.find((request) => request.path === '/api/checkout')!;
-  expect(bodyOf(checkoutRequest)).toEqual({ itemId: 11, borrowerId: 21, quantity: 1, note: '' });
 
   await openManagement(user, 'פריטים ומיקומים');
   expect(screen.getByRole('option', { name: 'ציוד מחנה' })).toBeTruthy();
@@ -232,100 +211,13 @@ describe('App dialog workflows', () => {
     expect(api.requests.some((request) => request.path === '/api/items')).toBe(true);
   });
 
-  it('validates and submits one atomic return form, then restores a stable fallback', async () => {
-    const api = installApiMock({ removeLoanAfterReturn: true });
-    const user = await renderReadyApp();
-    const returnsTab = screen.getByRole('button', { name: 'החזרות' });
-    await user.click(returnsTab);
-    const returnTrigger = screen.getByRole('button', { name: 'החזרה' });
-    await user.click(returnTrigger);
-
-    const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
-    const usable = within(dialog).getByLabelText('כמות תקינה') as HTMLInputElement;
-    const damaged = within(dialog).getByLabelText('כמות פגומה');
-    const appContent = document.getElementById('app-content')!;
-    expect(appContent.hasAttribute('inert')).toBe(true);
-    expect(appContent.getAttribute('aria-hidden')).toBe('true');
-    expect(dialog.parentElement?.parentElement?.id).toBe('dialog-stack-root');
-    await waitFor(() => expect(document.activeElement).toBe(usable));
-    await user.keyboard('1');
-    expect(usable.value).toBe('1');
-    await user.clear(usable);
-    await user.type(usable, '2');
-    await user.clear(damaged);
-    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
-    expect(api.requests.filter((request) => request.path === '/api/return')).toHaveLength(0);
-    const fieldset = dialog.querySelector('fieldset')!;
-    const alert = within(dialog).getByRole('alert');
-    expect(alert.textContent).toContain('מספרים שלמים');
-    expect(fieldset.getAttribute('aria-describedby')).toBe(alert.id);
-    expect(fieldset.getAttribute('aria-invalid')).toBe('true');
-    await user.type(damaged, '1');
-    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
-    expect(api.requests.filter((request) => request.path === '/api/return')).toHaveLength(0);
-    expect(within(dialog).getByRole('alert').textContent).toContain('בין 1 ל־2');
-
-    await user.clear(usable);
-    await user.type(usable, '1');
-    await user.type(within(dialog).getByLabelText('הערה (רשות)'), 'תקין');
-    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-
-    const successToast = screen.getByText('החזרת ציוד').closest('.toast')!;
-    expect(successToast.textContent).toContain('החזרת ציוד');
-    expect(successToast.textContent).toContain('הפעולה הושלמה בהצלחה');
-
-    const request = api.requests.find((entry) => entry.path === '/api/return')!;
-    expect(request.init.method).toBe('POST');
-    expect(bodyOf(request)).toEqual({ checkoutId: 41, usable: 1, damaged: 1, note: 'תקין' });
-    expect(document.activeElement).toBe(returnsTab);
-    expect(appContent.hasAttribute('inert')).toBe(false);
-    expect(appContent.hasAttribute('aria-hidden')).toBe(false);
-  });
-
-  it('keeps a failed return available with its values intact', async () => {
-    installApiMock({ failPath: '/api/return' });
-    const user = await renderReadyApp();
-    await user.click(screen.getByRole('button', { name: 'החזרות' }));
-    const returnTrigger = screen.getByRole('button', { name: 'החזרה' });
-    await user.click(returnTrigger);
-    const dialog = screen.getByRole('dialog');
-    const note = within(dialog).getByLabelText('הערה (רשות)');
-    await user.type(note, 'ניסיון חוזר');
-    const save = within(dialog).getByRole('button', { name: 'שמירה' });
-    await user.click(save);
-
-    const toastText = await screen.findByText('השרת דחה את הפעולה');
-    expect(screen.getByRole('alert').textContent).toContain('החזרת ציוד');
-    expect(screen.getByRole('dialog')).toBe(dialog);
-    expect((note as HTMLTextAreaElement).value).toBe('ניסיון חוזר');
-    await waitFor(() => expect(document.activeElement).toBe(save));
-    expect(toastText.closest('#app-content')).toBeNull();
-    expect(toastText.closest('#toast-root')).toBeTruthy();
-    expect(toastText.closest('.toast')?.hasAttribute('inert')).toBe(false);
-
-    await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
-    expect(document.activeElement).toBe(returnTrigger);
-  });
-
-  it('keeps the action title when a successful operation is followed by a refresh warning', async () => {
-    installApiMock({ failRefreshAfterPath: '/api/return' });
-    const user = await renderReadyApp();
-    await user.click(screen.getByRole('button', { name: 'החזרות' }));
-    await user.click(screen.getByRole('button', { name: 'החזרה' }));
-    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'שמירה' }));
-
-    const warningToast = await screen.findByRole('alert');
-    expect(warningToast.textContent).toContain('החזרת ציוד');
-    expect(warningToast.textContent).toContain(
-      'הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.',
-    );
-  });
-
-  it('routes mark-lost and unmark-lost through the same bounded typed form', async () => {
+  it('keeps only admin-gated lost controls with outstanding equipment in Management stock', async () => {
     const api = installApiMock();
     const user = await renderReadyApp();
-    await user.click(screen.getByRole('button', { name: 'החזרות' }));
+    await openManagement(user, 'מלאי ופגומים');
+
+    expect(screen.getByRole('heading', { name: 'ציוד בחוץ ואבוד' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'החזרה' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'סמן אבוד' }));
     await user.click(screen.getByRole('button', { name: 'שמירה' }));
@@ -342,6 +234,11 @@ describe('App dialog workflows', () => {
       { checkoutId: 41, quantity: 2, lost: true, note: '' },
       { checkoutId: 41, quantity: 1, lost: false, note: '' },
     ]);
+
+    api.expireAdmin();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'סמן אבוד' }).hasAttribute('disabled')).toBe(true),
+    );
   });
 
   it.each([
@@ -575,15 +472,15 @@ describe('App dialog workflows', () => {
   });
 
   it('allows one request only and locks dismissal while a mutation is pending', async () => {
-    const api = installApiMock({ holdPath: '/api/return' });
+    const api = installApiMock({ holdPath: '/api/lost' });
     const user = await renderReadyApp();
-    await user.click(screen.getByRole('button', { name: 'החזרות' }));
-    await user.click(screen.getByRole('button', { name: 'החזרה' }));
+    await openManagement(user, 'מלאי ופגומים');
+    await user.click(screen.getByRole('button', { name: 'סמן אבוד' }));
     const save = screen.getByRole('button', { name: 'שמירה' });
     fireEvent.click(save);
     fireEvent.click(save);
     await waitFor(() =>
-      expect(api.requests.filter((request) => request.path === '/api/return')).toHaveLength(1),
+      expect(api.requests.filter((request) => request.path === '/api/lost')).toHaveLength(1),
     );
     fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.mouseDown(screen.getByRole('dialog').parentElement!);
@@ -648,7 +545,7 @@ describe('App dialog workflows', () => {
   it('blocks representative invalid lost, item, borrower, and location edits inline', async () => {
     const api = installApiMock();
     const user = await renderReadyApp();
-    await user.click(screen.getByRole('button', { name: 'החזרות' }));
+    await openManagement(user, 'מלאי ופגומים');
 
     const lostTrigger = screen.getByRole('button', { name: 'סמן אבוד' });
     await user.click(lostTrigger);

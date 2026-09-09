@@ -227,10 +227,10 @@
     @apply inline-flex items-center justify-center rounded-xl border border-ctp-surface bg-white px-4 py-2.5 text-sm font-semibold text-ctp-text transition hover:bg-ctp-base;
   }
   .icon-button {
-    @apply grid size-8 place-items-center rounded-lg text-ctp-subtext transition hover:bg-ctp-base hover:text-ctp-text;
+    @apply grid size-10 place-items-center rounded-lg text-ctp-subtext transition hover:bg-ctp-base hover:text-ctp-text;
   }
   .small-button {
-    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-ctp-surface bg-white px-2.5 py-1.5 text-xs font-medium text-ctp-subtext transition hover:border-ctp-lavender/30 hover:bg-ctp-lavender/5 hover:text-ctp-lavender;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-ctp-surface bg-white px-2.5 py-1.5 text-xs font-medium text-ctp-subtext transition hover:border-ctp-lavender/30 hover:bg-ctp-lavender/5 hover:text-ctp-lavender;
   }
   .action-card {
     @apply rounded-2xl border border-ctp-surface bg-white p-5 shadow-sm;
@@ -275,7 +275,7 @@
     @apply transition hover:bg-ctp-base/50;
   }
   .sort-button {
-    @apply inline-flex items-center gap-1.5 rounded-md text-right transition hover:text-ctp-lavender;
+    @apply inline-flex min-h-10 min-w-10 items-center gap-1.5 rounded-md text-right transition hover:text-ctp-lavender;
   }
   .code-pill {
     @apply inline-flex rounded-md bg-ctp-base px-2 py-1 font-mono text-xs font-medium text-ctp-subtext;
@@ -567,7 +567,13 @@
   .toast,
   .app-header,
   .app-nav,
-  .admin-mode-control {
+  .admin-mode-control,
+  .borrower-workflow-entry button,
+  .borrower-workflow-entry input,
+  .borrower-workflow-entry select,
+  .dialog-workspace button,
+  .dialog-workspace input,
+  .dialog-workspace select {
     animation: none;
     transition: none;
   }

@@ -21,18 +21,24 @@ Node 22.16+ and pnpm are required because the application uses Node's built-in S
 
 ```sh
 pnpm install
-pnpm dev
+pnpm exec playwright install chromium
+pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:e2e
 pnpm build
 ```
 
+Run `pnpm dev` separately when you want the local development server and Vite watcher.
+
 Development data defaults to `./data/inventory.sqlite`. A fresh database requires an explicit, non-empty `ADMIN_PASSWORD`; startup fails with a clear error if it is absent. Once its salted hash exists, later restarts use the persisted credential and ignore a changed or absent bootstrap environment value. Set `DATA_DIR` and `PORT` as needed; `.env.example` lists all environment keys without shipping a known password.
+
+The browser suite starts a local application server backed by a unique temporary SQLite database, seeds its own deterministic records, and removes that database when it exits. It does not use or mutate `./data` and requires no network access after Chromium is installed.
 
 ## Roles and operating model
 
-- Non-admin users can immediately create borrowers, issue consumables, check out non-consumables, and record usable or damaged returns without a password.
+- Non-admin users can immediately create borrowers, issue consumables, and use the borrower desk to borrow non-consumables or record usable and damaged returns without a password. The borrower desk is the single borrowing and return path.
 - Admins can additionally manage catalogs and the admin password, receive stock, archive inactive records, resolve damage, and mark or unmark lost equipment.
 - Admin privileges return to non-admin after ten idle minutes. The UI warns during the last ten seconds, while the server independently enforces the deadline. Non-admin access does not expire.
 - The admin password is an accidental-action barrier for a trusted operating environment, not a security boundary against malicious local or network access.

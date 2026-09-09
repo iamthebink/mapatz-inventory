@@ -36,7 +36,6 @@ export type Loan = {
 export type Location = { id: number; code: string; name: string; archived: boolean };
 
 export type ActiveDialog =
-  | { kind: 'return'; loan: Loan }
   | { kind: 'lost'; loan: Loan; lost: boolean }
   | { kind: 'edit-item'; item: Item }
   | { kind: 'edit-borrower'; borrower: Borrower }
@@ -44,13 +43,6 @@ export type ActiveDialog =
   | { kind: 'import'; mode: 'reset' | 'recovery'; file: File };
 
 export type DialogSubmission =
-  | {
-      kind: 'return';
-      checkoutId: number;
-      usable: number;
-      damaged: number;
-      note: string;
-    }
   | { kind: 'lost'; checkoutId: number; quantity: number; lost: boolean; note: string }
   | {
       kind: 'edit-item';
@@ -150,92 +142,6 @@ function FormDialog({
         </fieldset>
       </form>
     </Dialog>
-  );
-}
-
-function ReturnDialog({
-  active,
-  pending,
-  onClose,
-  onSubmit,
-  returnFocusRef,
-  fallbackFocusRef,
-}: DialogProps<{ kind: 'return'; loan: Loan }>) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [error, setError] = useState('');
-  const { loan } = active;
-  return (
-    <FormDialog
-      title="החזרת ציוד"
-      description={`${loan.itemName} · ${loan.borrowerName} · ${loan.outstanding} יחידות בחוץ`}
-      pending={pending}
-      onClose={onClose}
-      initialFocusRef={inputRef}
-      returnFocusRef={returnFocusRef}
-      fallbackFocusRef={fallbackFocusRef}
-      error={error}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (pending) return;
-        const form = new FormData(event.currentTarget);
-        const usableText = value(form, 'usable').trim();
-        const damagedText = value(form, 'damaged').trim();
-        const usable = Number(usableText);
-        const damaged = Number(damagedText);
-        if (
-          !usableText ||
-          !damagedText ||
-          !Number.isInteger(usable) ||
-          !Number.isInteger(damaged) ||
-          usable < 0 ||
-          damaged < 0 ||
-          usable + damaged < 1 ||
-          usable + damaged > loan.outstanding
-        ) {
-          setError(
-            `הכמויות חייבות להיות מספרים שלמים, והכמות הכוללת חייבת להיות בין 1 ל־${loan.outstanding}.`,
-          );
-          return;
-        }
-        setError('');
-        void onSubmit({
-          kind: 'return',
-          checkoutId: loan.checkoutId,
-          usable,
-          damaged,
-          note: value(form, 'note'),
-        });
-      }}
-    >
-      <label className="field-label">
-        כמות תקינה
-        <input
-          ref={inputRef}
-          className="input-field"
-          name="usable"
-          type="number"
-          min={0}
-          max={loan.outstanding}
-          step={1}
-          defaultValue={loan.outstanding}
-          required
-        />
-      </label>
-      <label className="field-label">
-        כמות פגומה
-        <input
-          className="input-field"
-          name="damaged"
-          type="number"
-          min={0}
-          max={loan.outstanding}
-          step={1}
-          defaultValue={0}
-          required
-        />
-      </label>
-      <NoteField />
-    </FormDialog>
   );
 }
 
@@ -611,8 +517,6 @@ export function InventoryDialog({
 }) {
   const props = { pending, onClose, onSubmit, returnFocusRef, fallbackFocusRef };
   switch (active.kind) {
-    case 'return':
-      return <ReturnDialog active={active} {...props} />;
     case 'lost':
       return <LostDialog active={active} {...props} />;
     case 'edit-item':

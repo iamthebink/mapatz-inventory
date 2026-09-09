@@ -124,6 +124,7 @@ export const BorrowerWorkflow = forwardRef<
   const closeInitiatorRef = useRef<HTMLElement | null>(null);
   const returnButtonRefs = useRef(new Map<number, HTMLButtonElement>());
   const rollbackButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const initiallyFocusedBorrowerRef = useRef<number | null>(null);
   const frozenAttemptRef = useRef<FrozenAttempt | null>(null);
   const navigationRef = useRef<(() => void) | null>(null);
   const sentinelRef = useRef(false);
@@ -189,11 +190,24 @@ export const BorrowerWorkflow = forwardRef<
   }, [startup]);
 
   useEffect(() => {
+    if (!selectedBorrower || !cardLoadFailed) return;
+    const timer = window.setTimeout(() => retryCardRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [cardLoadFailed, selectedBorrower]);
+
+  useEffect(() => {
     if (!selectedBorrower || cardLoadFailed || !operation) return;
     const timer = window.setTimeout(() => {
       if (operation.focus === 'item-search') itemSearchRef.current?.focus();
       else if (operation.focus === 'retry-refresh') retryRefreshRef.current?.focus();
       else if (operation.focus === 'borrower-search') searchRef.current?.focus();
+      else if (
+        operation.phase.kind === 'ready' &&
+        initiallyFocusedBorrowerRef.current !== operation.borrowerId
+      ) {
+        initiallyFocusedBorrowerRef.current = operation.borrowerId;
+        itemSearchRef.current?.focus();
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, [cardLoadFailed, operation, selectedBorrower]);
@@ -206,6 +220,22 @@ export const BorrowerWorkflow = forwardRef<
     )
       return;
     const timer = window.setTimeout(() => creationRecoveryRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [createOpen, creation]);
+
+  useEffect(() => {
+    if (
+      !createOpen ||
+      !creation ||
+      !['editing', 'conflicted'].includes(creation.phase.kind) ||
+      creation.fieldErrors.length === 0
+    )
+      return;
+    const field = creation.fieldErrors[0]?.field ?? 'username';
+    const timer = window.setTimeout(
+      () => document.querySelector<HTMLInputElement>(`[name="${field}"]`)?.focus(),
+      0,
+    );
     return () => window.clearTimeout(timer);
   }, [createOpen, creation]);
 
@@ -230,6 +260,7 @@ export const BorrowerWorkflow = forwardRef<
 
   const resetCard = useCallback(() => {
     cardLoadRequestRef.current += 1;
+    initiallyFocusedBorrowerRef.current = null;
     setSelectedBorrower(null);
     setOperation(null);
     setCardLoadFailed(false);
@@ -563,12 +594,14 @@ export const BorrowerWorkflow = forwardRef<
         if (!operationPresentation(refreshed).cardOpen) {
           feedbackRef.current = refreshed.feedback;
           showToast('הפעולה הושלמה', translatedFeedback.operation_saved!, 'success');
+          setSearch('');
           closeCard();
         } else queueMicrotask(() => itemSearchRef.current?.focus());
       } catch {
         const failed = operationReducer(next, { type: 'refresh-failed', refreshId });
         setOperation(failed);
         if (!operationPresentation(failed).cardOpen) {
+          setSearch('');
           setSelectedBorrower(null);
           removeSentinel(() => searchRef.current?.focus());
         } else queueMicrotask(() => retryRefreshRef.current?.focus());
@@ -712,6 +745,7 @@ export const BorrowerWorkflow = forwardRef<
       setOperation(refreshed);
       if (!operationPresentation(refreshed).cardOpen) {
         showToast('הפעולה הושלמה', translatedFeedback.operation_saved!, 'success');
+        setSearch('');
         closeCard();
       } else queueMicrotask(() => itemSearchRef.current?.focus());
     } catch {
@@ -732,6 +766,7 @@ export const BorrowerWorkflow = forwardRef<
       if (!operationPresentation(reloaded).cardOpen) {
         feedbackRef.current = reloaded.feedback;
         showToast('הפעולה הושלמה', translatedFeedback.operation_saved!, 'success');
+        setSearch('');
         closeCard();
       } else queueMicrotask(() => itemSearchRef.current?.focus());
     } catch {
@@ -772,6 +807,7 @@ export const BorrowerWorkflow = forwardRef<
       const loaded = creationReducer(committed, { type: 'card-loaded', loadId, snapshot });
       setCreation(loaded);
       if (loaded.phase.kind !== 'opened' || !loaded.openCardSnapshot || !loaded.openCardBorrower) {
+        feedbackRef.current = loaded.feedback;
         setCardLoadFailed(true);
         queueMicrotask(() => retryCardRef.current?.focus());
         return;
@@ -786,6 +822,7 @@ export const BorrowerWorkflow = forwardRef<
     } catch {
       if (requestId !== cardLoadRequestRef.current) return;
       const failed = creationReducer(committed, { type: 'card-load-failed', loadId });
+      feedbackRef.current = failed.feedback;
       setCreation(failed);
       setCardLoadFailed(true);
       queueMicrotask(() => retryCardRef.current?.focus());

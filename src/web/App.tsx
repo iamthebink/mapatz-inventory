@@ -67,7 +67,7 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'inventory' | 'desk' | 'issue' | 'checkout' | 'returns' | 'catalogs' | 'ledger';
+type Tab = 'inventory' | 'desk' | 'issue' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
 const borrowerTypeNames: Record<Borrower['type'], string> = {
@@ -93,10 +93,8 @@ const eventNames: Record<string, string> = {
   written_off: 'גריעה',
 };
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
-  { key: 'checkout', label: 'השאלה', icon: ArrowLeftRight },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
-  { key: 'returns', label: 'החזרות', icon: PackageCheck },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
   { key: 'catalogs', label: 'ניהול', icon: Settings2 },
@@ -134,7 +132,6 @@ function join(...values: (string | number | null | undefined)[]) {
 export function App() {
   const [session, setSession] = useState<Session>({ role: 'operator', deadline: null });
   const [items, setItems] = useState<Item[]>([]);
-  const [borrowers, setBorrowers] = useState<Borrower[]>([]);
   const [catalogItems, setCatalogItems] = useState<Item[]>([]);
   const [catalogBorrowers, setCatalogBorrowers] = useState<Borrower[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -143,8 +140,6 @@ export function App() {
   const [tab, setTab] = useState<Tab>('inventory');
   const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
   const [issueQuery, setIssueQuery] = useState('');
-  const [checkoutQuery, setCheckoutQuery] = useState('');
-  const [borrowerQuery, setBorrowerQuery] = useState('');
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
@@ -157,7 +152,6 @@ export function App() {
   const sessionRequestRef = useRef(0);
   const activityRequestRef = useRef<Promise<void> | null>(null);
   const adminControlRef = useRef<HTMLButtonElement>(null);
-  const returnsTabRef = useRef<HTMLButtonElement>(null);
   const managementTabRef = useRef<HTMLButtonElement>(null);
   const dialogReturnFocusRef = useRef<HTMLElement>(null);
   const dialogFallbackRef = useRef<HTMLElement>(null);
@@ -171,8 +165,7 @@ export function App() {
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
   const isAdmin = session.role === 'admin';
   const adminActionsEnabled = isAdmin && !sessionReconciling;
-  const activeDialogRequiresAdmin = activeDialog != null && activeDialog.kind !== 'return';
-  const inventoryDialogPending = pending || (sessionReconciling && activeDialogRequiresAdmin);
+  const inventoryDialogPending = pending || (sessionReconciling && activeDialog != null);
 
   const clearImportInput = useCallback((mode: 'reset' | 'recovery') => {
     const input = mode === 'reset' ? resetFileRef.current : recoveryFileRef.current;
@@ -220,11 +213,10 @@ export function App() {
 
   const refresh = useCallback(async () => {
     const sessionRequestId = ++sessionRequestRef.current;
-    const [current, nextItems, nextBorrowers, nextLoans, allItems, allBorrowers, nextLocations] =
+    const [current, nextItems, nextLoans, allItems, allBorrowers, nextLocations] =
       await Promise.all([
         api<Session>('/session'),
         api<Item[]>('/items'),
-        api<Borrower[]>('/borrowers'),
         api<Loan[]>('/loans'),
         api<Item[]>('/items?all=1'),
         api<Borrower[]>('/borrowers?all=1'),
@@ -232,7 +224,6 @@ export function App() {
       ]);
     applySession(current, sessionRequestId);
     setItems(nextItems);
-    setBorrowers(nextBorrowers);
     setLoans(nextLoans);
     setCatalogItems(allItems);
     setCatalogBorrowers(allBorrowers);
@@ -323,7 +314,7 @@ export function App() {
     }
   }, [announce, isAdmin, remaining]);
   useEffect(() => {
-    if (isAdmin || !activeDialog || activeDialog.kind === 'return') return;
+    if (isAdmin || !activeDialog) return;
     if (activeDialog.kind === 'import') clearImportInput(activeDialog.mode);
     setActiveDialog(null);
   }, [activeDialog, clearImportInput, isAdmin]);
@@ -338,27 +329,6 @@ export function App() {
       ),
     [issueQuery, items],
   );
-  const checkoutItems = useMemo(
-    () =>
-      items.filter(
-        (item) =>
-          item.kind === 'non_consumable' &&
-          join(item.code, item.name, ...item.aliases)
-            .toLocaleLowerCase()
-            .includes(checkoutQuery.toLocaleLowerCase()),
-      ),
-    [checkoutQuery, items],
-  );
-  const operationBorrowers = useMemo(
-    () =>
-      borrowers.filter((borrower) =>
-        join(borrower.name, borrower.username)
-          .toLocaleLowerCase()
-          .includes(borrowerQuery.toLocaleLowerCase()),
-      ),
-    [borrowers, borrowerQuery],
-  );
-
   async function action(title: string, operation: () => Promise<unknown>) {
     if (pendingRef.current) return false;
     pendingRef.current = true;
@@ -445,19 +415,6 @@ export function App() {
   async function submitInventoryDialog(submission: DialogSubmission): Promise<boolean> {
     let succeeded = false;
     switch (submission.kind) {
-      case 'return':
-        succeeded = await action('החזרת ציוד', () =>
-          api('/return', {
-            method: 'POST',
-            body: JSON.stringify({
-              checkoutId: submission.checkoutId,
-              usable: submission.usable,
-              damaged: submission.damaged,
-              note: submission.note,
-            }),
-          }),
-        );
-        break;
       case 'lost':
         succeeded = await action(submission.lost ? 'סימון ציוד כאבוד' : 'ביטול סימון אובדן', () =>
           api('/lost', {
@@ -608,17 +565,10 @@ export function App() {
       render: (loan) => (
         <div className="flex flex-wrap gap-1.5">
           <SmallButton
-            icon={RotateCcw}
-            disabled={pending || loan.outstanding < 1}
-            onClick={() => openInventoryDialog({ kind: 'return', loan }, returnsTabRef.current)}
-          >
-            החזרה
-          </SmallButton>
-          <SmallButton
             icon={TriangleAlert}
             disabled={pending || !adminActionsEnabled || loan.outstanding < 1}
             onClick={() =>
-              openInventoryDialog({ kind: 'lost', loan, lost: true }, returnsTabRef.current)
+              openInventoryDialog({ kind: 'lost', loan, lost: true }, managementTabRef.current)
             }
           >
             סמן אבוד
@@ -627,7 +577,7 @@ export function App() {
             icon={RotateCcw}
             disabled={pending || !adminActionsEnabled || loan.lost < 1}
             onClick={() =>
-              openInventoryDialog({ kind: 'lost', loan, lost: false }, returnsTabRef.current)
+              openInventoryDialog({ kind: 'lost', loan, lost: false }, managementTabRef.current)
             }
           >
             בטל אובדן
@@ -865,13 +815,7 @@ export function App() {
             <div className="contents" key={key}>
               {key === 'inventory' && <span className="nav-separator" aria-hidden="true" />}
               <button
-                ref={
-                  key === 'returns'
-                    ? returnsTabRef
-                    : key === 'catalogs'
-                      ? managementTabRef
-                      : undefined
-                }
+                ref={key === 'catalogs' ? managementTabRef : undefined}
                 className={`nav-item ${tab === key ? 'active' : ''}`}
                 aria-current={tab === key ? 'page' : undefined}
                 onClick={() => {
@@ -989,81 +933,6 @@ export function App() {
             </div>
           </PageSection>
         )}
-        {tab === 'checkout' && (
-          <PageSection title="השאלה" description="השאלת ציוד לשואל עד להחזרה" icon={ArrowLeftRight}>
-            <div className="mb-5 grid gap-3 rounded-2xl border border-ctp-surface bg-white p-4 sm:grid-cols-2">
-              <SearchField
-                label="סינון פריטים"
-                value={checkoutQuery}
-                onChange={setCheckoutQuery}
-                placeholder="שם, כינוי או קוד"
-              />
-              <SearchField
-                label="סינון שואלים"
-                value={borrowerQuery}
-                onChange={setBorrowerQuery}
-                placeholder="שם או שם משתמש"
-              />
-            </div>
-            <div className="grid gap-4">
-              <ActionCard
-                title="השאלת ציוד"
-                description="שיוך ציוד לשואל עד להחזרה"
-                icon={ArrowLeftRight}
-                disabled={pending}
-                onSubmit={(form) =>
-                  void action('השאלת ציוד', () =>
-                    api('/checkout', {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        itemId: number(form, 'itemId'),
-                        borrowerId: number(form, 'borrowerId'),
-                        quantity: number(form, 'quantity'),
-                        note: form.get('note'),
-                      }),
-                    }),
-                  )
-                }
-              >
-                <Select
-                  name="itemId"
-                  label="פריט"
-                  options={checkoutItems.map((item) => [
-                    item.id,
-                    `${item.code} — ${item.name} (${item.available})`,
-                  ])}
-                />
-                <Select
-                  name="borrowerId"
-                  label="שואל"
-                  options={operationBorrowers.map((borrower) => [
-                    borrower.id,
-                    `${borrower.name} · ${borrower.username}`,
-                  ])}
-                />
-                <Quantity />
-                <Note />
-              </ActionCard>
-            </div>
-          </PageSection>
-        )}
-        {tab === 'returns' && (
-          <PageSection
-            title="ציוד בחוץ"
-            description="מעקב והחזרה של ציוד מושאל"
-            icon={PackageCheck}
-          >
-            <DataTable
-              rows={loans}
-              columns={loanColumns}
-              rowKey={(loan) => loan.checkoutId}
-              searchText={(loan) =>
-                join(loan.code, loan.itemName, loan.borrowerName, loan.outstanding, loan.lost)
-              }
-              searchPlaceholder="סינון לפי פריט, שואל או קוד…"
-            />
-          </PageSection>
-        )}
         {tab === 'catalogs' && (
           <PageSection
             title="ניהול"
@@ -1163,6 +1032,24 @@ export function App() {
                       </label>
                       <Note />
                     </ActionCard>
+                  </div>
+                  <div className="mt-7">
+                    <h3 className="mb-3 text-lg font-semibold">ציוד בחוץ ואבוד</h3>
+                    <DataTable
+                      rows={loans}
+                      columns={loanColumns}
+                      rowKey={(loan) => loan.checkoutId}
+                      searchText={(loan) =>
+                        join(
+                          loan.code,
+                          loan.itemName,
+                          loan.borrowerName,
+                          loan.outstanding,
+                          loan.lost,
+                        )
+                      }
+                      searchPlaceholder="סינון לפי פריט, שואל או קוד…"
+                    />
                   </div>
                   {!isAdmin && <PermissionNote />}
                 </>
