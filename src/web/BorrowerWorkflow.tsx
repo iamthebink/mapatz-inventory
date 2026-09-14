@@ -1276,16 +1276,23 @@ export const BorrowerWorkflow = forwardRef<
                 disabled={locked}
                 returnButtonRefs={returnButtonRefs}
                 rollbackButtonRefs={rollbackButtonRefs}
-                onReturn={(itemId, condition) =>
+                onReturn={(itemId, condition) => {
+                  const projection = projectItem(operation, itemId);
+                  const defaultQuantity =
+                    condition === 'damaged'
+                      ? 1
+                      : condition === 'lost'
+                        ? projection?.lostNow
+                        : projection?.returnableNow;
                   setQuantity({
                     direction: 'return',
                     condition,
                     itemId,
-                    quantity: '1',
+                    quantity: String(defaultQuantity ?? 1),
                     note: '',
                     error: '',
-                  })
-                }
+                  });
+                }}
                 onRollback={(itemId, direction) => {
                   const keys = [...rollbackButtonRefs.current.keys()];
                   const currentIndex = keys.indexOf(`${itemId}-${direction}`);

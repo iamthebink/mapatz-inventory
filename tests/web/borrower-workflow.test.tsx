@@ -209,6 +209,7 @@ describe('borrower desk workflow', () => {
     expect((lost as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(lost);
     expect(screen.getByRole('dialog', { name: 'החזרת ציוד אבוד' })).toBeTruthy();
+    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('spinbutton', { name: 'כמות' })),
     );
@@ -216,6 +217,43 @@ describe('borrower desk workflow', () => {
 
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
     expect(within(pending).getByText('החזרת אבוד')).toBeTruthy();
+    expect(within(pending).getByText('2')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'אבוד' })).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { name: 'ציוד באחריות השואל' }),
+      ),
+    );
+  });
+
+  it('defaults usable returns to the full returnable balance and damaged returns to one', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot') return json(desk());
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'תקין' }));
+    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
+    await userEvent.click(screen.getByRole('button', { name: 'ביטול' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'פגום' }));
+    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('1');
+    await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
+    const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
+    expect(within(pending).getByText('החזרה פגומה')).toBeTruthy();
     expect(within(pending).getByText('1')).toBeTruthy();
   });
 
@@ -354,9 +392,14 @@ describe('borrower desk workflow', () => {
     expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
     expect(within(catalog).queryByRole('option', { name: /פריט ישן/ })).toBeNull();
     expect(screen.getByRole('columnheader', { name: 'פעולות החזרה' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'תקין' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'אבוד' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'פגום' })).toBeTruthy();
+    for (const [label, iconClass] of [
+      ['תקין', 'lucide-circle-check'],
+      ['אבוד', 'lucide-search-check'],
+      ['פגום', 'lucide-triangle-alert'],
+    ] as const) {
+      const action = screen.getByRole('button', { name: label });
+      expect(action.querySelector(`svg[aria-hidden="true"].${iconClass}`)).toBeTruthy();
+    }
 
     await userEvent.type(itemSearch, 'canopy');
     expect(within(catalog).queryByRole('option', { name: /אוהל/ })).toBeNull();
@@ -390,7 +433,7 @@ describe('borrower desk workflow', () => {
           expect(body.items[0]).toMatchObject({
             itemId: 11,
             borrow: [{ quantity: 1, note: '' }],
-            return: [{ usable: 1, damaged: 0, note: '' }],
+            return: [{ usable: 2, damaged: 0, note: '' }],
           });
           return json({ outcome: 'committed', idempotencyKey: key, replayed: false }, 201);
         }
@@ -429,11 +472,12 @@ describe('borrower desk workflow', () => {
     ).toBe(true);
 
     await userEvent.click(screen.getByRole('button', { name: 'תקין' }));
+    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    expect(within(pendingTransactions).getAllByText('1')).toHaveLength(2);
-    expect(within(pendingTransactions).queryByText(/[+−-]1/)).toBeNull();
+    expect(within(pendingTransactions).getByText('2')).toBeTruthy();
+    expect(within(pendingTransactions).queryByText(/[+−-]\d/)).toBeNull();
     await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'תקין' })),
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'אבוד' })),
     );
     expect(screen.getAllByRole('button', { name: 'ביטול פעולה' })).toHaveLength(2);
 

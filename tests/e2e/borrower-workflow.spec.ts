@@ -607,6 +607,7 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   const childClose = child.locator('.dialog-close');
   const childConfirm = child.getByRole('button', { name: 'אישור' });
   await expect(child.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   await childClose.focus();
   await page.keyboard.press('Shift+Tab');
   await expect(childConfirm).toBeFocused();

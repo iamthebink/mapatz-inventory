@@ -1,4 +1,5 @@
 import type { RefObject } from 'react';
+import { CircleCheck, SearchCheck, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { projectItem, projectedItems, type OperationState } from './borrower-workflow-state';
 
 const conflictLabels: Record<string, string> = {
@@ -12,6 +13,16 @@ const conflictLabels: Record<string, string> = {
 };
 
 export type ReturnCondition = 'usable' | 'lost' | 'damaged';
+
+const returnActions: ReadonlyArray<{
+  condition: ReturnCondition;
+  label: string;
+  icon: LucideIcon;
+}> = [
+  { condition: 'usable', label: 'תקין', icon: CircleCheck },
+  { condition: 'lost', label: 'אבוד', icon: SearchCheck },
+  { condition: 'damaged', label: 'פגום', icon: TriangleAlert },
+];
 
 export function BorrowerOperationalTables({
   state,
@@ -174,30 +185,31 @@ export function BorrowerOperationalTables({
                   </td>
                   <td>
                     <div className="holding-return-actions">
-                      {(
-                        [
-                          ['usable', 'תקין', projection.returnableNow],
-                          ['lost', 'אבוד', projection.lostNow],
-                          ['damaged', 'פגום', projection.returnableNow],
-                        ] as const
-                      ).map(([condition, label, balance]) => (
-                        <button
-                          key={condition}
-                          ref={(node) => {
-                            const key = `${projection.itemId}-${condition}`;
-                            if (node) returnButtonRefs?.current.set(key, node);
-                            else returnButtonRefs?.current.delete(key);
-                          }}
-                          type="button"
-                          className="small-button"
-                          disabled={
-                            disabled || balance < 1 || !inventory.get(projection.itemId)?.selectable
-                          }
-                          onClick={() => onReturn(projection.itemId, condition)}
-                        >
-                          {label}
-                        </button>
-                      ))}
+                      {returnActions.map(({ condition, label, icon: Icon }) => {
+                        const balance =
+                          condition === 'lost' ? projection.lostNow : projection.returnableNow;
+                        return (
+                          <button
+                            key={condition}
+                            ref={(node) => {
+                              const key = `${projection.itemId}-${condition}`;
+                              if (node) returnButtonRefs?.current.set(key, node);
+                              else returnButtonRefs?.current.delete(key);
+                            }}
+                            type="button"
+                            className="small-button"
+                            disabled={
+                              disabled ||
+                              balance < 1 ||
+                              !inventory.get(projection.itemId)?.selectable
+                            }
+                            onClick={() => onReturn(projection.itemId, condition)}
+                          >
+                            <Icon className="size-3.5" aria-hidden="true" />
+                            {label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </td>
                 </tr>
