@@ -26,6 +26,7 @@ export function ActiveDescendantCombobox<T>({
   onSelect,
   placeholder,
   disabled = false,
+  openOnFocus = false,
   inputRef,
 }: {
   label: string;
@@ -35,6 +36,7 @@ export function ActiveDescendantCombobox<T>({
   onSelect: (value: T) => void;
   placeholder?: string;
   disabled?: boolean;
+  openOnFocus?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
 }) {
   const generatedId = useId();
@@ -105,10 +107,12 @@ export function ActiveDescendantCombobox<T>({
           placeholder={placeholder}
           disabled={disabled}
           autoComplete="off"
-          onFocus={() => value.trim() && setExpanded(true)}
+          onFocus={() => {
+            if (openOnFocus || value.trim()) setExpanded(true);
+          }}
           onChange={(event) => {
             onChange(event.target.value);
-            setExpanded(Boolean(event.target.value.trim()));
+            setExpanded(openOnFocus || Boolean(event.target.value.trim()));
           }}
           onKeyDown={handleKeyDown}
         />

@@ -241,6 +241,60 @@ describe('borrower desk workflow', () => {
     expect(screen.getByRole('button', { name: `פתיחת כרטיס שואל — ${second.name}` })).toBeTruthy();
   });
 
+  it('opens the non-archived borrow catalog on item-search focus and filters it', async () => {
+    const secondItem = {
+      ...item,
+      id: 12,
+      code: 102,
+      name: 'צילייה',
+      aliases: ['Canopy'],
+    };
+    const archivedItem = {
+      ...item,
+      id: 13,
+      code: 103,
+      name: 'פריט ישן',
+      archived: true,
+      selectable: false,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot')
+          return json({ ...desk(), inventory: [item, secondItem, archivedItem] });
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` }),
+    );
+    const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
+    await waitFor(() => expect(document.activeElement).toBe(itemSearch));
+    const catalog = await screen.findByRole('listbox');
+    expect(within(catalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
+    expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    expect(within(catalog).queryByRole('option', { name: /פריט ישן/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'החזרה' })).toBeTruthy();
+
+    await userEvent.type(itemSearch, 'canopy');
+    expect(within(catalog).queryByRole('option', { name: /אוהל/ })).toBeNull();
+    expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    await userEvent.clear(itemSearch);
+    expect(within(catalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
+    expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    fireEvent.keyDown(itemSearch, { key: 'Enter' });
+    expect(await screen.findByRole('dialog', { name: 'הוספת השאלה' })).toBeTruthy();
+  });
+
   it('loads authoritative search, separates archived matches, stages opposing directions, and persists before save transport', async () => {
     let operationPosted = false;
     vi.stubGlobal(

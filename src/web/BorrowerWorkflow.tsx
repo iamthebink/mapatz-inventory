@@ -466,14 +466,17 @@ export const BorrowerWorkflow = forwardRef<
   };
 
   const itemOptions = useMemo<ComboboxOption<Item>[]>(() => {
-    if (!operation || !itemSearch.trim()) return [];
-    const query = itemSearch.toLocaleLowerCase();
+    if (!operation) return [];
+    const query = itemSearch.trim().toLocaleLowerCase();
     return operation.snapshot.inventory
-      .filter((item) =>
-        [item.name, String(item.code), ...item.aliases]
-          .join(' ')
-          .toLocaleLowerCase()
-          .includes(query),
+      .filter(
+        (item) =>
+          item.selectable &&
+          (!query ||
+            [item.name, String(item.code), ...item.aliases]
+              .join(' ')
+              .toLocaleLowerCase()
+              .includes(query)),
       )
       .map((item) => ({
         id: `item-option-${item.id}`,
@@ -483,9 +486,7 @@ export const BorrowerWorkflow = forwardRef<
             <bdi dir="ltr">{item.code}</bdi> — {item.name}
           </>
         ),
-        description: item.archived ? 'בארכיון — לא ניתן לבחור' : `זמין: ${item.available}`,
-        disabled: !item.selectable,
-        group: item.archived ? 'פריטים בארכיון' : 'פריטים זמינים',
+        description: `זמין: ${item.available}`,
       }));
   }, [itemSearch, operation]);
 
@@ -1202,6 +1203,7 @@ export const BorrowerWorkflow = forwardRef<
                 }}
                 placeholder="שם, כינוי או קוד"
                 disabled={locked}
+                openOnFocus
                 inputRef={itemSearchRef}
               />
               {operation.phase.kind === 'refresh-required' && (
