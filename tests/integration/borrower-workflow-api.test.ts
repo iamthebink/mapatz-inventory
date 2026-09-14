@@ -25,6 +25,44 @@ function fixture() {
 }
 
 describe('borrower workflow snapshot API', () => {
+  it('accepts an operator lost-credit part and rejects malformed lost-credit payloads', async () => {
+    const { db, inventory, agent } = fixture();
+    const borrower = inventory.createBorrower({
+      username: 'lost-credit',
+      name: 'Lost Credit',
+      type: 'individual',
+    });
+    const item = inventory.createItem({ name: 'Recovered tent', kind: 'non_consumable' });
+    inventory.addStock(item.id, 1);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
+    inventory.markLost(checkoutId, 1, true);
+
+    await agent
+      .post(`/api/borrowers/${borrower.id}/operations`)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000120')
+      .send({
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: item.id, lostCredit: [{ quantity: 1, note: 'found' }] }],
+      })
+      .expect(201)
+      .expect(({ body }) => expect(body).toMatchObject({ outcome: 'committed' }));
+    expect(
+      db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='marked_lost'").get(),
+    ).toEqual({ count: 1 });
+
+    await agent
+      .post(`/api/borrowers/${borrower.id}/operations`)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000121')
+      .send({
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: item.id, lostCredit: [{ quantity: 1, note: '', extra: true }] }],
+      })
+      .expect(400)
+      .expect(({ body }) => expect(body.error).toBe('validation_error'));
+  });
+
   it('returns the exact search and desk snapshot transports', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -349,7 +387,7 @@ describe('borrower workflow snapshot API', () => {
         {
           field: 'items[0]',
           code: 'custom',
-          message: 'An item group must include borrow or return parts',
+          message: 'An item group must include borrow, return, or lost-credit parts',
         },
       ],
     },

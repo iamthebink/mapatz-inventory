@@ -60,6 +60,37 @@ function deepFreeze<T>(value: T): T {
 }
 
 describe('borrower operation state', () => {
+  it('stages lost credits against the independent lost balance and projects usable stock', () => {
+    let state = createOperationState(
+      7,
+      snapshot({
+        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        holdings: [{ itemId: 11, returnable: 0, lost: 2 }],
+      }),
+    );
+    state = operationReducer(state, {
+      type: 'stage-lost-credit',
+      itemId: 11,
+      part: { quantity: 1, note: 'found' },
+    });
+
+    expect(operationRequest(state).items).toEqual([
+      { itemId: 11, lostCredit: [{ quantity: 1, note: 'found' }] },
+    ]);
+    expect(projectItem(state, 11)).toMatchObject({
+      returnableNow: 0,
+      lost: 2,
+      lostNow: 1,
+      stagedLostCredit: 1,
+      projectedAvailability: 1,
+      compatible: true,
+    });
+    expect(canSave(state)).toBe(true);
+
+    state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lostCredit' });
+    expect(state.staged).toEqual([]);
+  });
+
   it('preserves ordered directional buckets, immutable truth, projection formulas, and announcements', () => {
     const base = deepFreeze(snapshot());
     let state = createOperationState(7, base);

@@ -11,7 +11,7 @@ import {
 import type { Borrower, Item } from '../domain/types';
 import { fetchBorrowerDeskSnapshot, fetchBorrowerSearch, sendFrozenBorrowerAttempt } from './api';
 import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
-import { BorrowerOperationalTables } from './BorrowerOperationalTables';
+import { BorrowerOperationalTables, type ReturnCondition } from './BorrowerOperationalTables';
 import { Dialog, useDialogStack } from './Dialog';
 import {
   canSave,
@@ -48,10 +48,9 @@ export type BorrowerWorkflowHandle = {
 
 type QuantityDialog = {
   direction: 'borrow' | 'return';
+  condition?: ReturnCondition;
   itemId: number;
   quantity: string;
-  usable: string;
-  damaged: string;
   note: string;
   error: string;
 };
@@ -123,7 +122,7 @@ export const BorrowerWorkflow = forwardRef<
   const retryRefreshRef = useRef<HTMLButtonElement>(null);
   const creationRecoveryRef = useRef<HTMLButtonElement>(null);
   const closeInitiatorRef = useRef<HTMLElement | null>(null);
-  const returnButtonRefs = useRef(new Map<number, HTMLButtonElement>());
+  const returnButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const rollbackButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const initiallyFocusedBorrowerRef = useRef<number | null>(null);
   const frozenAttemptRef = useRef<FrozenAttempt | null>(null);
@@ -493,7 +492,8 @@ export const BorrowerWorkflow = forwardRef<
   const submitQuantity = (event: FormEvent) => {
     event.preventDefault();
     if (!operation || !quantity) return;
-    const returnIndex = [...returnButtonRefs.current.keys()].indexOf(quantity.itemId);
+    const returnKey = `${quantity.itemId}-${quantity.condition ?? 'usable'}`;
+    const returnIndex = [...returnButtonRefs.current.keys()].indexOf(returnKey);
     if (quantity.direction === 'borrow') {
       const amount = Number(quantity.quantity);
       if (!Number.isSafeInteger(amount) || amount < 1) {
@@ -509,33 +509,42 @@ export const BorrowerWorkflow = forwardRef<
         }),
       );
     } else {
-      const usable = Number(quantity.usable);
-      const damaged = Number(quantity.damaged);
-      const max = projectItem(operation, quantity.itemId)?.returnableNow ?? 0;
-      if (
-        !Number.isSafeInteger(usable) ||
-        !Number.isSafeInteger(damaged) ||
-        usable < 0 ||
-        damaged < 0 ||
-        usable + damaged < 1 ||
-        usable + damaged > max
-      ) {
+      const amount = Number(quantity.quantity);
+      const projection = projectItem(operation, quantity.itemId);
+      const max =
+        quantity.condition === 'lost'
+          ? (projection?.lostNow ?? 0)
+          : (projection?.returnableNow ?? 0);
+      if (!Number.isSafeInteger(amount) || amount < 1 || amount > max) {
         setQuantity({ ...quantity, error: `ניתן להחזיר בין 1 ל־${max} יחידות` });
         queueMicrotask(() => quantityErrorRef.current?.focus());
         return;
       }
       setOperation(
-        operationReducer(operation, {
-          type: 'stage-return',
-          itemId: quantity.itemId,
-          part: { usable, damaged, note: quantity.note },
-        }),
+        operationReducer(
+          operation,
+          quantity.condition === 'lost'
+            ? {
+                type: 'stage-lost-credit',
+                itemId: quantity.itemId,
+                part: { quantity: amount, note: quantity.note },
+              }
+            : {
+                type: 'stage-return',
+                itemId: quantity.itemId,
+                part: {
+                  usable: quantity.condition === 'usable' ? amount : 0,
+                  damaged: quantity.condition === 'damaged' ? amount : 0,
+                  note: quantity.note,
+                },
+              },
+        ),
       );
     }
     setQuantity(null);
     window.setTimeout(() => {
       if (quantity.direction === 'return') {
-        const preferred = returnButtonRefs.current.get(quantity.itemId);
+        const preferred = returnButtonRefs.current.get(returnKey);
         const remaining = [...returnButtonRefs.current.values()];
         const next = remaining
           .slice(preferred ? remaining.indexOf(preferred) + 1 : Math.max(returnIndex, 0))
@@ -546,6 +555,19 @@ export const BorrowerWorkflow = forwardRef<
         );
       } else itemSearchRef.current?.focus();
     }, 0);
+  };
+
+  const closeQuantity = () => {
+    const current = quantity;
+    setQuantity(null);
+    queueMicrotask(() => {
+      if (current?.direction === 'return')
+        focusWithFallback(
+          returnButtonRefs.current.get(`${current.itemId}-${current.condition ?? 'usable'}`),
+          itemSearchRef.current,
+        );
+      else itemSearchRef.current?.focus();
+    });
   };
 
   const applyOperationResult = async (
@@ -1194,8 +1216,6 @@ export const BorrowerWorkflow = forwardRef<
                       direction: 'borrow',
                       itemId: item.id,
                       quantity: '1',
-                      usable: '0',
-                      damaged: '0',
                       note: '',
                       error: '',
                     });
@@ -1256,13 +1276,12 @@ export const BorrowerWorkflow = forwardRef<
                 disabled={locked}
                 returnButtonRefs={returnButtonRefs}
                 rollbackButtonRefs={rollbackButtonRefs}
-                onReturn={(itemId) =>
+                onReturn={(itemId, condition) =>
                   setQuantity({
                     direction: 'return',
+                    condition,
                     itemId,
-                    quantity: '',
-                    usable: '1',
-                    damaged: '0',
+                    quantity: '1',
                     note: '',
                     error: '',
                   })
@@ -1298,28 +1317,25 @@ export const BorrowerWorkflow = forwardRef<
 
       {quantity && operation && (
         <Dialog
-          title={quantity.direction === 'borrow' ? 'הוספת השאלה' : 'הוספת החזרה'}
+          title={
+            quantity.direction === 'borrow'
+              ? 'הוספת השאלה'
+              : quantity.condition === 'usable'
+                ? 'החזרה תקינה'
+                : quantity.condition === 'lost'
+                  ? 'החזרת ציוד אבוד'
+                  : 'החזרה פגומה'
+          }
           level="subordinate"
           role="dialog"
           variant="standard"
           busy={false}
           dismissible={!locked}
-          onClose={() => {
-            const current = quantity;
-            setQuantity(null);
-            queueMicrotask(() => {
-              if (current.direction === 'return')
-                focusWithFallback(
-                  returnButtonRefs.current.get(current.itemId),
-                  itemSearchRef.current,
-                );
-              else itemSearchRef.current?.focus();
-            });
-          }}
+          onClose={closeQuantity}
           initialFocusRef={quantityErrorRef}
           actions={
             <>
-              <button type="button" className="secondary-button" onClick={() => setQuantity(null)}>
+              <button type="button" className="secondary-button" onClick={closeQuantity}>
                 ביטול
               </button>
               <button type="submit" form="quantity-form" className="primary-button">
@@ -1328,50 +1344,37 @@ export const BorrowerWorkflow = forwardRef<
             </>
           }
         >
-          <form id="quantity-form" onSubmit={submitQuantity} className="dialog-form">
-            {quantity.direction === 'borrow' ? (
-              <label className="field-label">
-                כמות
-                <input
-                  ref={quantityErrorRef}
-                  className="input-field"
-                  type="number"
-                  min="1"
-                  value={quantity.quantity}
-                  onChange={(event) =>
-                    setQuantity({ ...quantity, quantity: event.target.value, error: '' })
-                  }
-                />
-              </label>
-            ) : (
-              <>
-                <label className="field-label">
-                  כמות תקינה
-                  <input
-                    ref={quantityErrorRef}
-                    className="input-field"
-                    type="number"
-                    min="0"
-                    value={quantity.usable}
-                    onChange={(event) =>
-                      setQuantity({ ...quantity, usable: event.target.value, error: '' })
-                    }
-                  />
-                </label>
-                <label className="field-label">
-                  כמות פגומה
-                  <input
-                    className="input-field"
-                    type="number"
-                    min="0"
-                    value={quantity.damaged}
-                    onChange={(event) =>
-                      setQuantity({ ...quantity, damaged: event.target.value, error: '' })
-                    }
-                  />
-                </label>
-              </>
-            )}
+          <form
+            id="quantity-form"
+            onSubmit={submitQuantity}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              event.currentTarget.requestSubmit();
+            }}
+            className="dialog-form"
+            noValidate
+          >
+            <label className="field-label">
+              כמות
+              <input
+                ref={quantityErrorRef}
+                className="input-field"
+                type="number"
+                min="1"
+                max={
+                  quantity.direction === 'return'
+                    ? quantity.condition === 'lost'
+                      ? projectItem(operation, quantity.itemId)?.lostNow
+                      : projectItem(operation, quantity.itemId)?.returnableNow
+                    : undefined
+                }
+                value={quantity.quantity}
+                onChange={(event) =>
+                  setQuantity({ ...quantity, quantity: event.target.value, error: '' })
+                }
+              />
+            </label>
             <label className="field-label">
               הערה (רשות)
               <input

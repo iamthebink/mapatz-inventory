@@ -8,7 +8,10 @@ const conflictLabels: Record<string, string> = {
   wrong_item_kind: 'סוג הפריט אינו מתאים להשאלה',
   insufficient_stock: 'אין די מלאי זמין',
   returnable_balance_changed: 'יתרת ההחזרה השתנתה',
+  lost_balance_changed: 'יתרת הציוד האבוד השתנתה',
 };
+
+export type ReturnCondition = 'usable' | 'lost' | 'damaged';
 
 export function BorrowerOperationalTables({
   state,
@@ -20,15 +23,15 @@ export function BorrowerOperationalTables({
 }: {
   state: OperationState;
   disabled: boolean;
-  onReturn: (itemId: number) => void;
-  onRollback: (itemId: number, direction: 'borrow' | 'return') => void;
-  returnButtonRefs?: RefObject<Map<number, HTMLButtonElement>>;
+  onReturn: (itemId: number, condition: ReturnCondition) => void;
+  onRollback: (itemId: number, direction: 'borrow' | 'usable' | 'damaged' | 'lostCredit') => void;
+  returnButtonRefs?: RefObject<Map<string, HTMLButtonElement>>;
   rollbackButtonRefs?: RefObject<Map<string, HTMLButtonElement>>;
 }) {
   const inventory = new Map(state.snapshot.inventory.map((item) => [item.id, item]));
   const projections = state.unverifiedProjection ?? projectedItems(state);
   const holdings = projections.filter(
-    (projection) => projection.projectedHeld > 0 || projection.lost > 0,
+    (projection) => projection.projectedHeld > 0 || projection.lostNow > 0,
   );
   return (
     <div className="borrower-work-segment">
@@ -52,11 +55,42 @@ export function BorrowerOperationalTables({
             <tbody>
               {state.staged.flatMap((group) => {
                 const projection = projectItem(state, group.itemId);
-                const rows: Array<{ direction: 'borrow' | 'return'; quantity: number }> = [];
+                const rows: Array<{
+                  direction: 'borrow' | 'usable' | 'damaged' | 'lostCredit';
+                  quantity: number;
+                  label: string;
+                  notes: string[];
+                }> = [];
                 if (group.borrow.length)
-                  rows.push({ direction: 'borrow', quantity: projection?.stagedBorrow ?? 0 });
-                if (group.return.length)
-                  rows.push({ direction: 'return', quantity: projection?.stagedReturn ?? 0 });
+                  rows.push({
+                    direction: 'borrow',
+                    quantity: projection?.stagedBorrow ?? 0,
+                    label: 'השאלה',
+                    notes: group.borrow.map((part) => part.note),
+                  });
+                const usable = group.return.reduce((total, part) => total + part.usable, 0);
+                if (usable > 0)
+                  rows.push({
+                    direction: 'usable',
+                    quantity: usable,
+                    label: 'החזרה תקינה',
+                    notes: group.return.filter((part) => part.usable > 0).map((part) => part.note),
+                  });
+                const damaged = group.return.reduce((total, part) => total + part.damaged, 0);
+                if (damaged > 0)
+                  rows.push({
+                    direction: 'damaged',
+                    quantity: damaged,
+                    label: 'החזרה פגומה',
+                    notes: group.return.filter((part) => part.damaged > 0).map((part) => part.note),
+                  });
+                if ((group.lostCredit ?? []).length)
+                  rows.push({
+                    direction: 'lostCredit',
+                    quantity: projection?.stagedLostCredit ?? 0,
+                    label: 'החזרת אבוד',
+                    notes: (group.lostCredit ?? []).map((part) => part.note),
+                  });
                 return rows.map((row) => (
                   <tr
                     key={`${group.itemId}-${row.direction}`}
@@ -64,19 +98,16 @@ export function BorrowerOperationalTables({
                     tabIndex={projection?.compatible ? undefined : -1}
                   >
                     <td>{inventory.get(group.itemId)?.name ?? `#${group.itemId}`}</td>
-                    <td>{row.direction === 'borrow' ? 'השאלה' : 'החזרה'}</td>
+                    <td>{row.label}</td>
                     <td>
                       <bdi dir="ltr" className="operational-quantity">
                         {Math.abs(row.quantity)}
                       </bdi>
                     </td>
                     <td>
-                      {(row.direction === 'borrow' ? group.borrow : group.return)
-                        .map((part) => part.note)
-                        .filter(Boolean)
-                        .map((note, index) => (
-                          <div key={index}>{note}</div>
-                        ))}
+                      {row.notes.filter(Boolean).map((note, index) => (
+                        <div key={index}>{note}</div>
+                      ))}
                     </td>
                     <td>
                       <button
@@ -124,7 +155,7 @@ export function BorrowerOperationalTables({
                 <th>פריט</th>
                 <th>תקין</th>
                 <th>אבוד</th>
-                <th>פעולות</th>
+                <th>פעולות החזרה</th>
               </tr>
             </thead>
             <tbody>
@@ -138,26 +169,36 @@ export function BorrowerOperationalTables({
                   </td>
                   <td>
                     <bdi dir="ltr" className="operational-quantity">
-                      {projection.lost}
+                      {projection.lostNow}
                     </bdi>
                   </td>
                   <td>
-                    <button
-                      ref={(node) => {
-                        if (node) returnButtonRefs?.current.set(projection.itemId, node);
-                        else returnButtonRefs?.current.delete(projection.itemId);
-                      }}
-                      type="button"
-                      className="small-button"
-                      disabled={
-                        disabled ||
-                        projection.returnableNow < 1 ||
-                        !inventory.get(projection.itemId)?.selectable
-                      }
-                      onClick={() => onReturn(projection.itemId)}
-                    >
-                      החזרה
-                    </button>
+                    <div className="holding-return-actions">
+                      {(
+                        [
+                          ['usable', 'תקין', projection.returnableNow],
+                          ['lost', 'אבוד', projection.lostNow],
+                          ['damaged', 'פגום', projection.returnableNow],
+                        ] as const
+                      ).map(([condition, label, balance]) => (
+                        <button
+                          key={condition}
+                          ref={(node) => {
+                            const key = `${projection.itemId}-${condition}`;
+                            if (node) returnButtonRefs?.current.set(key, node);
+                            else returnButtonRefs?.current.delete(key);
+                          }}
+                          type="button"
+                          className="small-button"
+                          disabled={
+                            disabled || balance < 1 || !inventory.get(projection.itemId)?.selectable
+                          }
+                          onClick={() => onReturn(projection.itemId, condition)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </td>
                 </tr>
               ))}

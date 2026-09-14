@@ -36,14 +36,24 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
 
 async function stageReturn(page: Page, usable = '1', damaged = '0') {
   const holdings = page.getByRole('heading', { name: /ציוד באחריות השואל/ }).locator('..');
-  await holdings
-    .locator('button.small-button:not([disabled])')
-    .filter({ hasText: /^החזרה$/ })
-    .click();
-  const dialog = page.getByRole('dialog', { name: 'הוספת החזרה' });
-  await dialog.getByRole('spinbutton', { name: 'כמות תקינה' }).fill(usable);
-  await dialog.getByRole('spinbutton', { name: 'כמות פגומה' }).fill(damaged);
-  await dialog.getByRole('button', { name: 'אישור' }).click();
+  if (Number(usable) > 0) {
+    await holdings
+      .locator('button.small-button:not([disabled])')
+      .filter({ hasText: /^תקין$/ })
+      .click();
+    const dialog = page.getByRole('dialog', { name: 'החזרה תקינה' });
+    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(usable);
+    await dialog.getByRole('button', { name: 'אישור' }).click();
+  }
+  if (Number(damaged) > 0) {
+    await holdings
+      .locator('button.small-button:not([disabled])')
+      .filter({ hasText: /^פגום$/ })
+      .click();
+    const dialog = page.getByRole('dialog', { name: 'החזרה פגומה' });
+    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(damaged);
+    await dialog.getByRole('button', { name: 'אישור' }).click();
+  }
 }
 
 function rows<T extends Record<string, unknown>>(
@@ -100,8 +110,7 @@ test('browses, filters, and opens the responsive borrower directory without dial
   expect(itemSearchBox!.width / workspaceBox!.width).toBeLessThan(0.67);
   expect(
     Math.abs(
-      itemSearchBox!.x + itemSearchBox!.width / 2 -
-        (workspaceBox!.x + workspaceBox!.width / 2),
+      itemSearchBox!.x + itemSearchBox!.width / 2 - (workspaceBox!.x + workspaceBox!.width / 2),
     ),
   ).toBeLessThan(2);
   await expect(card.getByText('מעבר למסך אחר')).toHaveCount(0);
@@ -122,11 +131,10 @@ test('commits a mixed Save-and-Close exactly once with deterministic ledger orde
   await stageReturn(page, '1', '1');
 
   const staged = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
-  await expect(staged.getByText('+1')).toBeVisible();
-  const signedReturn = staged.getByText('−2');
-  await expect(signedReturn).toBeVisible();
-  await expect(signedReturn).toHaveAttribute('dir', 'ltr');
-  await expect(signedReturn).toHaveCSS('font-variant-numeric', 'tabular-nums');
+  await expect(staged.getByText('השאלה')).toBeVisible();
+  await expect(staged.getByText('החזרה תקינה')).toBeVisible();
+  await expect(staged.getByText('החזרה פגומה')).toBeVisible();
+  await expect(staged.locator('.operational-quantity')).toHaveCount(3);
   await page.getByRole('button', { name: 'שמירה וסגירה' }).click();
 
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
@@ -320,9 +328,9 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
     'הפריט הועבר לארכיון',
   ]);
   await expect(page.getByText('אין די מלאי זמין').locator('xpath=ancestor::tr')).toBeFocused();
-  await expect(page.getByText('+3')).toBeVisible();
-  await expect(page.getByText('−2')).toBeVisible();
-  await expect(page.getByText('+1')).toBeVisible();
+  await expect(page.getByText('החזרה תקינה')).toBeVisible();
+  await expect(page.locator('.staged-section').getByRole('cell', { name: 'השאלה' })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast')).toHaveCSS('animation-name', 'none');
   expect(
@@ -403,7 +411,8 @@ test('rejects an operation without writes when the borrower becomes archived', a
   const conflict = page.getByText('השואל אינו פעיל');
   await expect(conflict).toBeVisible();
   await expect(conflict.locator('xpath=ancestor::tr')).toBeFocused();
-  await expect(page.getByText('+1')).toBeVisible();
+  await expect(page.locator('.staged-section').getByRole('cell', { name: 'השאלה' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(1);
   expect(
     rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(eventCount);
@@ -597,6 +606,7 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   const child = page.getByRole('dialog', { name: 'הוספת השאלה' });
   const childClose = child.locator('.dialog-close');
   const childConfirm = child.getByRole('button', { name: 'אישור' });
+  await expect(child.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
   await childClose.focus();
   await page.keyboard.press('Shift+Tab');
   await expect(childConfirm).toBeFocused();
@@ -691,6 +701,70 @@ test('marks and unmarks lost equipment through real admin authorization and clos
       seed.checkoutId,
     )[0]!.count,
   ).toBe(2);
+});
+
+test('operator credits a previously lost unit back to usable inventory', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
+  const authentication = page.getByRole('dialog', { name: 'הפעלת מצב מנהל' });
+  await authentication.locator('input[name="password"]').fill('e2e-admin-password');
+  await authentication.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
+  await page
+    .getByRole('navigation', { name: 'ניווט ראשי' })
+    .getByRole('button', { name: 'ניהול' })
+    .click();
+  const loanRow = page.getByRole('row', { name: new RegExp(seed.item.name) });
+  await loanRow.getByRole('button', { name: 'סמן אבוד' }).click();
+  const lostDialog = page.getByRole('dialog', { name: 'סימון ציוד כאבוד' });
+  await lostDialog.getByRole('button', { name: 'שמירה' }).click();
+  await page.evaluate(async () => {
+    await fetch('/api/session/role', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'operator' }),
+    });
+  });
+
+  await openSeededCard(page, seed.borrower.username);
+  const usable = page.getByRole('button', { name: 'תקין' });
+  const lost = page.getByRole('button', { name: 'אבוד' });
+  const damaged = page.getByRole('button', { name: 'פגום' });
+  await expect(usable).toBeDisabled();
+  await expect(damaged).toBeDisabled();
+  await expect(lost).toBeEnabled();
+  await lost.click();
+  const creditDialog = page.getByRole('dialog', { name: 'החזרת ציוד אבוד' });
+  await creditDialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await creditDialog.getByRole('button', { name: 'אישור' }).click();
+  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await expect(page.locator('.toast')).toContainText('השמירה הושלמה');
+
+  const database = openLedger();
+  expect(
+    rows<{ kind: string; quantity: number }>(
+      database,
+      'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
+      seed.checkoutId,
+    ),
+  ).toEqual([
+    { kind: 'marked_lost', quantity: 2 },
+    { kind: 'unmarked_lost', quantity: 1 },
+    { kind: 'returned_usable', quantity: 1 },
+  ]);
+  expect(
+    rows<{ available: number }>(
+      database,
+      `SELECT SUM(CASE kind
+        WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity
+        WHEN 'checked_out' THEN -quantity ELSE 0 END) available
+       FROM inventory_events WHERE item_id=?`,
+      seed.item.id,
+    )[0]!.available,
+  ).toBe(5);
 });
 
 test('retires legacy presentation while preserving gated lost controls and responsive accessibility', async ({

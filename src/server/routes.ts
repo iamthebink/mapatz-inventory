@@ -64,11 +64,21 @@ const borrowerOperationInput = z
               )
               .min(1)
               .optional(),
+            lostCredit: z
+              .array(z.object({ quantity: safePositive, note }).strict())
+              .min(1)
+              .optional(),
           })
           .strict()
-          .refine((group) => group.borrow !== undefined || group.return !== undefined, {
-            message: 'An item group must include borrow or return parts',
-          }),
+          .refine(
+            (group) =>
+              group.borrow !== undefined ||
+              group.return !== undefined ||
+              group.lostCredit !== undefined,
+            {
+              message: 'An item group must include borrow, return, or lost-credit parts',
+            },
+          ),
       )
       .min(1),
   })
@@ -78,6 +88,7 @@ const borrowerOperationInput = z
     const commandBorrow: number[] = [];
     const commandReturn: number[] = [];
     const commandUsable: number[] = [];
+    const commandLostCredit: number[] = [];
     request.items.forEach((group, index) => {
       if (seen.has(group.itemId))
         context.addIssue({
@@ -89,6 +100,7 @@ const borrowerOperationInput = z
       const borrow = (group.borrow ?? []).map((part) => part.quantity);
       const returned = (group.return ?? []).map((part) => part.usable + part.damaged);
       const usable = (group.return ?? []).map((part) => part.usable);
+      const lostCredit = (group.lostCredit ?? []).map((part) => part.quantity);
       group.return?.forEach((part, partIndex) => {
         if (!Number.isSafeInteger(part.usable + part.damaged))
           context.addIssue({
@@ -101,17 +113,20 @@ const borrowerOperationInput = z
         [borrow, 'borrow', 'Per-item borrow total must be a safe integer'],
         [returned, 'return', 'Per-item return total must be a safe integer'],
         [usable, 'return', 'Per-item usable-return total must be a safe integer'],
+        [lostCredit, 'lostCredit', 'Per-item lost-credit total must be a safe integer'],
       ] as const)
         if (!isSafeAggregate(values))
           context.addIssue({ code: 'custom', path: ['items', index, path], message });
       commandBorrow.push(...borrow);
       commandReturn.push(...returned);
       commandUsable.push(...usable);
+      commandLostCredit.push(...lostCredit);
     });
     for (const [values, message] of [
       [commandBorrow, 'Command borrow total must be a safe integer'],
       [commandReturn, 'Command return total must be a safe integer'],
       [commandUsable, 'Command usable-return total must be a safe integer'],
+      [commandLostCredit, 'Command lost-credit total must be a safe integer'],
     ] as const)
       if (!isSafeAggregate(values)) context.addIssue({ code: 'custom', path: ['items'], message });
   });

@@ -8,6 +8,7 @@ import {
   type BorrowerOperationRequest,
   type BorrowerOperationResult,
   type CommandProtocolError,
+  type LostCreditPart,
   type ReturnPart,
   type ValidationFieldError,
 } from '../contracts/borrower-workflow.js';
@@ -25,6 +26,7 @@ export type StagedItem = {
   itemId: number;
   borrow: BorrowPart[];
   return: ReturnPart[];
+  lostCredit: LostCreditPart[];
 };
 
 type ReadyPhase = { kind: 'ready'; retiredAttemptKey?: string };
@@ -85,9 +87,14 @@ export type OperationState = {
 export type OperationAction =
   | { type: 'stage-borrow'; itemId: number; part: BorrowPart }
   | { type: 'stage-return'; itemId: number; part: ReturnPart }
+  | { type: 'stage-lost-credit'; itemId: number; part: LostCreditPart }
   | { type: 'update-borrow'; itemId: number; index: number; part: BorrowPart }
   | { type: 'update-return'; itemId: number; index: number; part: ReturnPart }
-  | { type: 'rollback'; itemId: number; direction: 'borrow' | 'return' }
+  | {
+      type: 'rollback';
+      itemId: number;
+      direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lostCredit';
+    }
   | { type: 'dispatch'; attemptKey: string; intent: SaveIntent }
   | { type: 'dispatch-unknown'; attemptKey: string }
   | {
@@ -247,6 +254,8 @@ const totalReturn = (parts: ReturnPart[]): number | null =>
   safeSum(parts.flatMap((part) => [part.usable, part.damaged]));
 const usableReturn = (parts: ReturnPart[]): number | null =>
   safeSum(parts.map((part) => part.usable));
+const totalLostCredit = (parts: LostCreditPart[]): number | null =>
+  safeSum(parts.map((part) => part.quantity));
 
 function safeSum(values: number[]): number | null {
   let result = 0;
@@ -277,6 +286,10 @@ function validReturn(part: ReturnPart): boolean {
   );
 }
 
+function validLostCredit(part: LostCreditPart): boolean {
+  return isSafePositive(part.quantity) && typeof part.note === 'string' && part.note.length <= 500;
+}
+
 function editable(state: OperationState): boolean {
   return state.phase.kind === 'ready' || state.phase.kind === 'conflicted';
 }
@@ -303,7 +316,7 @@ function holdingAfter(state: OperationState, itemId: number, staged = state.stag
 function announcement(
   state: OperationState,
   itemId: number,
-  direction: 'borrow' | 'return',
+  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lostCredit',
   quantity: number,
   staged: StagedItem[],
 ): string | null {
@@ -319,24 +332,30 @@ function updateGroup(
   update: (group: StagedItem) => StagedItem,
 ): StagedItem[] {
   const index = staged.findIndex((group) => group.itemId === itemId);
-  if (index < 0) return [...staged, update({ itemId, borrow: [], return: [] })];
+  if (index < 0) return [...staged, update({ itemId, borrow: [], return: [], lostCredit: [] })];
   return staged.map((group, position) => (position === index ? update(group) : group));
 }
 
 function retainNonEmpty(staged: StagedItem[]): StagedItem[] {
-  return staged.filter((group) => group.borrow.length > 0 || group.return.length > 0);
+  return staged.filter(
+    (group) =>
+      group.borrow.length > 0 || group.return.length > 0 || (group.lostCredit ?? []).length > 0,
+  );
 }
 
 export type ItemProjection = {
   itemId: number;
   borrowParts: BorrowPart[];
   returnParts: ReturnPart[];
+  lostCreditParts: LostCreditPart[];
   comments: string[];
   stagedBorrow: number;
   stagedReturn: number;
+  stagedLostCredit: number;
   projectedHeld: number;
   returnableNow: number;
   lost: number;
+  lostNow: number;
   projectedAvailability: number;
   compatible: boolean;
   conflicts: BorrowerOperationConflict[];
@@ -363,14 +382,17 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
   const borrowed = totalBorrow(group?.borrow ?? []);
   const returned = totalReturn(group?.return ?? []);
   const usable = usableReturn(group?.return ?? []);
+  const lostCredit = totalLostCredit(group?.lostCredit ?? []);
   const baseReturnable = holding?.returnable ?? 0;
   const lost = holding?.lost ?? 0;
   const conflicts = scopedConflicts.filter((conflict) => {
     if (conflict.scope === 'return') return returned !== null && returned > baseReturnable;
+    if (conflict.scope === 'lost-credit') return lostCredit !== null && lostCredit > lost;
     if (conflict.scope === 'borrow') {
       if (!item || borrowed === null || usable === null) return true;
       const usableCredit = returned !== null && returned <= baseReturnable ? usable : 0;
-      const available = safeArithmetic(item.available, usableCredit);
+      const recoveredCredit = lostCredit !== null && lostCredit <= lost ? lostCredit : 0;
+      const available = safeArithmetic(item.available, usableCredit, recoveredCredit);
       return available === null || borrowed > available;
     }
     return true;
@@ -380,6 +402,7 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
       ? null
       : safeArithmetic(baseReturnable, -returned, borrowed);
   const returnableNow = returned === null ? null : safeArithmetic(baseReturnable, -returned);
+  const lostNow = lostCredit === null ? null : safeArithmetic(lost, -lostCredit);
   const returnBlocked = conflicts.some(
     (conflict) =>
       conflict.scope === 'borrower' || conflict.scope === 'item' || conflict.scope === 'return',
@@ -394,10 +417,30 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     returnableNow >= 0 &&
     !returnBlocked &&
     (group?.return ?? []).every(validReturn);
+  const lostBlocked = conflicts.some(
+    (conflict) =>
+      conflict.scope === 'borrower' ||
+      conflict.scope === 'item' ||
+      conflict.scope === 'lost-credit',
+  );
+  const lostCompatible =
+    item !== undefined &&
+    item.selectable &&
+    !item.archived &&
+    lostCredit !== null &&
+    lostNow !== null &&
+    lostNow >= 0 &&
+    !lostBlocked &&
+    (group?.lostCredit ?? []).every(validLostCredit);
   const projectedAvailability =
-    borrowed === null || usable === null
+    borrowed === null || usable === null || lostCredit === null
       ? null
-      : safeArithmetic(item?.available ?? 0, returnCompatible ? usable : 0, -borrowed);
+      : safeArithmetic(
+          item?.available ?? 0,
+          returnCompatible ? usable : 0,
+          lostCompatible ? lostCredit : 0,
+          -borrowed,
+        );
   const compatible =
     item !== undefined &&
     item.selectable &&
@@ -406,25 +449,32 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     borrowed !== null &&
     returned !== null &&
     usable !== null &&
+    lostCredit !== null &&
     projectedHeld !== null &&
     returnableNow !== null &&
+    lostNow !== null &&
     projectedAvailability !== null &&
     returnableNow >= 0 &&
+    lostNow >= 0 &&
     projectedAvailability >= 0 &&
     conflicts.length === 0;
   return {
     itemId,
     borrowParts: (group?.borrow ?? []).map((part) => ({ ...part })),
     returnParts: (group?.return ?? []).map((part) => ({ ...part })),
+    lostCreditParts: (group?.lostCredit ?? []).map((part) => ({ ...part })),
     comments: [
       ...(group?.borrow ?? []).map((part) => part.note),
       ...(group?.return ?? []).map((part) => part.note),
+      ...(group?.lostCredit ?? []).map((part) => part.note),
     ],
     stagedBorrow: borrowed ?? 0,
     stagedReturn: returned ?? 0,
+    stagedLostCredit: lostCredit ?? 0,
     projectedHeld: projectedHeld ?? 0,
     returnableNow: returnableNow ?? 0,
     lost,
+    lostNow: lostNow ?? 0,
     projectedAvailability: projectedAvailability ?? 0,
     compatible,
     conflicts,
@@ -434,11 +484,15 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
 function clearDirectionalConflict(
   conflicts: BorrowerOperationConflict[],
   itemId: number,
-  direction: 'borrow' | 'return',
+  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lostCredit',
 ): BorrowerOperationConflict[] {
-  return conflicts.filter(
-    (conflict) => !(conflict.scope === direction && conflict.itemId === itemId),
-  );
+  const scope =
+    direction === 'lostCredit'
+      ? 'lost-credit'
+      : direction === 'usable' || direction === 'damaged'
+        ? 'return'
+        : direction;
+  return conflicts.filter((conflict) => !(conflict.scope === scope && conflict.itemId === itemId));
 }
 
 export function operationRequest(state: OperationState): BorrowerOperationRequest {
@@ -449,6 +503,9 @@ export function operationRequest(state: OperationState): BorrowerOperationReques
       itemId: group.itemId,
       ...(group.borrow.length > 0 ? { borrow: group.borrow.map((part) => ({ ...part })) } : {}),
       ...(group.return.length > 0 ? { return: group.return.map((part) => ({ ...part })) } : {}),
+      ...((group.lostCredit ?? []).length > 0
+        ? { lostCredit: (group.lostCredit ?? []).map((part) => ({ ...part })) }
+        : {}),
     })),
   };
 }
@@ -462,11 +519,19 @@ export function canSave(state: OperationState): boolean {
     safeSum(
       state.staged.flatMap((group) => group.return.map((part) => part.usable + part.damaged)),
     ) === null ||
-    safeSum(state.staged.flatMap((group) => group.return.map((part) => part.usable))) === null
+    safeSum(state.staged.flatMap((group) => group.return.map((part) => part.usable))) === null ||
+    safeSum(
+      state.staged.flatMap((group) => (group.lostCredit ?? []).map((part) => part.quantity)),
+    ) === null
   )
     return false;
   return state.staged.every((group) => {
-    if (!group.borrow.every(validBorrow) || !group.return.every(validReturn)) return false;
+    if (
+      !group.borrow.every(validBorrow) ||
+      !group.return.every(validReturn) ||
+      !(group.lostCredit ?? []).every(validLostCredit)
+    )
+      return false;
     return projectItem(state, group.itemId)?.compatible === true;
   });
 }
@@ -552,9 +617,19 @@ function conflictsBelongToState(
         requested > returnable
       );
     }
+    if (conflict.scope === 'lost-credit') {
+      const requested = totalLostCredit(group.lostCredit ?? []);
+      const lost =
+        snapshot.holdings.find((holding) => holding.itemId === conflict.itemId)?.lost ?? 0;
+      return requested === conflict.requested && conflict.lost === lost && requested > lost;
+    }
     const requested = totalBorrow(group.borrow ?? []);
     const usable = usableReturn(group.return ?? []);
-    const available = item && usable !== null ? safeArithmetic(item.available, usable) : null;
+    const lostCredit = totalLostCredit(group.lostCredit ?? []);
+    const available =
+      item && usable !== null && lostCredit !== null
+        ? safeArithmetic(item.available, usable, lostCredit)
+        : null;
     return (
       requested === conflict.requested &&
       available === conflict.availableAfterUsableReturns &&
@@ -594,6 +669,20 @@ export function operationReducer(state: OperationState, action: OperationAction)
       conflicts: clearDirectionalConflict(state.conflicts, action.itemId, 'return'),
       phase: { kind: 'ready', retiredAttemptKey: retiredKey(state.phase) },
       announcement: announcement(state, action.itemId, 'return', quantity, staged),
+    };
+  }
+  if (action.type === 'stage-lost-credit' && editable(state) && validLostCredit(action.part)) {
+    const ownedPart = { ...action.part };
+    const staged = updateGroup(state.staged, action.itemId, (group) => ({
+      ...group,
+      lostCredit: [...(group.lostCredit ?? []), ownedPart],
+    }));
+    return {
+      ...state,
+      staged,
+      conflicts: clearDirectionalConflict(state.conflicts, action.itemId, 'lostCredit'),
+      phase: { kind: 'ready', retiredAttemptKey: retiredKey(state.phase) },
+      announcement: announcement(state, action.itemId, 'lostCredit', action.part.quantity, staged),
     };
   }
   if (
@@ -638,13 +727,34 @@ export function operationReducer(state: OperationState, action: OperationAction)
     const group = state.staged.find((candidate) => candidate.itemId === action.itemId);
     if (!group) return state;
     const quantity =
-      action.direction === 'borrow' ? totalBorrow(group.borrow) : totalReturn(group.return);
+      action.direction === 'borrow'
+        ? totalBorrow(group.borrow)
+        : action.direction === 'return'
+          ? totalReturn(group.return)
+          : action.direction === 'usable'
+            ? safeSum(group.return.map((part) => part.usable))
+            : action.direction === 'damaged'
+              ? safeSum(group.return.map((part) => part.damaged))
+              : totalLostCredit(group.lostCredit ?? []);
     if (quantity === null || quantity === 0) return state;
     const staged = retainNonEmpty(
-      updateGroup(state.staged, action.itemId, (entry) => ({
-        ...entry,
-        [action.direction]: [],
-      })),
+      updateGroup(state.staged, action.itemId, (entry) => {
+        if (action.direction === 'usable')
+          return {
+            ...entry,
+            return: entry.return
+              .map((part) => ({ ...part, usable: 0 }))
+              .filter((part) => part.damaged > 0),
+          };
+        if (action.direction === 'damaged')
+          return {
+            ...entry,
+            return: entry.return
+              .map((part) => ({ ...part, damaged: 0 }))
+              .filter((part) => part.usable > 0),
+          };
+        return { ...entry, [action.direction]: [] };
+      }),
     );
     return {
       ...state,

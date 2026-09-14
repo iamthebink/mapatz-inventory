@@ -39,6 +39,110 @@ function transactionCountingDatabase(db: InventoryDatabase) {
 }
 
 describe('atomic borrower commands', () => {
+  it('credits checkout-linked lost equipment back to usable stock without marking more lost', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Recovered', kind: 'non_consumable' });
+    inventory.addStock(item.id, 2);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+    const markedLostId = inventory.markLost(checkoutId, 2, true, 'admin loss');
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(18), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: item.id, lostCredit: [{ quantity: 1, note: 'found' }] }],
+      }),
+    ).toEqual({ outcome: 'committed', idempotencyKey: key(18), replayed: false });
+    expect(
+      db
+        .prepare(
+          `SELECT kind,quantity,related_event_id relatedId,note
+           FROM inventory_events WHERE id>? ORDER BY id`,
+        )
+        .all(markedLostId),
+    ).toEqual([
+      { kind: 'unmarked_lost', quantity: 1, relatedId: checkoutId, note: 'found' },
+      { kind: 'returned_usable', quantity: 1, relatedId: checkoutId, note: 'found' },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id)).toMatchObject({
+      inventory: [expect.objectContaining({ id: item.id, available: 1 })],
+      holdings: [{ itemId: item.id, returnable: 0, lost: 1 }],
+    });
+    expect(
+      db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='marked_lost'").get(),
+    ).toEqual({ count: 1 });
+  });
+
+  it('rejects a stale lost credit atomically and preserves the staged command envelope', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Stale recovery', kind: 'non_consumable' });
+    inventory.addStock(item.id, 2);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+    inventory.markLost(checkoutId, 2, true);
+    const request: BorrowerOperationRequest = {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [{ itemId: item.id, lostCredit: [{ quantity: 2, note: 'stale' }] }],
+    };
+    inventory.markLost(checkoutId, 1, false);
+    const before = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
+
+    expect(inventory.commitBorrowerOperations(borrower.id, key(19), request)).toMatchObject({
+      error: 'borrower_operation_conflict',
+      conflicts: [
+        {
+          scope: 'lost-credit',
+          code: 'lost_balance_changed',
+          itemId: item.id,
+          requested: 2,
+          lost: 1,
+        },
+      ],
+      snapshot: { holdings: [{ itemId: item.id, returnable: 1, lost: 1 }] },
+    });
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(before);
+  });
+
+  it('commits usable, damaged, lost-credit, and borrow parts in deterministic order', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Mixed recovery', kind: 'non_consumable' });
+    inventory.addStock(item.id, 4);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 4);
+    const markedLostId = inventory.markLost(checkoutId, 1, true);
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(20), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            return: [
+              { usable: 1, damaged: 0, note: 'usable' },
+              { usable: 0, damaged: 1, note: 'damaged' },
+            ],
+            lostCredit: [{ quantity: 1, note: 'found' }],
+            borrow: [{ quantity: 2, note: 'again' }],
+          },
+        ],
+      }),
+    ).toEqual({ outcome: 'committed', idempotencyKey: key(20), replayed: false });
+    expect(
+      db
+        .prepare('SELECT kind,quantity,note FROM inventory_events WHERE id>? ORDER BY id')
+        .all(markedLostId),
+    ).toEqual([
+      { kind: 'returned_usable', quantity: 1, note: 'usable' },
+      { kind: 'returned_damaged', quantity: 1, note: 'damaged' },
+      { kind: 'unmarked_lost', quantity: 1, note: 'found' },
+      { kind: 'returned_usable', quantity: 1, note: 'found' },
+      { kind: 'checked_out', quantity: 2, note: 'again' },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([
+      { itemId: item.id, returnable: 3, lost: 0 },
+    ]);
+  });
+
   it('opens exactly one write transaction for each public command', () => {
     const { db, inventory, borrower } = fixture();
     const item = inventory.createItem({ name: 'Counted', kind: 'non_consumable' });

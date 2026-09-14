@@ -258,6 +258,15 @@ export class InventoryService {
             part.note,
           );
         }
+        const lostCheckouts = this.lostCheckouts(borrowerId, group.itemId);
+        for (const part of group.lostCredit ?? [])
+          this.allocateLostCredits(
+            lostCheckouts,
+            group.itemId,
+            borrowerId,
+            part.quantity,
+            part.note,
+          );
       }
       for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
         for (const part of group.borrow ?? [])
@@ -714,12 +723,30 @@ export class InventoryService {
         });
         continue;
       }
+      const requestedLostCredit = (group.lostCredit ?? []).reduce(
+        (total, part) => total + part.quantity,
+        0,
+      );
+      const lost = this.lostCheckouts(borrowerId, group.itemId).reduce(
+        (total, checkout) => total + checkout.remaining,
+        0,
+      );
+      if (requestedLostCredit > lost) {
+        conflicts.push({
+          scope: 'lost-credit',
+          code: 'lost_balance_changed',
+          itemId: group.itemId,
+          requested: requestedLostCredit,
+          lost,
+        });
+        continue;
+      }
       const requestedBorrow = (group.borrow ?? []).reduce(
         (total, part) => total + part.quantity,
         0,
       );
       const usableReturns = (group.return ?? []).reduce((total, part) => total + part.usable, 0);
-      const availableAfterUsableReturns = item.available + usableReturns;
+      const availableAfterUsableReturns = item.available + usableReturns + requestedLostCredit;
       if (requestedBorrow > availableAfterUsableReturns)
         conflicts.push({
           scope: 'borrow',
@@ -831,6 +858,24 @@ export class InventoryService {
     ).map((row) => ({ id: Number(row.id), remaining: Number(row.remaining) }));
   }
 
+  private lostCheckouts(
+    borrowerId: number,
+    itemId: number,
+  ): Array<{ id: number; remaining: number }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT e.id,COALESCE(SUM(CASE
+            WHEN x.kind='marked_lost' THEN x.quantity
+            WHEN x.kind='unmarked_lost' THEN -x.quantity ELSE 0 END),0) remaining
+          FROM inventory_events e LEFT JOIN inventory_events x ON x.related_event_id=e.id
+          WHERE e.kind='checked_out' AND e.borrower_id=? AND e.item_id=?
+          GROUP BY e.id HAVING remaining > 0 ORDER BY e.created_at,e.id`,
+        )
+        .all(borrowerId, itemId) as Row[]
+    ).map((row) => ({ id: Number(row.id), remaining: Number(row.remaining) }));
+  }
+
   private allocateReturns(
     checkouts: Array<{ id: number; remaining: number }>,
     itemId: number,
@@ -849,6 +894,27 @@ export class InventoryService {
       remaining -= allocated;
     }
     if (remaining !== 0) throw new DomainError('internal_error', 'Return allocation failed', 500);
+  }
+
+  private allocateLostCredits(
+    checkouts: Array<{ id: number; remaining: number }>,
+    itemId: number,
+    borrowerId: number,
+    quantity: number,
+    note: string,
+  ): void {
+    let remaining = quantity;
+    for (const checkout of checkouts) {
+      if (remaining === 0) break;
+      const allocated = Math.min(remaining, checkout.remaining);
+      if (allocated === 0) continue;
+      this.append('unmarked_lost', itemId, allocated, borrowerId, checkout.id, note);
+      this.append('returned_usable', itemId, allocated, borrowerId, checkout.id, note);
+      checkout.remaining -= allocated;
+      remaining -= allocated;
+    }
+    if (remaining !== 0)
+      throw new DomainError('internal_error', 'Lost-credit allocation failed', 500);
   }
 
   private setAliases(itemId: number, aliases: string[]): void {

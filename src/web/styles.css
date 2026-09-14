@@ -555,6 +555,11 @@
     font-variant-numeric: tabular-nums;
     unicode-bidi: isolate;
   }
+  .holding-return-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
   .field-error {
     @apply mt-1 text-sm text-ctp-red;
   }
@@ -651,6 +656,10 @@
   .operational-table th,
   .operational-table td {
     padding-inline: 8px;
+  }
+  .holding-return-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

@@ -10,6 +10,7 @@ import {
   enumerateFrozenAttempts,
   frozenAttemptStorageKey,
   initializeFrozenAttemptRecovery,
+  isExactBorrowerOperationConflictSet,
   parseFrozenAttempt,
   persistFrozenAttempt,
   resolveFrozenAttempt,
@@ -86,6 +87,56 @@ beforeEach(() => {
 });
 
 describe('frozen attempt validation and storage', () => {
+  it('validates and mirrors a frozen lost-credit conflict exactly', () => {
+    const attempt = operation();
+    attempt.body.items = [{ itemId: 11, lostCredit: [{ quantity: 2, note: 'recover' }] }];
+    expect(parseFrozenAttempt(attempt)).toEqual(attempt);
+    const snapshot = {
+      borrower: {
+        id: 7,
+        username: 'or',
+        name: 'Or',
+        contact: '',
+        type: 'individual' as const,
+        archived: false,
+      },
+      inventory: [
+        {
+          id: 11,
+          code: 101,
+          name: 'Tent',
+          kind: 'non_consumable' as const,
+          lotSize: null,
+          locationId: null,
+          archived: false,
+          aliases: [],
+          available: 0,
+          damaged: 0,
+          selectable: true,
+        },
+      ],
+      holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
+      asOfEventId: 4,
+      ledgerEpoch: 3,
+    };
+    expect(
+      isExactBorrowerOperationConflictSet(
+        [
+          {
+            scope: 'lost-credit',
+            code: 'lost_balance_changed',
+            itemId: 11,
+            requested: 2,
+            lost: 1,
+          },
+        ],
+        7,
+        attempt.body,
+        snapshot,
+      ),
+    ).toBe(true);
+  });
+
   it('validates complete self-routing envelopes and rejects inconsistent bodies', () => {
     expect(parseFrozenAttempt(operation())).toEqual(operation());
     expect(parseFrozenAttempt(creation())).toEqual(creation());

@@ -13,6 +13,11 @@ export type ReturnPart = {
   note: string;
 };
 
+export type LostCreditPart = {
+  quantity: number;
+  note: string;
+};
+
 export type BorrowerOperationRequest = {
   contractVersion: typeof BORROWER_WORKFLOW_CONTRACT_VERSION;
   ledgerEpoch: number;
@@ -20,6 +25,7 @@ export type BorrowerOperationRequest = {
     itemId: number;
     borrow?: BorrowPart[];
     return?: ReturnPart[];
+    lostCredit?: LostCreditPart[];
   }>;
 };
 
@@ -75,6 +81,13 @@ export type BorrowerOperationConflict =
       itemId: number;
       requested: number;
       returnable: number;
+    }
+  | {
+      scope: 'lost-credit';
+      code: 'lost_balance_changed';
+      itemId: number;
+      requested: number;
+      lost: number;
     };
 
 export type ValidationFieldError = {
