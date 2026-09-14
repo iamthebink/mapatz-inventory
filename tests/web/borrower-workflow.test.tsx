@@ -380,14 +380,16 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    expect(await screen.findByText('+1')).toBeTruthy();
+    const pendingTransactions = screen.getByRole('region', { name: 'פעולות ממתינות' });
+    expect(await within(pendingTransactions).findByText('1')).toBeTruthy();
     expect(
       screen.getAllByRole('status').some((node) => /השאלה, כמות 1/.test(node.textContent ?? '')),
     ).toBe(true);
 
     await userEvent.click(screen.getByRole('button', { name: 'החזרה' }));
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    expect(await screen.findByText('−1')).toBeTruthy();
+    expect(within(pendingTransactions).getAllByText('1')).toHaveLength(2);
+    expect(within(pendingTransactions).queryByText(/[+−-]1/)).toBeNull();
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('button', { name: 'החזרה' })),
     );
@@ -395,7 +397,9 @@ describe('borrower desk workflow', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(operationPosted).toBe(true));
-    await waitFor(() => expect(screen.queryByText('+1')).toBeNull());
+    await waitFor(() =>
+      expect(within(pendingTransactions).queryByRole('button', { name: 'ביטול פעולה' })).toBeNull(),
+    );
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השמירה הושלמה.', 'success');
   });
 
@@ -534,7 +538,8 @@ describe('borrower desk workflow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
     const conflict = await screen.findByText('אין די מלאי זמין');
     const row = conflict.closest('tr')!;
-    expect(within(row).getByText('+1')).toBeTruthy();
+    expect(within(row).getByText('1')).toBeTruthy();
+    expect(within(row).queryByText(/[+−-]1/)).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(row));
     expect(toast).toHaveBeenCalledTimes(1);
     expect(toast).toHaveBeenCalledWith('נדרשת תשומת לב', 'Inventory changed', 'warning');
@@ -626,7 +631,7 @@ describe('borrower desk workflow', () => {
     await userEvent.click(retry);
     await waitFor(() => expect(posts).toHaveLength(2));
     expect(posts[1]).toEqual(posts[0]);
-    await waitFor(() => expect(screen.queryByText('+1')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
   });
 
   it('creates through one durable command and preserves the selected new borrower when card loading fails', async () => {
@@ -853,7 +858,7 @@ describe('borrower desk workflow', () => {
       await screen.findByRole('button', { name: 'בדיקה חוזרת של הפעולה השמורה' }),
     );
     await waitFor(() => expect(posts).toBe(1));
-    await waitFor(() => expect(screen.queryByText('+1')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
   });
 
   it('clears a confirmed operation recovery record without replaying the command', async () => {
@@ -891,7 +896,7 @@ describe('borrower desk workflow', () => {
     await userEvent.click(
       await screen.findByRole('button', { name: 'בדיקה חוזרת של הפעולה השמורה' }),
     );
-    await waitFor(() => expect(screen.queryByText('+1')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
     expect(posts).toBe(1);
   });
 
