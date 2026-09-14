@@ -514,7 +514,8 @@
     min-width: 0;
     gap: 16px;
   }
-  .borrower-item-search {
+  .borrower-item-search,
+  .issue-item-search {
     width: 66.666667%;
     min-width: 0;
     justify-self: center;

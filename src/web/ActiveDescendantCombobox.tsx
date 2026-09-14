@@ -26,6 +26,7 @@ export function ActiveDescendantCombobox<T>({
   onSelect,
   placeholder,
   disabled = false,
+  invalid = false,
   openOnFocus = false,
   inputRef,
 }: {
@@ -36,6 +37,7 @@ export function ActiveDescendantCombobox<T>({
   onSelect: (value: T) => void;
   placeholder?: string;
   disabled?: boolean;
+  invalid?: boolean;
   openOnFocus?: boolean;
   inputRef?: RefObject<HTMLInputElement | null>;
 }) {
@@ -101,6 +103,7 @@ export function ActiveDescendantCombobox<T>({
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={expanded}
+          aria-invalid={invalid || undefined}
           aria-controls={listboxId}
           aria-activedescendant={expanded ? options[activeIndex]?.id : undefined}
           value={value}

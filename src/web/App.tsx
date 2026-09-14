@@ -25,7 +25,6 @@ import {
   Pencil,
   Plus,
   RotateCcw,
-  Search,
   Settings2,
   ShieldCheck,
   TriangleAlert,
@@ -35,6 +34,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from './AdminMode';
+import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
 import {
   ApiError,
   api,
@@ -140,6 +140,8 @@ export function App() {
   const [tab, setTab] = useState<Tab>('inventory');
   const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
   const [issueQuery, setIssueQuery] = useState('');
+  const [selectedIssueItemId, setSelectedIssueItemId] = useState<number | null>(null);
+  const [issueItemInvalid, setIssueItemInvalid] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
@@ -159,6 +161,7 @@ export function App() {
   const imminentAnnouncedRef = useRef(false);
   const resetFileRef = useRef<HTMLInputElement>(null);
   const recoveryFileRef = useRef<HTMLInputElement>(null);
+  const issueItemRef = useRef<HTMLInputElement>(null);
   const borrowerWorkflowRef = useRef<BorrowerWorkflowHandle>(null);
   const [now, setNow] = useState(Date.now());
   const remaining =
@@ -318,17 +321,43 @@ export function App() {
     if (activeDialog.kind === 'import') clearImportInput(activeDialog.mode);
     setActiveDialog(null);
   }, [activeDialog, clearImportInput, isAdmin]);
-  const issueItems = useMemo(
+  const issueItemOptions = useMemo<ComboboxOption<Item>[]>(
     () =>
-      items.filter(
-        (item) =>
-          item.kind === 'consumable' &&
-          join(item.code, item.name, ...item.aliases)
-            .toLocaleLowerCase()
-            .includes(issueQuery.toLocaleLowerCase()),
-      ),
+      items
+        .filter(
+          (item) =>
+            !item.archived &&
+            item.kind === 'consumable' &&
+            item.available > 0 &&
+            join(item.code, item.name, ...item.aliases)
+              .toLocaleLowerCase('he')
+              .includes(issueQuery.trim().toLocaleLowerCase('he')),
+        )
+        .map((item) => ({
+          id: `issue-item-option-${item.id}`,
+          value: item,
+          label: (
+            <>
+              <bdi dir="ltr">{item.code}</bdi> — {item.name}
+            </>
+          ),
+          description: `זמין: ${item.available}`,
+        })),
     [issueQuery, items],
   );
+  useEffect(() => {
+    if (selectedIssueItemId == null) return;
+    const selectedItem = items.find((item) => item.id === selectedIssueItemId);
+    if (
+      selectedItem &&
+      !selectedItem.archived &&
+      selectedItem.kind === 'consumable' &&
+      selectedItem.available > 0
+    )
+      return;
+    setSelectedIssueItemId(null);
+    setIssueQuery('');
+  }, [items, selectedIssueItemId]);
   async function action(title: string, operation: () => Promise<unknown>) {
     if (pendingRef.current) return false;
     pendingRef.current = true;
@@ -880,41 +909,58 @@ export function App() {
         )}
         {tab === 'issue' && (
           <PageSection title="ציוד מתכלה" description="ניפוק ציוד מתכלה מהמלאי" icon={PackageOpen}>
-            <div className="mb-5 rounded-2xl border border-ctp-surface bg-white p-4">
-              <SearchField
-                label="סינון פריטים"
-                value={issueQuery}
-                onChange={setIssueQuery}
-                placeholder="שם, כינוי או קוד"
-              />
-            </div>
             <div className="grid gap-4">
               <ActionCard
                 title="ניפוק מתכלה"
                 description="הוצאה קבועה מהמלאי"
                 icon={PackageOpen}
                 disabled={pending}
-                onSubmit={(form) =>
+                onSubmit={(form) => {
+                  if (selectedIssueItemId == null) {
+                    setIssueItemInvalid(true);
+                    showToast('ניפוק מתכלה', 'יש לבחור פריט מהרשימה', 'warning');
+                    queueMicrotask(() => issueItemRef.current?.focus());
+                    return;
+                  }
                   void action('ניפוק מתכלה', () =>
                     api('/issue', {
                       method: 'POST',
                       body: JSON.stringify({
-                        itemId: number(form, 'itemId'),
+                        itemId: selectedIssueItemId,
                         quantity: number(form, 'quantity'),
                         note: form.get('note'),
                       }),
                     }),
-                  )
-                }
+                  ).then((completed) => {
+                    if (!completed) return;
+                    setIssueQuery('');
+                    setSelectedIssueItemId(null);
+                    setIssueItemInvalid(false);
+                  });
+                }}
               >
-                <Select
-                  name="itemId"
-                  label="פריט"
-                  options={issueItems.map((item) => [
-                    item.id,
-                    `${item.code} — ${item.name} (${item.available})`,
-                  ])}
-                />
+                <div className="issue-item-search">
+                  <ActiveDescendantCombobox
+                    label="פריט"
+                    value={issueQuery}
+                    onChange={(value) => {
+                      setIssueQuery(value);
+                      setSelectedIssueItemId(null);
+                      setIssueItemInvalid(false);
+                    }}
+                    options={issueItemOptions}
+                    onSelect={(item) => {
+                      setSelectedIssueItemId(item.id);
+                      setIssueQuery(item.name);
+                      setIssueItemInvalid(false);
+                    }}
+                    placeholder="שם, כינוי או קוד"
+                    disabled={pending}
+                    invalid={issueItemInvalid}
+                    openOnFocus
+                    inputRef={issueItemRef}
+                  />
+                </div>
                 <Quantity />
                 <Note />
               </ActionCard>
@@ -1545,32 +1591,6 @@ function Select({
           </option>
         ))}
       </select>
-    </label>
-  );
-}
-function SearchField({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <label className="field-label">
-      {label}
-      <span className="relative">
-        <Search className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-ctp-overlay" />
-        <input
-          className="input-field pr-10"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-        />
-      </span>
     </label>
   );
 }

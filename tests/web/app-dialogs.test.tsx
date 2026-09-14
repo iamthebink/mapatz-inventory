@@ -36,6 +36,27 @@ const consumable = {
   lotSize: 10,
   aliases: ['כפפת עבודה'],
 };
+const unavailableConsumable = {
+  ...consumable,
+  id: 14,
+  code: 103,
+  name: 'סרט סימון',
+  available: 0,
+};
+const archivedConsumable = {
+  ...consumable,
+  id: 15,
+  code: 104,
+  name: 'שק ישן',
+  archived: true,
+};
+const otherConsumable = {
+  ...consumable,
+  id: 16,
+  code: 105,
+  name: 'בקבוק מים',
+  aliases: ['שתייה'],
+};
 const borrower = {
   id: 21,
   username: 'orba',
@@ -76,7 +97,14 @@ function installApiMock({
   failRefreshAfterPath?: string;
   holdPath?: string;
   removeLoanAfterReturn?: boolean;
-  inventoryItems?: Array<typeof item | typeof campEquipment | typeof consumable>;
+  inventoryItems?: Array<
+    | typeof item
+    | typeof campEquipment
+    | typeof consumable
+    | typeof unavailableConsumable
+    | typeof archivedConsumable
+    | typeof otherConsumable
+  >;
   catalogBorrowers?: Array<typeof borrower>;
   catalogLocations?: Array<typeof location>;
 } = {}) {
@@ -163,7 +191,16 @@ async function openManagement(user: ReturnType<typeof userEvent.setup>, tabName:
 }
 
 it('keeps consumable issue and the borrower desk while retiring legacy borrowing routes', async () => {
-  const api = installApiMock({ inventoryItems: [item, consumable, campEquipment] });
+  const api = installApiMock({
+    inventoryItems: [
+      item,
+      consumable,
+      otherConsumable,
+      unavailableConsumable,
+      archivedConsumable,
+      campEquipment,
+    ],
+  });
   const user = await renderReadyApp();
   expect(screen.getByText('ציוד מחנה')).toBeTruthy();
   const primaryNavigation = screen.getByRole('navigation', { name: 'ניווט ראשי' });
@@ -177,18 +214,43 @@ it('keeps consumable issue and the borrower desk while retiring legacy borrowing
   expect(issueTab.getAttribute('aria-current')).toBe('page');
   const issue = screen.getByText('ניפוק מתכלה').closest('form')!;
   expect(screen.queryByText('השאלת ציוד')).toBeNull();
-  expect(within(issue).getByRole('option', { name: /כפפות/ })).toBeTruthy();
-  expect(within(issue).queryByRole('option', { name: /פטיש/ })).toBeNull();
-  expect(within(issue).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
-  const issueSearch = screen.getByLabelText('סינון פריטים');
-  expect(issueSearch.classList.contains('pr-10')).toBe(true);
-  await user.type(issueSearch, 'כפפות');
-  await user.selectOptions(within(issue).getByLabelText('פריט'), String(consumable.id));
+  const issueItem = within(issue).getByRole('combobox', { name: 'פריט' });
+  expect(document.activeElement).not.toBe(issueItem);
+  expect(issueItem.getAttribute('aria-expanded')).toBe('false');
+  expect(within(issue).queryByRole('listbox')).toBeNull();
+
+  await user.click(issueItem);
+  const itemList = within(issue).getByRole('listbox');
+  expect(itemList.classList.contains('combobox-list')).toBe(true);
+  expect(within(itemList).getByRole('option', { name: /כפפות/ })).toBeTruthy();
+  expect(within(itemList).getByRole('option', { name: /בקבוק מים/ })).toBeTruthy();
+  expect(within(itemList).queryByRole('option', { name: /פטיש/ })).toBeNull();
+  expect(within(itemList).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
+  expect(within(itemList).queryByRole('option', { name: /סרט סימון/ })).toBeNull();
+  expect(within(itemList).queryByRole('option', { name: /שק ישן/ })).toBeNull();
+
+  await user.type(issueItem, 'עבודה');
+  const filteredList = within(issue).getByRole('listbox');
+  expect(within(filteredList).getByRole('option', { name: /כפפות/ })).toBeTruthy();
+  expect(within(filteredList).queryByRole('option', { name: /בקבוק מים/ })).toBeNull();
+  await user.clear(issueItem);
+  await user.type(issueItem, '102');
+  expect(within(issue).queryByRole('option', { name: /בקבוק מים/ })).toBeNull();
+  await user.click(within(issue).getByRole('option', { name: /כפפות/ }));
+  expect(issueItem).toHaveProperty('value', 'כפפות');
+
   await user.type(within(issue).getByLabelText('כמות'), '2');
   await user.click(within(issue).getByRole('button', { name: 'בצע פעולה' }));
   await waitFor(() => expect(issue.querySelector('fieldset')?.disabled).toBe(false));
   const issueRequest = api.requests.find((request) => request.path === '/api/issue')!;
   expect(bodyOf(issueRequest)).toEqual({ itemId: 13, quantity: 2, note: '' });
+  await waitFor(() => expect(issueItem).toHaveProperty('value', ''));
+
+  await user.click(within(issue).getByRole('button', { name: 'בצע פעולה' }));
+  expect(await screen.findByText('יש לבחור פריט מהרשימה')).toBeTruthy();
+  expect(document.activeElement).toBe(issueItem);
+  expect(issueItem.getAttribute('aria-invalid')).toBe('true');
+  expect(api.requests.filter((request) => request.path === '/api/issue')).toHaveLength(1);
 
   await openManagement(user, 'פריטים ומיקומים');
   expect(screen.getByRole('option', { name: 'ציוד מחנה' })).toBeTruthy();
