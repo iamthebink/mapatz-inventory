@@ -116,6 +116,7 @@ export const BorrowerWorkflow = forwardRef<
   const searchRef = useRef<HTMLInputElement>(null);
   const startupRetryRef = useRef<HTMLButtonElement>(null);
   const itemSearchRef = useRef<HTMLInputElement>(null);
+  const cardOverviewRef = useRef<HTMLParagraphElement>(null);
   const quantityErrorRef = useRef<HTMLInputElement>(null);
   const createFirstRef = useRef<HTMLInputElement>(null);
   const retryCardRef = useRef<HTMLButtonElement>(null);
@@ -225,7 +226,7 @@ export const BorrowerWorkflow = forwardRef<
         initiallyFocusedBorrowerRef.current !== operation.borrowerId
       ) {
         initiallyFocusedBorrowerRef.current = operation.borrowerId;
-        itemSearchRef.current?.focus();
+        cardOverviewRef.current?.focus();
       }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -452,7 +453,6 @@ export const BorrowerWorkflow = forwardRef<
         history.pushState({ mapatzBorrowerWorkflow: true }, '', location.href);
         sentinelRef.current = true;
       }
-      window.setTimeout(() => itemSearchRef.current?.focus(), 0);
     } catch (error) {
       if (requestId !== cardLoadRequestRef.current) return;
       setCardLoadFailed(true);
@@ -814,7 +814,6 @@ export const BorrowerWorkflow = forwardRef<
         history.pushState({ mapatzBorrowerWorkflow: true }, '', location.href);
         sentinelRef.current = true;
       }
-      window.setTimeout(() => itemSearchRef.current?.focus(), 0);
     } catch {
       if (requestId !== cardLoadRequestRef.current) return;
       const failed = creationReducer(committed, { type: 'card-load-failed', loadId });
@@ -1129,7 +1128,7 @@ export const BorrowerWorkflow = forwardRef<
           dismissible={!operation || !operationLocks(operation).exit}
           onClose={() => requestExit(document.activeElement as HTMLElement | null)}
           returnFocusRef={searchRef}
-          initialFocusRef={cardLoadFailed ? retryCardRef : itemSearchRef}
+          initialFocusRef={cardLoadFailed ? retryCardRef : cardOverviewRef}
           actions={
             operation ? (
               <>
@@ -1161,7 +1160,7 @@ export const BorrowerWorkflow = forwardRef<
             ) : undefined
           }
         >
-          <p className="borrower-identity-meta">
+          <p ref={cardOverviewRef} className="borrower-identity-meta" tabIndex={-1}>
             <bdi dir="ltr">{selectedBorrower.username}</bdi> · {selectedBorrower.contact}
           </p>
           {cardLoadFailed ? (
@@ -1184,28 +1183,30 @@ export const BorrowerWorkflow = forwardRef<
             </div>
           ) : operation ? (
             <div className="borrower-workspace">
-              <ActiveDescendantCombobox
-                label="חיפוש פריט"
-                value={itemSearch}
-                onChange={setItemSearch}
-                options={itemOptions}
-                onSelect={(item) => {
-                  setQuantity({
-                    direction: 'borrow',
-                    itemId: item.id,
-                    quantity: '1',
-                    usable: '0',
-                    damaged: '0',
-                    note: '',
-                    error: '',
-                  });
-                  setItemSearch('');
-                }}
-                placeholder="שם, כינוי או קוד"
-                disabled={locked}
-                openOnFocus
-                inputRef={itemSearchRef}
-              />
+              <div className="borrower-item-search">
+                <ActiveDescendantCombobox
+                  label="חיפוש פריט"
+                  value={itemSearch}
+                  onChange={setItemSearch}
+                  options={itemOptions}
+                  onSelect={(item) => {
+                    setQuantity({
+                      direction: 'borrow',
+                      itemId: item.id,
+                      quantity: '1',
+                      usable: '0',
+                      damaged: '0',
+                      note: '',
+                      error: '',
+                    });
+                    setItemSearch('');
+                  }}
+                  placeholder="שם, כינוי או קוד"
+                  disabled={locked}
+                  openOnFocus
+                  inputRef={itemSearchRef}
+                />
+              </div>
               {operation.phase.kind === 'refresh-required' && (
                 <div className="workflow-recovery-action">
                   <button

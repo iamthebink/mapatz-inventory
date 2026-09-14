@@ -305,7 +305,11 @@ describe('borrower desk workflow', () => {
       await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` }),
     );
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
-    await waitFor(() => expect(document.activeElement).toBe(itemSearch));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.querySelector('.borrower-identity-meta')),
+    );
+    expect(screen.queryByRole('listbox')).toBeNull();
+    await userEvent.click(itemSearch);
     const catalog = await screen.findByRole('listbox');
     expect(within(catalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
     expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
@@ -684,8 +688,11 @@ describe('borrower desk workflow', () => {
     expect(screen.getByRole('dialog', { name: /שואל חדש/ })).toBeTruthy();
     expect(createPosts).toBe(1);
     await userEvent.click(retry);
-    const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
-    await waitFor(() => expect(document.activeElement).toBe(itemSearch));
+    await screen.findByRole('combobox', { name: 'חיפוש פריט' });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.querySelector('.borrower-identity-meta')),
+    );
+    expect(screen.queryByRole('listbox')).toBeNull();
     expect(createPosts).toBe(1);
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השואל נוצר בהצלחה.', 'success');
     await userEvent.click(

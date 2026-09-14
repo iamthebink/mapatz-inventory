@@ -514,6 +514,11 @@
     min-width: 0;
     gap: 16px;
   }
+  .borrower-item-search {
+    width: 66.666667%;
+    min-width: 0;
+    justify-self: center;
+  }
   .borrower-work-segment {
     display: grid;
     min-width: 0;

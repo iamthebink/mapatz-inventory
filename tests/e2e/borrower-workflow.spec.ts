@@ -13,8 +13,10 @@ async function openSeededCard(page: Page, username: string) {
     .filter({ has: page.getByText(username, { exact: true }) });
   await expect(row).toBeVisible();
   await row.getByRole('button', { name: /פתיחת כרטיס שואל/ }).press('Enter');
-  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeVisible();
-  await expect(page.getByRole('combobox', { name: 'חיפוש פריט' })).toBeFocused();
+  const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
+  await expect(card).toBeVisible();
+  await expect(card.locator('.borrower-identity-meta')).toBeFocused();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
   return search;
 }
 
@@ -92,6 +94,16 @@ test('browses, filters, and opens the responsive borrower directory without dial
   await activeRow.getByRole('button', { name: /פתיחת כרטיס שואל/ }).press('Space');
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   await expect(card).toBeVisible();
+  const workspaceBox = await card.locator('.borrower-workspace').boundingBox();
+  const itemSearchBox = await card.locator('.borrower-item-search').boundingBox();
+  expect(itemSearchBox!.width / workspaceBox!.width).toBeGreaterThan(0.66);
+  expect(itemSearchBox!.width / workspaceBox!.width).toBeLessThan(0.67);
+  expect(
+    Math.abs(
+      itemSearchBox!.x + itemSearchBox!.width / 2 -
+        (workspaceBox!.x + workspaceBox!.width / 2),
+    ),
+  ).toBeLessThan(2);
   await expect(card.getByText('מעבר למסך אחר')).toHaveCount(0);
   await card.getByRole('button', { name: 'סגירה', exact: true }).last().click();
   await expect(card).toBeHidden();
@@ -518,7 +530,8 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   const retryCard = page.getByRole('button', { name: 'ניסיון פתיחת הכרטיס מחדש' });
   await expect(retryCard).toBeFocused();
   await retryCard.click();
-  await expect(page.getByRole('combobox', { name: 'חיפוש פריט' })).toBeFocused();
+  await expect(page.locator('.borrower-identity-meta')).toBeFocused();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
 
   const database = openLedger();
   expect(
