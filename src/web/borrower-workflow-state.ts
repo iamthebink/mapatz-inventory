@@ -313,6 +313,13 @@ function holdingAfter(state: OperationState, itemId: number, staged = state.stag
   return borrowed === null || returned === null ? null : safeArithmetic(base, -returned, borrowed);
 }
 
+function lostAfter(state: OperationState, itemId: number, staged = state.staged): number | null {
+  const base = state.snapshot.holdings.find((holding) => holding.itemId === itemId)?.lost ?? 0;
+  const group = staged.find((entry) => entry.itemId === itemId);
+  const credited = totalLostCredit(group?.lostCredit ?? []);
+  return credited === null ? null : safeArithmetic(base, -credited);
+}
+
 function announcement(
   state: OperationState,
   itemId: number,
@@ -320,8 +327,14 @@ function announcement(
   quantity: number,
   staged: StagedItem[],
 ): string | null {
-  const resulting = holdingAfter(state, itemId, staged);
+  const resulting =
+    direction === 'lostCredit'
+      ? lostAfter(state, itemId, staged)
+      : holdingAfter(state, itemId, staged);
   if (resulting === null) return null;
+  if (direction === 'lostCredit') {
+    return `${itemName(state, itemId)}: החזרת אבוד, כמות ${quantity}; יתרת הציוד האבוד כעת ${resulting}`;
+  }
   const directionLabel = direction === 'borrow' ? 'השאלה' : 'החזרה';
   return `${itemName(state, itemId)}: ${directionLabel}, כמות ${quantity}; באחריות השואל כעת ${resulting}`;
 }

@@ -85,6 +85,7 @@ describe('borrower operation state', () => {
       projectedAvailability: 1,
       compatible: true,
     });
+    expect(state.announcement).toBe('Tent: החזרת אבוד, כמות 1; יתרת הציוד האבוד כעת 1');
     expect(canSave(state)).toBe(true);
 
     state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lostCredit' });
