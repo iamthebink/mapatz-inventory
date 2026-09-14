@@ -1,7 +1,6 @@
 import type { RefObject } from 'react';
 import { projectItem, projectedItems, type OperationState } from './borrower-workflow-state';
 
-const signed = (value: number) => (value < 0 ? `−${Math.abs(value)}` : `+${value}`);
 const conflictLabels: Record<string, string> = {
   borrower_inactive: 'השואל אינו פעיל',
   item_not_found: 'הפריט אינו קיים עוד',
@@ -67,8 +66,8 @@ export function BorrowerOperationalTables({
                     <td>{inventory.get(group.itemId)?.name ?? `#${group.itemId}`}</td>
                     <td>{row.direction === 'borrow' ? 'השאלה' : 'החזרה'}</td>
                     <td>
-                      <bdi dir="ltr" className="signed-quantity">
-                        {signed(row.direction === 'borrow' ? row.quantity : -row.quantity)}
+                      <bdi dir="ltr" className="operational-quantity">
+                        {Math.abs(row.quantity)}
                       </bdi>
                     </td>
                     <td>
@@ -133,12 +132,12 @@ export function BorrowerOperationalTables({
                 <tr key={projection.itemId}>
                   <td>{inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`}</td>
                   <td>
-                    <bdi dir="ltr" className="signed-quantity">
+                    <bdi dir="ltr" className="operational-quantity">
                       {projection.projectedHeld}
                     </bdi>
                   </td>
                   <td>
-                    <bdi dir="ltr" className="signed-quantity">
+                    <bdi dir="ltr" className="operational-quantity">
                       {projection.lost}
                     </bdi>
                   </td>

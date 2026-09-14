@@ -550,7 +550,7 @@
   .operational-table tbody tr:last-child td {
     border-bottom: 0;
   }
-  .signed-quantity {
+  .operational-quantity {
     font-variant-numeric: tabular-nums;
     unicode-bidi: isolate;
   }
