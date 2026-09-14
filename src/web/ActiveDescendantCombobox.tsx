@@ -114,6 +114,7 @@ export function ActiveDescendantCombobox<T>({
             onChange(event.target.value);
             setExpanded(openOnFocus || Boolean(event.target.value.trim()));
           }}
+          onBlur={() => setExpanded(false)}
           onKeyDown={handleKeyDown}
         />
       </label>

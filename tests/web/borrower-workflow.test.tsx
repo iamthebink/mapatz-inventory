@@ -150,6 +150,33 @@ describe('active descendant search', () => {
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(escaped).toHaveBeenCalledTimes(1);
   });
+
+  it('collapses when focus leaves while preserving pointer option selection', async () => {
+    const selected: string[] = [];
+    render(
+      <div>
+        <ActiveDescendantCombobox
+          label="חיפוש"
+          value=""
+          onChange={() => undefined}
+          onSelect={(value) => selected.push(value)}
+          options={[{ id: 'active-a', value: 'a', label: 'ראשון' }]}
+          openOnFocus
+        />
+        <button type="button">מחוץ לחיפוש</button>
+      </div>,
+    );
+    const input = screen.getByRole('combobox');
+    await userEvent.click(input);
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'מחוץ לחיפוש' }));
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    await userEvent.click(input);
+    await userEvent.click(screen.getByRole('option', { name: 'ראשון' }));
+    expect(selected).toEqual(['a']);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
 });
 
 describe('borrower desk workflow', () => {
