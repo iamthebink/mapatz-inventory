@@ -180,7 +180,9 @@ it('keeps consumable issue and the borrower desk while retiring legacy borrowing
   expect(within(issue).getByRole('option', { name: /כפפות/ })).toBeTruthy();
   expect(within(issue).queryByRole('option', { name: /פטיש/ })).toBeNull();
   expect(within(issue).queryByRole('option', { name: /שולחן קבוע/ })).toBeNull();
-  await user.type(screen.getByLabelText('סינון פריטים'), 'כפפות');
+  const issueSearch = screen.getByLabelText('סינון פריטים');
+  expect(issueSearch.classList.contains('pr-10')).toBe(true);
+  await user.type(issueSearch, 'כפפות');
   await user.selectOptions(within(issue).getByLabelText('פריט'), String(consumable.id));
   await user.type(within(issue).getByLabelText('כמות'), '2');
   await user.click(within(issue).getByRole('button', { name: 'בצע פעולה' }));

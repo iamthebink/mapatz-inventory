@@ -1565,7 +1565,7 @@ function SearchField({
       <span className="relative">
         <Search className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-ctp-overlay" />
         <input
-          className="input-field pe-10"
+          className="input-field pr-10"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}
