@@ -407,9 +407,81 @@
   .borrower-workflow-entry > p {
     @apply mt-1 text-sm text-ctp-subtext;
   }
+  .borrower-workflow-header {
+    @apply flex items-start justify-between gap-4;
+  }
+  .borrower-workflow-heading {
+    min-width: 0;
+  }
+  .borrower-workflow-heading h2 {
+    @apply text-2xl font-bold tracking-tight;
+  }
+  .borrower-workflow-heading p {
+    @apply mt-1 text-sm text-ctp-subtext;
+  }
+  .borrower-workflow-header > button {
+    flex: none;
+  }
   .borrower-search-row {
-    @apply mt-6 grid items-end gap-3 rounded-2xl border border-ctp-surface bg-white p-4 shadow-sm;
-    grid-template-columns: minmax(0, 1fr) auto;
+    @apply mt-6 rounded-2xl border border-ctp-surface bg-white p-4 shadow-sm;
+  }
+  .borrower-directory {
+    @apply mt-4 min-w-0 overflow-hidden rounded-2xl border border-ctp-surface bg-white shadow-sm;
+  }
+  .borrower-directory-summary {
+    @apply flex flex-wrap items-baseline justify-between gap-2 border-b border-ctp-surface px-4 py-3;
+  }
+  .borrower-directory-summary h3 {
+    @apply font-semibold;
+  }
+  .borrower-directory-summary p {
+    @apply text-sm text-ctp-subtext;
+  }
+  .borrower-directory-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+  .borrower-directory-table th,
+  .borrower-directory-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-ctp-surface);
+    overflow-wrap: anywhere;
+    text-align: right;
+    vertical-align: middle;
+  }
+  .borrower-directory-table th {
+    @apply bg-ctp-base font-semibold text-ctp-subtext;
+  }
+  .borrower-directory-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .borrower-directory-row {
+    @apply cursor-pointer transition-colors hover:bg-ctp-lavender/10 focus-within:bg-ctp-lavender/10;
+  }
+  .borrower-directory-row[aria-disabled='true'] {
+    @apply cursor-not-allowed opacity-60;
+  }
+  .borrower-directory-action {
+    @apply font-semibold text-ctp-blue underline-offset-4 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ctp-blue;
+    min-height: auto;
+  }
+  .borrower-directory-empty {
+    @apply py-8 text-center text-ctp-subtext;
+  }
+  .borrower-archived-notice {
+    @apply mt-4 rounded-2xl border border-ctp-yellow/30 bg-ctp-yellow/5 p-4 text-sm;
+  }
+  .borrower-archived-notice h3 {
+    @apply font-semibold;
+  }
+  .borrower-archived-notice p,
+  .borrower-archived-notice ul {
+    @apply mt-1 text-ctp-subtext;
+  }
+  .borrower-archived-notice ul {
+    @apply list-inside list-disc;
   }
   .active-combobox {
     position: relative;
@@ -526,8 +598,43 @@
 }
 
 @media (max-width: 760px) {
-  .borrower-search-row {
-    grid-template-columns: minmax(0, 1fr);
+  .borrower-workflow-header {
+    @apply flex-col;
+  }
+  .borrower-directory-table thead {
+    @apply sr-only;
+  }
+  .borrower-directory-table,
+  .borrower-directory-table tbody,
+  .borrower-directory-table tr,
+  .borrower-directory-table td {
+    display: block;
+    width: 100%;
+  }
+  .borrower-directory-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--color-ctp-surface);
+  }
+  .borrower-directory-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .borrower-directory-table td {
+    display: grid;
+    grid-template-columns: minmax(6rem, 0.35fr) minmax(0, 1fr);
+    gap: 8px;
+    padding: 5px 12px;
+    border-bottom: 0;
+  }
+  .borrower-directory-table td::before {
+    content: attr(data-label);
+    @apply font-semibold text-ctp-subtext;
+  }
+  .borrower-directory-table .borrower-directory-empty {
+    display: block;
+    padding-block: 24px;
+  }
+  .borrower-directory-table .borrower-directory-empty::before {
+    content: none;
   }
   .dialog-workspace {
     max-height: calc(100dvh - 1rem);

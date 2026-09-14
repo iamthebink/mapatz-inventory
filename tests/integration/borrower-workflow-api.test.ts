@@ -67,6 +67,16 @@ describe('borrower workflow snapshot API', () => {
       .expect(200)
       .expect(({ body }) => expect(body.active).toEqual([usernameOnly]));
     await agent
+      .get('/api/borrowers/search')
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body).toEqual({
+          ledgerEpoch: 1,
+          active: [borrower, usernameOnly],
+          archivedMatches: [],
+        }),
+      );
+    await agent
       .get(`/api/borrowers/${borrower.id}/desk-snapshot`)
       .expect(200)
       .expect(({ body }) => {

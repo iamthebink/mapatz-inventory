@@ -412,7 +412,6 @@ export class InventoryService {
     return readTransaction(this.db, () => {
       const ledgerEpoch = this.ledgerEpochInTransaction();
       const normalizedQuery = normalizeBorrowerText(query);
-      if (normalizedQuery.length === 0) return { ledgerEpoch, active: [], archivedMatches: [] };
 
       const rows = this.db.prepare('SELECT * FROM borrowers ORDER BY id').all() as Row[];
       const active: Borrower[] = [];
@@ -424,6 +423,7 @@ export class InventoryService {
         const contact = normalizeBorrowerText(borrower.contact);
         if (!borrower.archived) {
           if (
+            normalizedQuery.length === 0 ||
             username.includes(normalizedQuery) ||
             name.includes(normalizedQuery) ||
             contact.includes(normalizedQuery)

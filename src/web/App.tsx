@@ -843,19 +843,7 @@ export function App() {
       </div>
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        {tab === 'desk' && (
-          <BorrowerWorkflow
-            ref={borrowerWorkflowRef}
-            showToast={showToast}
-            destinations={navigation
-              .filter(({ key }) => key !== 'desk')
-              .map(({ key, label }) => ({
-                id: key,
-                label,
-                navigate: () => setTab(key),
-              }))}
-          />
-        )}
+        {tab === 'desk' && <BorrowerWorkflow ref={borrowerWorkflowRef} showToast={showToast} />}
         {tab === 'inventory' && (
           <PageSection
             title="מצב מלאי"

@@ -46,12 +46,6 @@ export type BorrowerWorkflowHandle = {
   requestNavigation: (complete: () => void) => void;
 };
 
-export type BorrowerWorkflowDestination = {
-  id: string;
-  label: string;
-  navigate: () => void;
-};
-
 type QuantityDialog = {
   direction: 'borrow' | 'return';
   itemId: number;
@@ -81,6 +75,12 @@ const translatedFeedback: Record<string, string> = {
   storage_clear_failed: 'לא ניתן לנקות את הפעולה השמורה.',
 };
 
+const borrowerTypeNames: Record<Borrower['type'], string> = {
+  individual: 'יחיד',
+  camp_organization: 'ארגון מחנה',
+  other: 'אחר',
+};
+
 function uuid(): string {
   return crypto.randomUUID();
 }
@@ -97,14 +97,14 @@ export const BorrowerWorkflow = forwardRef<
   BorrowerWorkflowHandle,
   {
     showToast: (title: string, message: string, tone: ToastTone) => void;
-    destinations?: BorrowerWorkflowDestination[];
   }
->(function BorrowerWorkflow({ showToast, destinations = [] }, ref) {
+>(function BorrowerWorkflow({ showToast }, ref) {
   const [startup, setStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [search, setSearch] = useState('');
   const [searchSnapshot, setSearchSnapshot] = useState<Awaited<
     ReturnType<typeof fetchBorrowerSearch>
   > | null>(null);
+  const [resolvedSearch, setResolvedSearch] = useState<string | null>(null);
   const [selectedBorrower, setSelectedBorrower] = useState<Borrower | null>(null);
   const [cardLoadFailed, setCardLoadFailed] = useState(false);
   const [operation, setOperation] = useState<OperationState | null>(null);
@@ -141,6 +141,7 @@ export const BorrowerWorkflow = forwardRef<
         const result = await fetchBorrowerSearch(query);
         if (requestId !== searchRequestRef.current) return null;
         setSearchSnapshot(result);
+        setResolvedSearch(query);
         setStartup('ready');
         if (focus) queueMicrotask(() => searchRef.current?.focus());
         return result;
@@ -172,6 +173,24 @@ export const BorrowerWorkflow = forwardRef<
       showToast('שחזור פעולה', 'הפעולה הממתינה נבדקה מול השרת.', 'warning');
     await loadSearch('', true);
   }, [loadSearch, showToast]);
+
+  const refreshDirectoryAfterCreation = async (query: string) => {
+    const requestId = ++searchRequestRef.current;
+    try {
+      const result = await fetchBorrowerSearch(query);
+      if (requestId === searchRequestRef.current) {
+        setSearchSnapshot(result);
+        setResolvedSearch(query);
+      }
+    } catch {
+      if (requestId !== searchRequestRef.current) return;
+      showToast(
+        'רענון רשימת השואלים',
+        'השואל נוצר, אך רשימת השואלים לא התרעננה. ניתן לנסות לחפש שוב.',
+        'warning',
+      );
+    }
+  };
 
   useEffect(() => {
     void initialize();
@@ -240,12 +259,12 @@ export const BorrowerWorkflow = forwardRef<
   }, [createOpen, creation]);
 
   useEffect(() => {
-    if (startup !== 'ready') return;
+    if (startup !== 'ready' || resolvedSearch === search) return;
     const timer = window.setTimeout(() => {
       void loadSearch(search);
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [loadSearch, search, startup]);
+  }, [loadSearch, resolvedSearch, search, startup]);
 
   const removeSentinel = useCallback((after?: () => void) => {
     if (!sentinelRef.current) {
@@ -418,31 +437,6 @@ export const BorrowerWorkflow = forwardRef<
     }, 0);
     return () => window.clearTimeout(timer);
   }, [operation]);
-
-  const borrowerOptions = useMemo<ComboboxOption<Borrower>[]>(() => {
-    if (!search.trim() || !searchSnapshot) return [];
-    return [
-      ...searchSnapshot.active.map((borrower) => ({
-        id: `borrower-option-${borrower.id}`,
-        value: borrower,
-        label: borrower.name,
-        description: (
-          <>
-            <bdi dir="ltr">{borrower.username}</bdi> · {borrower.contact}
-          </>
-        ),
-        group: 'שואלים פעילים',
-      })),
-      ...searchSnapshot.archivedMatches.map(({ borrower }) => ({
-        id: `borrower-option-archived-${borrower.id}`,
-        value: borrower,
-        label: borrower.name,
-        description: 'בארכיון — יש להפעיל מחדש במסך הניהול',
-        disabled: true,
-        group: 'בארכיון',
-      })),
-    ];
-  }, [search, searchSnapshot]);
 
   const openBorrower = async (borrower: Borrower) => {
     const requestId = ++cardLoadRequestRef.current;
@@ -693,6 +687,7 @@ export const BorrowerWorkflow = forwardRef<
         try {
           const snapshot = await fetchBorrowerSearch('');
           setSearchSnapshot(snapshot);
+          setResolvedSearch('');
           setCreation(
             snapshot.ledgerEpoch === reconciled.values.ledgerEpoch
               ? reconciled
@@ -844,6 +839,7 @@ export const BorrowerWorkflow = forwardRef<
     try {
       const snapshot = await fetchBorrowerSearch('');
       setSearchSnapshot(snapshot);
+      setResolvedSearch('');
       const reloaded = creationReducer(started, {
         type: 'reload-succeeded',
         reloadId,
@@ -898,6 +894,14 @@ export const BorrowerWorkflow = forwardRef<
     if ('outcome' in result.result && result.result.outcome === 'committed') {
       feedbackRef.current = next.feedback;
       showToast('הפעולה הושלמה', translatedFeedback.borrower_created!, 'success');
+      if (next.phase.kind !== 'committed') return;
+      const createdBorrower = next.phase.borrower;
+      setSearch('');
+      setResolvedSearch('');
+      setSearchSnapshot((current) =>
+        current ? { ...current, active: [createdBorrower], archivedMatches: [] } : current,
+      );
+      void refreshDirectoryAfterCreation('');
       await loadCreatedCard(next);
     } else if (next.phase.kind === 'editing' || next.phase.kind === 'conflicted')
       queueMicrotask(() => {
@@ -942,7 +946,7 @@ export const BorrowerWorkflow = forwardRef<
     );
   };
 
-  if (startup !== 'ready')
+  if (startup !== 'ready' || !searchSnapshot)
     return (
       <section className="borrower-workflow-entry" aria-labelledby="borrower-workflow-title">
         <h2 id="borrower-workflow-title">דלפק השאלות</h2>
@@ -963,45 +967,14 @@ export const BorrowerWorkflow = forwardRef<
 
   const locked = operation ? operationLocks(operation).mutation : true;
   const deskBlocked = Boolean(operation && !operationPresentation(operation).searchEnabled);
-  const guardedNavigation = destinations.length ? (
-    <label className="field-label workflow-dialog-navigation">
-      מעבר למסך אחר
-      <select
-        className="input-field"
-        value=""
-        onChange={(event) => {
-          const destination = destinations.find(({ id }) => id === event.target.value);
-          event.currentTarget.value = '';
-          if (destination)
-            requestExit(event.currentTarget, () => {
-              destination.navigate();
-            });
-        }}
-      >
-        <option value="">בחירת מסך…</option>
-        {destinations.map((destination) => (
-          <option key={destination.id} value={destination.id}>
-            {destination.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  ) : null;
+  const directoryResolved = resolvedSearch === search;
   return (
     <section className="borrower-workflow-entry" aria-labelledby="borrower-workflow-title">
-      <h2 id="borrower-workflow-title">דלפק השאלות</h2>
-      <p>חיפוש שואל, השאלה והחזרה במקום אחד</p>
-      <div className="borrower-search-row">
-        <ActiveDescendantCombobox
-          label="חיפוש שואל"
-          value={search}
-          onChange={setSearch}
-          options={borrowerOptions}
-          onSelect={(borrower) => void openBorrower(borrower)}
-          placeholder="שם, שם משתמש או פרטי קשר"
-          disabled={deskBlocked}
-          inputRef={searchRef}
-        />
+      <div className="borrower-workflow-header">
+        <div className="borrower-workflow-heading">
+          <h2 id="borrower-workflow-title">דלפק השאלות</h2>
+          <p>חיפוש שואל, השאלה והחזרה במקום אחד</p>
+        </div>
         <button
           type="button"
           className="secondary-button"
@@ -1011,6 +984,115 @@ export const BorrowerWorkflow = forwardRef<
           יצירת שואל חדש
         </button>
       </div>
+      <div className="borrower-search-row">
+        <label className="field-label" htmlFor="borrower-directory-search">
+          חיפוש שואל
+        </label>
+        <input
+          ref={searchRef}
+          id="borrower-directory-search"
+          className="input-field"
+          type="search"
+          value={search}
+          onChange={(event) => {
+            searchRequestRef.current += 1;
+            setSearch(event.target.value);
+          }}
+          placeholder="שם, שם משתמש או פרטי קשר"
+          disabled={deskBlocked}
+          aria-describedby="borrower-directory-summary"
+        />
+      </div>
+      <div className="borrower-directory" aria-labelledby="borrower-directory-heading">
+        <div className="borrower-directory-summary">
+          <h3 id="borrower-directory-heading">שואלים פעילים</h3>
+          <p id="borrower-directory-summary" role="status" aria-live="polite">
+            {!directoryResolved
+              ? 'טוען תוצאות…'
+              : searchSnapshot.active.length === 0
+                ? search.trim()
+                  ? 'לא נמצאו שואלים פעילים מתאימים'
+                  : 'אין שואלים פעילים להצגה'
+                : searchSnapshot.active.length === 1
+                  ? 'שואל פעיל אחד'
+                  : `${searchSnapshot.active.length} שואלים פעילים`}
+          </p>
+        </div>
+        <table className="borrower-directory-table">
+          <caption className="sr-only">ספריית שואלים פעילים</caption>
+          <thead>
+            <tr>
+              <th scope="col">שם</th>
+              <th scope="col">שם משתמש</th>
+              <th scope="col">פרטי קשר</th>
+              <th scope="col">סוג</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!directoryResolved ? (
+              <tr>
+                <td className="borrower-directory-empty" colSpan={4}>
+                  טוען תוצאות…
+                </td>
+              </tr>
+            ) : searchSnapshot.active.length === 0 ? (
+              <tr>
+                <td className="borrower-directory-empty" colSpan={4}>
+                  {search.trim()
+                    ? 'נסו שם, שם משתמש או פרטי קשר אחרים.'
+                    : 'ניתן ליצור שואל חדש מהפעולה שבראש העמוד.'}
+                </td>
+              </tr>
+            ) : (
+              searchSnapshot.active.map((borrower) => (
+                <tr
+                  key={borrower.id}
+                  className="borrower-directory-row"
+                  aria-disabled={deskBlocked || undefined}
+                  onClick={() => {
+                    if (!deskBlocked) void openBorrower(borrower);
+                  }}
+                >
+                  <td data-label="שם">
+                    <button
+                      type="button"
+                      className="borrower-directory-action"
+                      disabled={deskBlocked}
+                      aria-label={`פתיחת כרטיס שואל — ${borrower.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void openBorrower(borrower);
+                      }}
+                    >
+                      {borrower.name}
+                    </button>
+                  </td>
+                  <td data-label="שם משתמש">
+                    <bdi dir="ltr">{borrower.username}</bdi>
+                  </td>
+                  <td data-label="פרטי קשר">
+                    {borrower.contact ? <bdi dir="ltr">{borrower.contact}</bdi> : '—'}
+                  </td>
+                  <td data-label="סוג">{borrowerTypeNames[borrower.type]}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {directoryResolved && searchSnapshot.archivedMatches.length > 0 && (
+        <aside className="borrower-archived-notice" aria-labelledby="archived-match-heading">
+          <h3 id="archived-match-heading">התאמות בארכיון</h3>
+          <p>השואלים הבאים אינם פעילים ולא ניתן לפתוח אותם מדלפק ההשאלות:</p>
+          <ul>
+            {searchSnapshot.archivedMatches.map(({ borrower }) => (
+              <li key={borrower.id}>
+                {borrower.name} · <bdi dir="ltr">{borrower.username}</bdi>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )}
       {deskBlocked && operation?.phase.kind === 'refresh-required' && (
         <div className="workflow-recovery-action">
           <button
@@ -1078,7 +1160,6 @@ export const BorrowerWorkflow = forwardRef<
             ) : undefined
           }
         >
-          {guardedNavigation}
           <p className="borrower-identity-meta">
             <bdi dir="ltr">{selectedBorrower.username}</bdi> · {selectedBorrower.contact}
           </p>
@@ -1406,7 +1487,6 @@ export const BorrowerWorkflow = forwardRef<
             </>
           }
         >
-          {guardedNavigation}
           <form
             id="create-borrower-form"
             className="dialog-form"

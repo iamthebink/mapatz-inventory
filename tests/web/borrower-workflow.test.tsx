@@ -47,6 +47,14 @@ function desk(asOfEventId = 1) {
   };
 }
 
+async function activateBorrowerAction(key: 'Enter' | ' ' = 'Enter') {
+  const action = await screen.findByRole('button', {
+    name: `פתיחת כרטיס שואל — ${borrower.name}`,
+  });
+  action.focus();
+  await userEvent.keyboard(key === 'Enter' ? '{Enter}' : ' ');
+}
+
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
   return {
@@ -166,7 +174,71 @@ describe('borrower desk workflow', () => {
     expect(toast).toHaveBeenCalledTimes(1);
     valid = true;
     await userEvent.click(retry);
-    expect(await screen.findByRole('combobox', { name: 'חיפוש שואל' })).toBeTruthy();
+    expect(await screen.findByRole('searchbox', { name: 'חיפוש שואל' })).toBeTruthy();
+  });
+
+  it('renders a filterable directory with the create action in the page header', async () => {
+    const second = {
+      ...borrower,
+      id: 9,
+      username: 'new-account',
+      name: 'שואל נוסף',
+      contact: '052',
+      type: 'other' as const,
+    };
+    let resolveFiltered: (() => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const query = new URL(String(input), 'http://localhost').searchParams.get('q') ?? '';
+        if (query === 'new')
+          return await new Promise<Response>((resolve) => {
+            resolveFiltered = () =>
+              resolve(json({ ledgerEpoch: 3, active: [second], archivedMatches: [] }));
+          });
+        return json({
+          ledgerEpoch: 3,
+          active: [borrower, second],
+          archivedMatches: [],
+        });
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+
+    const search = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+    expect(await screen.findByText('2 שואלים פעילים')).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'ספריית שואלים פעילים' })).toBeTruthy();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(
+      document
+        .querySelector('.borrower-workflow-header')
+        ?.contains(screen.getByRole('button', { name: 'יצירת שואל חדש' })),
+    ).toBe(true);
+    expect(document.querySelector('.borrower-search-row button')).toBeNull();
+    const activeRow = screen
+      .getByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` })
+      .closest('tr')!;
+    expect(within(activeRow).getByText('050').closest('bdi')?.getAttribute('dir')).toBe('ltr');
+    expect(within(activeRow).getByText('יחיד')).toBeTruthy();
+    const secondRow = screen
+      .getByRole('button', { name: `פתיחת כרטיס שואל — ${second.name}` })
+      .closest('tr')!;
+    expect(within(secondRow).getByText('052').closest('bdi')?.getAttribute('dir')).toBe('ltr');
+    expect(within(secondRow).getByText('אחר')).toBeTruthy();
+
+    await userEvent.type(search, 'new');
+    expect(screen.getAllByText('טוען תוצאות…')).toHaveLength(2);
+    expect(
+      screen.queryByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` }),
+    ).toBeNull();
+    await waitFor(() => expect(resolveFiltered).toBeDefined());
+    resolveFiltered?.();
+    expect(await screen.findByText('שואל פעיל אחד')).toBeTruthy();
+    expect(screen.getByRole('button', { name: `פתיחת כרטיס שואל — ${second.name}` })).toBeTruthy();
   });
 
   it('loads authoritative search, separates archived matches, stages opposing directions, and persists before save transport', async () => {
@@ -205,14 +277,18 @@ describe('borrower desk workflow', () => {
       </DialogStackProvider>,
     );
 
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await waitFor(() => expect(document.activeElement).toBe(borrowerSearch));
     await userEvent.type(borrowerSearch, 'אור');
-    const archivedOption = await screen.findByRole('option', { name: /אור הישן/ });
-    expect(archivedOption.getAttribute('aria-disabled')).toBe('true');
-    expect(within(archivedOption).getByText(/בארכיון/)).toBeTruthy();
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    const archivedNotice = await screen.findByRole('complementary', {
+      name: 'התאמות בארכיון',
+    });
+    expect(within(archivedNotice).getByText(/אור הישן/)).toBeTruthy();
+    expect(within(archivedNotice).queryByRole('button')).toBeNull();
+    const borrowerAction = await screen.findByRole('button', {
+      name: `פתיחת כרטיס שואל — ${borrower.name}`,
+    });
+    await userEvent.click(within(borrowerAction.closest('tr')!).getByText('050'));
 
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
@@ -261,10 +337,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={toast} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction(' ');
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -303,10 +378,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={toast} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -364,10 +438,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={toast} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -398,10 +471,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const search = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const search = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(search, 'א');
-    fireEvent.keyDown(search, { key: 'ArrowDown' });
-    fireEvent.keyDown(search, { key: 'Enter' });
+    await activateBorrowerAction();
     await userEvent.click(await screen.findByRole('button', { name: 'החזרה' }));
     const usable = screen.getByRole('spinbutton', { name: 'כמות תקינה' });
     await userEvent.clear(usable);
@@ -450,10 +522,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const search = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const search = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(search, 'א');
-    fireEvent.keyDown(search, { key: 'ArrowDown' });
-    fireEvent.keyDown(search, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -488,7 +559,11 @@ describe('borrower desk workflow', () => {
       vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
         const path = String(input);
         if (path.startsWith('/api/borrowers/search'))
-          return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+          return json({
+            ledgerEpoch: 3,
+            active: createPosts > 0 ? [created] : [],
+            archivedMatches: [],
+          });
         if (path === '/api/borrowers') {
           createPosts += 1;
           const key = new Headers(init.headers).get('idempotency-key');
@@ -518,6 +593,7 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={toast} />
       </DialogStackProvider>,
     );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'unrelated');
     await userEvent.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
     await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
@@ -531,6 +607,85 @@ describe('borrower desk workflow', () => {
     await waitFor(() => expect(document.activeElement).toBe(itemSearch));
     expect(createPosts).toBe(1);
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השואל נוצר בהצלחה.', 'success');
+    await userEvent.click(
+      screen
+        .getAllByRole('button', { name: 'סגירה' })
+        .find((button) => button.classList.contains('secondary-button'))!,
+    );
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    const createdRow = (
+      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${created.name}` })
+    ).closest('tr')!;
+    expect(within(createdRow).getByText('—')).toBeTruthy();
+    expect(within(createdRow).getByText('יחיד')).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveProperty('value', '');
+  });
+
+  it('opens the created card without waiting for a failed directory refresh', async () => {
+    const created = { ...borrower, id: 12, username: 'new-user', name: 'שואל חדש', contact: '' };
+    let emptySearches = 0;
+    let rejectRefresh: ((error: Error) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+        const path = String(input);
+        if (path === '/api/borrowers/search?q=') {
+          emptySearches += 1;
+          if (emptySearches === 1) return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+          return await new Promise<Response>((_resolve, reject) => {
+            rejectRefresh = reject;
+          });
+        }
+        if (path === '/api/borrowers/search?q=unrelated')
+          return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+        if (path === '/api/borrowers') {
+          const key = new Headers(init.headers).get('idempotency-key');
+          return json(
+            { outcome: 'committed', idempotencyKey: key, replayed: false, borrower: created },
+            201,
+          );
+        }
+        if (path === '/api/borrowers/12/desk-snapshot')
+          return json({ ...desk(), borrower: created });
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    const toast = vi.fn();
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={toast} />
+      </DialogStackProvider>,
+    );
+
+    const search = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+    await userEvent.type(search, 'unrelated');
+    await screen.findByText('לא נמצאו שואלים פעילים מתאימים');
+    await userEvent.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
+    await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
+
+    expect(await screen.findByRole('combobox', { name: 'חיפוש פריט' })).toBeTruthy();
+    expect(rejectRefresh).toBeDefined();
+    rejectRefresh?.(new Error('offline'));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'רענון רשימת השואלים',
+        'השואל נוצר, אך רשימת השואלים לא התרעננה. ניתן לנסות לחפש שוב.',
+        'warning',
+      ),
+    );
+    await userEvent.click(
+      screen
+        .getAllByRole('button', { name: 'סגירה' })
+        .find((button) => button.classList.contains('secondary-button'))!,
+    );
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(
+      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${created.name}` }),
+    ).toBeTruthy();
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    expect(emptySearches).toBe(2);
   });
 
   it('reconciles creation persistence before exact retry and submits normalized values once', async () => {
@@ -596,10 +751,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -637,10 +791,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -719,10 +872,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     expect(await screen.findByRole('dialog', { name: /אור המעודכן/ })).toBeTruthy();
     expect(screen.getByText(/052/)).toBeTruthy();
   });
@@ -747,10 +899,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     await screen.findByText('טוען כרטיס…');
     await userEvent.click(screen.getByRole('button', { name: 'סגירה' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -776,10 +927,9 @@ describe('borrower desk workflow', () => {
         <BorrowerWorkflow showToast={toast} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'אוהל');
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
@@ -832,15 +982,14 @@ describe('borrower desk workflow', () => {
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
     await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
     await userEvent.click(await screen.findByRole('button', { name: 'סגירה בטוחה' }));
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     await userEvent.click(await screen.findByRole('button', { name: 'ניסיון פתיחת הכרטיס מחדש' }));
     await waitFor(() => expect(cardLoads).toEqual([12, 7, 7]));
   });
 
-  it('uses the shared reset for clean Back and exposes guarded in-dialog App navigation', async () => {
+  it('uses the shared reset for clean Back without duplicating App navigation in dialogs', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
@@ -851,33 +1000,22 @@ describe('borrower desk workflow', () => {
         throw new Error(`Unexpected ${path}`);
       }),
     );
-    const navigate = vi.fn();
     render(
       <DialogStackProvider>
-        <BorrowerWorkflow
-          showToast={vi.fn()}
-          destinations={[{ id: 'inventory', label: 'מלאי', navigate }]}
-        />
+        <BorrowerWorkflow showToast={vi.fn()} />
       </DialogStackProvider>,
     );
-    const borrowerSearch = await screen.findByRole('combobox', { name: 'חיפוש שואל' });
+    const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(borrowerSearch, 'א');
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await userEvent.type(itemSearch, 'tent');
     window.dispatchEvent(new PopStateEvent('popstate'));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
-    fireEvent.keyDown(borrowerSearch, { key: 'ArrowDown' });
-    fireEvent.keyDown(borrowerSearch, { key: 'Enter' });
+    await activateBorrowerAction();
     expect(
       ((await screen.findByRole('combobox', { name: 'חיפוש פריט' })) as HTMLInputElement).value,
     ).toBe('');
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'מעבר למסך אחר' }), [
-      'inventory',
-    ]);
-    expect(history.back).toHaveBeenCalled();
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('combobox', { name: 'מעבר למסך אחר' })).toBeNull();
   });
 });

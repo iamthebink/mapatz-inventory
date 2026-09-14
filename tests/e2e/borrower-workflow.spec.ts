@@ -5,12 +5,14 @@ import { expect, test } from './fixtures';
 async function openSeededCard(page: Page, username: string) {
   await page.goto('/');
   await page.getByRole('button', { name: 'דלפק השאלות' }).click();
-  const search = page.getByRole('combobox', { name: 'חיפוש שואל' });
+  const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await expect(search).toBeFocused();
   await search.fill(username);
-  await expect(page.getByRole('option', { name: new RegExp(username) })).toBeVisible();
-  await search.press('ArrowDown');
-  await search.press('Enter');
+  const row = page
+    .locator('.borrower-directory-row')
+    .filter({ has: page.getByText(username, { exact: true }) });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: /פתיחת כרטיס שואל/ }).press('Enter');
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'חיפוש פריט' })).toBeFocused();
   return search;
@@ -49,6 +51,54 @@ function rows<T extends Record<string, unknown>>(
 ) {
   return database.prepare(sql).all(...args) as T[];
 }
+
+test('browses, filters, and opens the responsive borrower directory without dialog navigation', async ({
+  page,
+  seed,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'דלפק השאלות' }).click();
+  const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
+  const create = page.getByRole('button', { name: 'יצירת שואל חדש' });
+  const header = page.locator('.borrower-workflow-header');
+  await expect(search).toBeFocused();
+  await expect(
+    page
+      .locator('.borrower-directory-row')
+      .filter({ has: page.getByText(seed.borrower.username, { exact: true }) }),
+  ).toBeVisible();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(header.getByRole('button', { name: 'יצירת שואל חדש' })).toBeVisible();
+  await expect(page.locator('.borrower-search-row').getByRole('button')).toHaveCount(0);
+
+  await search.fill(seed.archivedBorrower.username);
+  const archivedNotice = page.getByRole('complementary', { name: 'התאמות בארכיון' });
+  await expect(archivedNotice).toContainText(seed.archivedBorrower.name);
+  await expect(archivedNotice.getByRole('button')).toHaveCount(0);
+
+  await search.fill(seed.borrower.username);
+  const activeRow = page
+    .locator('.borrower-directory-row')
+    .filter({ has: page.getByText(seed.borrower.username, { exact: true }) });
+  await expect(activeRow).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 720 });
+  const [headingBox, createBox] = await Promise.all([
+    page.getByRole('heading', { name: 'דלפק השאלות' }).boundingBox(),
+    create.boundingBox(),
+  ]);
+  expect(createBox!.y).toBeGreaterThan(headingBox!.y);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await activeRow.getByRole('button', { name: /פתיחת כרטיס שואל/ }).press('Space');
+  const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
+  await expect(card).toBeVisible();
+  await expect(card.getByText('מעבר למסך אחר')).toHaveCount(0);
+  await card.getByRole('button', { name: 'סגירה', exact: true }).last().click();
+  await expect(card).toBeHidden();
+  await create.click();
+  const createDialog = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
+  await expect(createDialog.getByText('מעבר למסך אחר')).toHaveCount(0);
+});
 
 test('commits a mixed Save-and-Close exactly once with deterministic ledger order', async ({
   page,
@@ -190,7 +240,7 @@ test('resolves an ambiguous committed response after reload without duplicating 
   await page.unrouteAll({ behavior: 'wait' });
   await page.reload();
   await page.getByRole('button', { name: 'דלפק השאלות' }).click();
-  await expect(page.getByRole('combobox', { name: 'חיפוש שואל' })).toBeEnabled();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   expect(
     await page.evaluate(() =>
       Object.keys(localStorage).filter((key) => key.startsWith('mapatz:frozen-attempt:v1:')),

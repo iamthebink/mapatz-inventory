@@ -41,3 +41,7 @@
 - source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-in-app-dialogs.md`
   summary: Add conflict-safe reconciliation for entity and loan snapshots held during edits.
   evidence: Return and location-edit submissions can use row state captured before another session refreshes or archives the record; the baseline native-prompt paths had the same last-write behavior, and resolving it requires a broader concurrency policy rather than a dialog-only patch.
+
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-simplify-borrower-desk-actions.md`
+  summary: Measure borrower-directory scale and introduce pagination or virtualization only if production roster size causes unacceptable API or DOM latency.
+  evidence: Review identified a plausible unbounded-roster risk, but the repository contains no production borrower-count distribution, performance threshold, or failing measurement proving that the all-active directory is currently impractical.

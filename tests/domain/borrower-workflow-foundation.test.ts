@@ -323,7 +323,7 @@ describe('borrower workflow persistence foundation', () => {
     });
     expect(inventory.searchBorrowers('')).toEqual({
       ledgerEpoch: 1,
-      active: [],
+      active: [activeUsernameFirst, activeUsernameSecond, activeIdFirst, activeIdSecond],
       archivedMatches: [],
     });
     expect(db.isTransaction).toBe(false);
