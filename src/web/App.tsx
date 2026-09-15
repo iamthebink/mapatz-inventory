@@ -70,17 +70,21 @@ type Session = { role: Role; deadline: number | null };
 type Tab = 'inventory' | 'desk' | 'issue' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
-const tabPaths: Record<Tab, string> = {
-  desk: '/',
-  issue: '/consumables',
-  inventory: '/inventory',
-  ledger: '/ledger',
-  catalogs: '/management',
+const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
+  desk: { path: '/', aliases: ['/frontdesk'] },
+  issue: { path: '/consumables' },
+  inventory: { path: '/inventory' },
+  ledger: { path: '/ledger' },
+  catalogs: { path: '/management' },
 };
 
 function tabFromPath(pathname: string): Tab | null {
   const normalized = pathname === '/' ? pathname : pathname.replace(/\/$/, '');
-  return (Object.entries(tabPaths).find(([, path]) => path === normalized)?.[0] as Tab) ?? null;
+  return (
+    (Object.entries(tabRoutes).find(
+      ([, route]) => route.path === normalized || route.aliases?.includes(normalized),
+    )?.[0] as Tab) ?? null
+  );
 }
 
 const borrowerTypeNames: Record<Borrower['type'], string> = {
@@ -187,7 +191,7 @@ export function App() {
     window.history.pushState(
       { ...window.history.state, mapatzTab: nextTab },
       '',
-      tabPaths[nextTab],
+      tabRoutes[nextTab].path,
     );
     setTab(nextTab);
   }, []);
@@ -269,7 +273,7 @@ export function App() {
       window.history.replaceState(
         { ...window.history.state, mapatzTab: 'desk' },
         '',
-        `${tabPaths.desk}${window.location.search}${window.location.hash}`,
+        `${tabRoutes.desk.path}${window.location.search}${window.location.hash}`,
       );
       setTab('desk');
     };
@@ -885,7 +889,7 @@ export function App() {
               {key === 'inventory' && <span className="nav-separator" aria-hidden="true" />}
               <a
                 ref={key === 'catalogs' ? managementTabRef : undefined}
-                href={tabPaths[key]}
+                href={tabRoutes[key].path}
                 className={`nav-item ${tab === key ? 'active' : ''}`}
                 aria-current={tab === key ? 'page' : undefined}
                 onClick={(event) => {

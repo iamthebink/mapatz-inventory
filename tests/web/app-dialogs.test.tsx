@@ -265,6 +265,7 @@ afterEach(() => {
 describe('route-backed navigation', () => {
   it.each([
     ['/', 'דלפק השאלות'],
+    ['/frontdesk', 'דלפק השאלות'],
     ['/consumables', 'ציוד מתכלה'],
     ['/inventory', 'מצב מלאי'],
     ['/ledger', 'יומן אירועים'],
@@ -279,6 +280,42 @@ describe('route-backed navigation', () => {
     );
 
     expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+  });
+
+  it('keeps the frontdesk alias address while marking the home link active', async () => {
+    installApiMock();
+    window.history.replaceState({}, '', '/frontdesk');
+    render(
+      <DialogStackProvider>
+        <App />
+      </DialogStackProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'דלפק השאלות' })).toBeTruthy();
+    const deskLink = screen.getByRole('link', { name: 'דלפק השאלות' });
+    expect(deskLink.getAttribute('href')).toBe('/');
+    expect(deskLink.getAttribute('aria-current')).toBe('page');
+    expect(window.location.pathname).toBe('/frontdesk');
+  });
+
+  it('synchronizes browser history navigation to the frontdesk alias', async () => {
+    installApiMock();
+    window.history.replaceState({}, '', '/inventory');
+    render(
+      <DialogStackProvider>
+        <App />
+      </DialogStackProvider>,
+    );
+    await screen.findByRole('heading', { name: 'מצב מלאי' });
+
+    window.history.pushState({}, '', '/frontdesk');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+
+    expect(await screen.findByRole('heading', { name: 'דלפק השאלות' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'דלפק השאלות' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+    expect(window.location.pathname).toBe('/frontdesk');
   });
 
   it('uses the borrower desk as home and keeps primary tabs synchronized with the URL', async () => {

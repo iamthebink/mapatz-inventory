@@ -2,6 +2,17 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 
+test('opens the borrower desk directly through the frontdesk alias', async ({ page }) => {
+  await page.goto('/frontdesk');
+
+  await expect(page).toHaveURL(/\/frontdesk$/);
+  await expect(page.getByRole('heading', { name: 'דלפק השאלות' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'דלפק השאלות' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+});
+
 async function openSeededCard(page: Page, username: string) {
   await page.goto('/inventory');
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();

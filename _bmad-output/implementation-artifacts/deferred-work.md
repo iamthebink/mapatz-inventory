@@ -48,3 +48,6 @@
 - source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-route-backed-top-navigation.md`
   summary: Add server-level regression coverage for direct SPA route requests.
   evidence: Route refreshes rely on the existing Express catch-all serving the production index, but current integration fixtures disable web serving and the source tree has no built index artifact; protecting this without coupling tests to generated output needs a dedicated static-root fixture seam.
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-frontdesk-route-alias.md`
+  summary: Add production-static-server regression coverage for the `/frontdesk` SPA alias.
+  evidence: Browser coverage proves direct entry through the development server, while the production Express catch-all is generic and unchanged; testing its built-index response cleanly still requires the previously identified static-root fixture seam.
