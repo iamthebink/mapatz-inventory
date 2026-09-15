@@ -3,8 +3,8 @@ import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 
 async function openSeededCard(page: Page, username: string) {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'דלפק השאלות' }).click();
+  await page.goto('/inventory');
+  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await expect(search).toBeFocused();
   await search.fill(username);
@@ -68,8 +68,8 @@ test('browses, filters, and opens the responsive borrower directory without dial
   page,
   seed,
 }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'דלפק השאלות' }).click();
+  await page.goto('/inventory');
+  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   const create = page.getByRole('button', { name: 'יצירת שואל חדש' });
   const header = page.locator('.borrower-workflow-header');
@@ -259,7 +259,7 @@ test('resolves an ambiguous committed response after reload without duplicating 
 
   await page.unrouteAll({ behavior: 'wait' });
   await page.reload();
-  await page.getByRole('button', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   expect(
     await page.evaluate(() =>
@@ -479,7 +479,7 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   openLedger,
 }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const create = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   const username = `created-${Date.now()}`;
@@ -565,7 +565,7 @@ test('keeps duplicate borrower values and archived-match guidance with one error
   openLedger,
 }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const create = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   const username = create.getByLabel('שם משתמש');
@@ -654,7 +654,7 @@ test('marks and unmarks lost equipment through real admin authorization and clos
 
   await page
     .getByRole('navigation', { name: 'ניווט ראשי' })
-    .getByRole('button', { name: 'ניהול' })
+    .getByRole('link', { name: 'ניהול' })
     .click();
   const loanRow = page.getByRole('row', { name: new RegExp(seed.item.name) });
   const markLost = loanRow.getByRole('button', { name: 'סמן אבוד' });
@@ -716,7 +716,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await authentication.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
   await page
     .getByRole('navigation', { name: 'ניווט ראשי' })
-    .getByRole('button', { name: 'ניהול' })
+    .getByRole('link', { name: 'ניהול' })
     .click();
   const loanRow = page.getByRole('row', { name: new RegExp(seed.item.name) });
   await loanRow.getByRole('button', { name: 'סמן אבוד' }).click();
@@ -775,9 +775,9 @@ test('retires legacy presentation while preserving gated lost controls and respo
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: 'ניווט ראשי' });
-  await expect(navigation.getByRole('button', { name: /^השאלה$/ })).toHaveCount(0);
-  await expect(navigation.getByRole('button', { name: 'החזרות' })).toHaveCount(0);
-  await navigation.getByRole('button', { name: 'ניהול' }).click();
+  await expect(navigation.getByRole('link', { name: /^השאלה$/ })).toHaveCount(0);
+  await expect(navigation.getByRole('link', { name: 'החזרות' })).toHaveCount(0);
+  await navigation.getByRole('link', { name: 'ניהול' }).click();
   await expect(page.getByRole('heading', { name: 'ציוד בחוץ ואבוד' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'החזרה' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'סמן אבוד' }).first()).toBeDisabled();

@@ -171,6 +171,7 @@ function installApiMock({
 }
 
 async function renderReadyApp() {
+  window.history.replaceState({}, '', '/inventory');
   const user = userEvent.setup();
   render(
     <DialogStackProvider>
@@ -186,7 +187,7 @@ function bodyOf(request: RecordedRequest): unknown {
 }
 
 async function openManagement(user: ReturnType<typeof userEvent.setup>, tabName: string) {
-  await user.click(screen.getByRole('button', { name: 'ניהול' }));
+  await user.click(screen.getByRole('link', { name: 'ניהול' }));
   await user.click(screen.getByRole('tab', { name: new RegExp(tabName) }));
 }
 
@@ -204,12 +205,12 @@ it('keeps consumable issue and the borrower desk while retiring legacy borrowing
   const user = await renderReadyApp();
   expect(screen.getByText('ציוד מחנה')).toBeTruthy();
   const primaryNavigation = screen.getByRole('navigation', { name: 'ניווט ראשי' });
-  expect(within(primaryNavigation).queryByRole('button', { name: /^השאלה$/ })).toBeNull();
-  expect(within(primaryNavigation).queryByRole('button', { name: 'החזרות' })).toBeNull();
-  expect(within(primaryNavigation).getByRole('button', { name: 'דלפק השאלות' })).toBeTruthy();
-  expect(within(primaryNavigation).getAllByRole('button')[0]?.textContent).toContain('דלפק השאלות');
+  expect(within(primaryNavigation).queryByRole('link', { name: /^השאלה$/ })).toBeNull();
+  expect(within(primaryNavigation).queryByRole('link', { name: 'החזרות' })).toBeNull();
+  expect(within(primaryNavigation).getByRole('link', { name: 'דלפק השאלות' })).toBeTruthy();
+  expect(within(primaryNavigation).getAllByRole('link')[0]?.textContent).toContain('דלפק השאלות');
 
-  const issueTab = screen.getByRole('button', { name: 'ציוד מתכלה' });
+  const issueTab = screen.getByRole('link', { name: 'ציוד מתכלה' });
   await user.click(issueTab);
   expect(issueTab.getAttribute('aria-current')).toBe('page');
   const issue = screen.getByText('ניפוק מתכלה').closest('form')!;
@@ -259,6 +260,59 @@ it('keeps consumable issue and the borrower desk while retiring legacy borrowing
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe('route-backed navigation', () => {
+  it.each([
+    ['/', 'דלפק השאלות'],
+    ['/consumables', 'ציוד מתכלה'],
+    ['/inventory', 'מצב מלאי'],
+    ['/ledger', 'יומן אירועים'],
+    ['/management', 'ניהול'],
+  ])('opens %s directly on its primary destination', async (path, heading) => {
+    installApiMock();
+    window.history.replaceState({}, '', path);
+    render(
+      <DialogStackProvider>
+        <App />
+      </DialogStackProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+  });
+
+  it('uses the borrower desk as home and keeps primary tabs synchronized with the URL', async () => {
+    installApiMock();
+    window.history.replaceState({}, '', '/');
+    const user = userEvent.setup();
+    render(
+      <DialogStackProvider>
+        <App />
+      </DialogStackProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'דלפק השאלות' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'דלפק השאלות' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+
+    await user.click(screen.getByRole('link', { name: 'מלאי' }));
+    expect(window.location.pathname).toBe('/inventory');
+    expect(await screen.findByRole('heading', { name: 'מצב מלאי' })).toBeTruthy();
+
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe('/'));
+    expect(await screen.findByRole('heading', { name: 'דלפק השאלות' })).toBeTruthy();
+
+    window.history.forward();
+    await waitFor(() => expect(window.location.pathname).toBe('/inventory'));
+    expect(await screen.findByRole('heading', { name: 'מצב מלאי' })).toBeTruthy();
+
+    window.history.replaceState({}, '', '/ledger');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(await screen.findByRole('heading', { name: 'יומן אירועים' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'יומן' }).getAttribute('aria-current')).toBe('page');
+  });
 });
 
 describe('App dialog workflows', () => {
@@ -593,7 +647,7 @@ describe('App dialog workflows', () => {
     const api = installApiMock();
     const user = await renderReadyApp();
     await openManagement(user, 'ייבוא וייצוא');
-    const managementTab = screen.getByRole('button', { name: 'ניהול' });
+    const managementTab = screen.getByRole('link', { name: 'ניהול' });
     const input = screen.getByLabelText('בחירת קובץ לייבוא איפוס');
     await user.upload(
       input,

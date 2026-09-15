@@ -70,6 +70,19 @@ type Session = { role: Role; deadline: number | null };
 type Tab = 'inventory' | 'desk' | 'issue' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
+const tabPaths: Record<Tab, string> = {
+  desk: '/',
+  issue: '/consumables',
+  inventory: '/inventory',
+  ledger: '/ledger',
+  catalogs: '/management',
+};
+
+function tabFromPath(pathname: string): Tab | null {
+  const normalized = pathname === '/' ? pathname : pathname.replace(/\/$/, '');
+  return (Object.entries(tabPaths).find(([, path]) => path === normalized)?.[0] as Tab) ?? null;
+}
+
 const borrowerTypeNames: Record<Borrower['type'], string> = {
   individual: 'יחיד',
   camp_organization: 'ארגון מחנה',
@@ -137,7 +150,7 @@ export function App() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [ledger, setLedger] = useState<LedgerEvent[]>([]);
-  const [tab, setTab] = useState<Tab>('inventory');
+  const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname) ?? 'desk');
   const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
   const [issueQuery, setIssueQuery] = useState('');
   const [selectedIssueItemId, setSelectedIssueItemId] = useState<number | null>(null);
@@ -154,7 +167,7 @@ export function App() {
   const sessionRequestRef = useRef(0);
   const activityRequestRef = useRef<Promise<void> | null>(null);
   const adminControlRef = useRef<HTMLButtonElement>(null);
-  const managementTabRef = useRef<HTMLButtonElement>(null);
+  const managementTabRef = useRef<HTMLAnchorElement>(null);
   const dialogReturnFocusRef = useRef<HTMLElement>(null);
   const dialogFallbackRef = useRef<HTMLElement>(null);
   const previousRoleRef = useRef<Role>('operator');
@@ -169,6 +182,15 @@ export function App() {
   const isAdmin = session.role === 'admin';
   const adminActionsEnabled = isAdmin && !sessionReconciling;
   const inventoryDialogPending = pending || (sessionReconciling && activeDialog != null);
+
+  const navigateToTab = useCallback((nextTab: Tab) => {
+    window.history.pushState(
+      { ...window.history.state, mapatzTab: nextTab },
+      '',
+      tabPaths[nextTab],
+    );
+    setTab(nextTab);
+  }, []);
 
   const clearImportInput = useCallback((mode: 'reset' | 'recovery') => {
     const input = mode === 'reset' ? resetFileRef.current : recoveryFileRef.current;
@@ -237,6 +259,24 @@ export function App() {
   useEffect(() => {
     refresh().catch((error) => showError('טעינת נתוני המלאי', error));
   }, [refresh, showError]);
+  useEffect(() => {
+    const syncTabToLocation = () => {
+      const nextTab = tabFromPath(window.location.pathname);
+      if (nextTab) {
+        setTab(nextTab);
+        return;
+      }
+      window.history.replaceState(
+        { ...window.history.state, mapatzTab: 'desk' },
+        '',
+        `${tabPaths.desk}${window.location.search}${window.location.hash}`,
+      );
+      setTab('desk');
+    };
+    syncTabToLocation();
+    window.addEventListener('popstate', syncTabToLocation);
+    return () => window.removeEventListener('popstate', syncTabToLocation);
+  }, []);
   useEffect(() => {
     const auth = () => refresh().catch((error) => showError('רענון הרשאות', error));
     window.addEventListener('mapatz-auth-stale', auth);
@@ -843,20 +883,30 @@ export function App() {
           {navigation.map(({ key, label, icon: Icon }) => (
             <div className="contents" key={key}>
               {key === 'inventory' && <span className="nav-separator" aria-hidden="true" />}
-              <button
+              <a
                 ref={key === 'catalogs' ? managementTabRef : undefined}
+                href={tabPaths[key]}
                 className={`nav-item ${tab === key ? 'active' : ''}`}
                 aria-current={tab === key ? 'page' : undefined}
-                onClick={() => {
+                onClick={(event) => {
+                  if (
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
                   if (key === tab) return;
-                  const complete = () => setTab(key);
+                  const complete = () => navigateToTab(key);
                   if (tab === 'desk') borrowerWorkflowRef.current?.requestNavigation(complete);
                   else complete();
                 }}
               >
                 <Icon className="size-4" />
                 {label}
-              </button>
+              </a>
             </div>
           ))}
         </div>

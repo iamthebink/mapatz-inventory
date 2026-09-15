@@ -45,3 +45,6 @@
 - source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-simplify-borrower-desk-actions.md`
   summary: Measure borrower-directory scale and introduce pagination or virtualization only if production roster size causes unacceptable API or DOM latency.
   evidence: Review identified a plausible unbounded-roster risk, but the repository contains no production borrower-count distribution, performance threshold, or failing measurement proving that the all-active directory is currently impractical.
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-route-backed-top-navigation.md`
+  summary: Add server-level regression coverage for direct SPA route requests.
+  evidence: Route refreshes rely on the existing Express catch-all serving the production index, but current integration fixtures disable web serving and the source tree has no built index artifact; protecting this without coupling tests to generated output needs a dedicated static-root fixture seam.
