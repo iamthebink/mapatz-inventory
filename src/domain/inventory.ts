@@ -1,4 +1,10 @@
-import { createHash } from 'node:crypto';
+import type {
+  BorrowerImportMode,
+  BorrowerImportRow,
+  BorrowerImportPreview,
+  BorrowerImportResult,
+} from '../contracts/borrower-import.js';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
 import type {
@@ -67,6 +73,145 @@ function integer(value: number, label = 'quantity'): number {
 }
 
 export class InventoryService {
+  // Restarting the service invalidates previews, safely requiring fresh consent.
+  private readonly borrowerImportSecret = randomBytes(32);
+
+  previewBorrowerImport(
+    rows: BorrowerImportRow[],
+    mode: BorrowerImportMode,
+  ): BorrowerImportPreview {
+    return readTransaction(this.db, () => this.borrowerImportPlan(rows, mode).preview);
+  }
+
+  importBorrowers(
+    rows: BorrowerImportRow[],
+    mode: BorrowerImportMode,
+    confirmationToken: string,
+  ): BorrowerImportResult {
+    return transaction(this.db, () => {
+      const plan = this.borrowerImportPlan(rows, mode);
+      const supplied = Buffer.from(confirmationToken, 'utf8');
+      const expected = Buffer.from(plan.preview.confirmationToken, 'utf8');
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
+        return { outcome: 'confirmation_required', preview: plan.preview };
+      let returned = 0;
+      for (const borrower of plan.preview.affected) {
+        for (const loan of borrower.loans) {
+          this.append(
+            'returned_usable',
+            loan.itemId,
+            loan.quantity,
+            borrower.id,
+            loan.checkoutId,
+            'Borrower spreadsheet replacement',
+          );
+          returned += loan.quantity;
+        }
+      }
+      // Archival preserves immutable event attribution, including already-lost quantities.
+      for (const borrower of plan.absent)
+        this.db.prepare('UPDATE borrowers SET archived=1 WHERE id=?').run(borrower.id);
+      for (const row of rows) {
+        const existing = plan.identities.get(normalizeBorrowerText(row.username));
+        if (existing) {
+          this.db
+            .prepare(
+              'UPDATE borrowers SET username=?,name=?,contact=?,type=?,archived=0 WHERE id=?',
+            )
+            .run(row.username, row.name, row.contact, row.type, existing.id);
+        } else this.createBorrower(row);
+      }
+      return {
+        outcome: 'committed',
+        added: plan.preview.added,
+        updated: plan.preview.updated,
+        archived: plan.preview.archived,
+        returned,
+      };
+    });
+  }
+
+  private borrowerImportPlan(rows: BorrowerImportRow[], mode: BorrowerImportMode) {
+    if (mode !== 'merge' && mode !== 'replace')
+      throw new DomainError('invalid_import', 'Invalid import mode');
+    if (!rows.length) throw new DomainError('invalid_import', 'The import must contain borrowers');
+    const incoming = new Set<string>();
+    for (const [index, row] of rows.entries()) {
+      if (
+        typeof row.username !== 'string' ||
+        row.username.trim().length < 2 ||
+        row.username.trim().length > 40 ||
+        typeof row.name !== 'string' ||
+        !row.name.trim() ||
+        row.name.trim().length > 100 ||
+        typeof row.contact !== 'string' ||
+        row.contact.length > 500 ||
+        !['individual', 'camp_organization', 'other'].includes(row.type)
+      )
+        throw new DomainError(
+          'invalid_import',
+          `Row ${index + 2} contains invalid borrower fields`,
+        );
+      const key = normalizeBorrowerText(row.username);
+      if (incoming.has(key))
+        throw new DomainError('invalid_import', `Row ${index + 2} contains a duplicate username`);
+      incoming.add(key);
+    }
+    const borrowers = (this.db.prepare('SELECT * FROM borrowers ORDER BY id').all() as Row[]).map(
+      this.borrowerFromRow,
+    );
+    const identities = new Map<string, Borrower>();
+    for (const borrower of borrowers) {
+      const key = normalizeBorrowerText(borrower.username);
+      if (identities.has(key))
+        throw new DomainError(
+          'ambiguous_borrower',
+          `Ambiguous normalized username: ${borrower.username}`,
+        );
+      identities.set(key, borrower);
+    }
+    const absent =
+      mode === 'replace'
+        ? borrowers.filter((borrower) => !incoming.has(normalizeBorrowerText(borrower.username)))
+        : [];
+    const loans = this.listLoans();
+    const affected = absent
+      .map((borrower) => ({
+        id: borrower.id,
+        name: borrower.name,
+        username: borrower.username,
+        loans: loans
+          .filter((loan) => Number(loan.borrowerId) === borrower.id && Number(loan.outstanding) > 0)
+          .map((loan) => ({
+            checkoutId: Number(loan.checkoutId),
+            itemId: Number(loan.itemId),
+            itemName: String(loan.itemName),
+            quantity: Number(loan.outstanding),
+          })),
+      }))
+      .filter((borrower) => borrower.loans.length > 0);
+    const confirmationToken = createHmac('sha256', this.borrowerImportSecret)
+      .update(
+        stableJson({
+          rows,
+          mode,
+          borrowers,
+          affected,
+          ledgerEpoch: this.ledgerEpochInTransaction(),
+        }),
+      )
+      .digest('hex');
+    const added = rows.filter((row) => !identities.has(normalizeBorrowerText(row.username))).length;
+    const preview: BorrowerImportPreview = {
+      confirmationToken,
+      added,
+      updated: rows.length - added,
+      archived: absent.filter((borrower) => !borrower.archived).length,
+      affected,
+    };
+    return { identities, absent, preview };
+  }
+
   constructor(private readonly db: InventoryDatabase) {}
 
   listLocations(includeArchived = false): Row[] {
@@ -546,6 +691,11 @@ export class InventoryService {
   markLost(checkoutId: number, quantity: number, lost: boolean, note = ''): number {
     return transaction(this.db, () => {
       const checkout = this.requireCheckout(checkoutId);
+      if (!lost && this.getBorrower(Number(checkout.borrower_id)).archived)
+        throw new DomainError(
+          'inactive_borrower',
+          'Borrower is inactive; reactivate the borrower first',
+        );
       const maximum = lost ? this.outstanding(checkoutId) : this.lost(checkoutId);
       integer(quantity);
       if (quantity > maximum)

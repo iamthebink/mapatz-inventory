@@ -1,3 +1,5 @@
+import type { BorrowerImportRow } from '../contracts/borrower-import.js';
+import { normalizeBorrowerText } from '../domain/inventory.js';
 import ExcelJS, { type CellValue, type Worksheet } from 'exceljs';
 import {
   consumablesUsageReport,
@@ -437,4 +439,62 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     };
   });
   return validateRecoveryPayload({ locations, items, borrowers, events });
+}
+
+/** Standalone first-sheet import; never routes through inventory replacement. */
+export async function parseBorrowerWorkbook(buffer: Buffer): Promise<BorrowerImportRow[]> {
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(
+      buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
+    );
+  } catch {
+    return importError('The uploaded file is not a readable XLSX workbook');
+  }
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return importError('The workbook must contain a worksheet');
+  const columns = ['Username', 'Name', 'Contact', 'Type'];
+  for (let column = 1; column <= Math.max(4, sheet.getRow(1).cellCount); column += 1) {
+    const value = primitive(sheet.getRow(1).getCell(column).value);
+    if (column <= 4 ? value !== columns[column - 1] : !isBlank(value))
+      return importError('Row 1 must contain Username, Name, Contact, Type in that order');
+  }
+  const rows: BorrowerImportRow[] = [];
+  const identities = new Map<string, number>();
+  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const source = sheet.getRow(rowNumber);
+    const values: Primitive[] = [];
+    for (let column = 1; column <= Math.max(4, source.cellCount); column += 1) {
+      try {
+        values.push(primitive(source.getCell(column).value));
+      } catch {
+        return importError(`Row ${rowNumber}, column ${column} must contain a plain value`);
+      }
+    }
+    if (values.every(isBlank)) continue;
+    if (values.slice(4).some((value) => !isBlank(value)))
+      return importError(`Row ${rowNumber} contains unexpected extra columns`);
+    const username = requiredText(values[0], `Row ${rowNumber} Username`, 40);
+    if (username.length < 2)
+      return importError(`Row ${rowNumber} Username must contain at least 2 characters`);
+    const identity = normalizeBorrowerText(username);
+    const previous = identities.get(identity);
+    if (previous != null)
+      return importError(`Row ${rowNumber} Username duplicates row ${previous}`);
+    identities.set(identity, rowNumber);
+    const type = isBlank(values[3])
+      ? 'individual'
+      : requiredText(values[3], `Row ${rowNumber} Type`);
+    if (type !== 'individual' && type !== 'camp_organization' && type !== 'other')
+      return importError(`Row ${rowNumber} Type must be individual, camp_organization, or other`);
+    rows.push({
+      username,
+      name: requiredText(values[1], `Row ${rowNumber} Name`),
+      contact: isBlank(values[2]) ? '' : plainText(values[2], `Row ${rowNumber} Contact`, 500),
+      type,
+    });
+  }
+  if (rows.length === 0)
+    return importError('The borrower import must contain at least one borrower');
+  return rows;
 }

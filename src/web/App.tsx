@@ -1,3 +1,4 @@
+import { BorrowerImportDialog } from './BorrowerImportDialog';
 import {
   FormEvent,
   useCallback,
@@ -161,6 +162,7 @@ export function App() {
   const [issueItemInvalid, setIssueItemInvalid] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
+  const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
   const [adminPasswordError, setAdminPasswordError] = useState('');
@@ -361,7 +363,9 @@ export function App() {
     }
   }, [announce, isAdmin, remaining]);
   useEffect(() => {
-    if (isAdmin || !activeDialog) return;
+    if (isAdmin) return;
+    setBorrowerImportOpen(false);
+    if (!activeDialog) return;
     if (activeDialog.kind === 'import') clearImportInput(activeDialog.mode);
     setActiveDialog(null);
   }, [activeDialog, clearImportInput, isAdmin]);
@@ -924,6 +928,16 @@ export function App() {
       >
         {announcement.text}
       </div>
+      {borrowerImportOpen && isAdmin && (
+        <BorrowerImportDialog
+          onClose={() => setBorrowerImportOpen(false)}
+          refresh={refresh}
+          showToast={showToast}
+          beforeRequest={async () => {
+            await activityRequestRef.current;
+          }}
+        />
+      )}
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'desk' && <BorrowerWorkflow ref={borrowerWorkflowRef} showToast={showToast} />}
@@ -1249,6 +1263,16 @@ export function App() {
               )}
               {managementTab === 'borrowers' && (
                 <div className="space-y-7">
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={!adminActionsEnabled || pending}
+                      onClick={() => setBorrowerImportOpen(true)}
+                    >
+                      ייבוא שואלים מקובץ
+                    </button>
+                  )}
                   <div className="max-w-2xl">
                     <ActionCard
                       title="שואל חדש"

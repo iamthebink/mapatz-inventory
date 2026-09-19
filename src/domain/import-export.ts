@@ -335,7 +335,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       [...state.checkouts.values()].some(
         (checkout) =>
           checkout.borrowerUsername.toLocaleLowerCase() === borrower.username.toLocaleLowerCase() &&
-          checkout.quantity - checkout.returned > 0,
+          // Imports may archive borrowers with losses, but never with returnable stock.
+          checkout.quantity - checkout.returned - checkout.lost > 0,
       ),
     );
     if (unresolved)

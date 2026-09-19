@@ -1,4 +1,9 @@
 import type {
+  BorrowerImportMode,
+  BorrowerImportPreview,
+  BorrowerImportResult,
+} from '../contracts/borrower-import.js';
+import type {
   BorrowerCreateRequest,
   BorrowerCreateResult,
   BorrowerDeskSnapshot,
@@ -580,4 +585,31 @@ export async function importRecoveryWorkbook(file: File): Promise<void> {
     body: file,
   });
   await requireSuccess(response);
+}
+
+export function previewBorrowerImport(
+  file: File,
+  mode: BorrowerImportMode,
+): Promise<BorrowerImportPreview> {
+  return api(`/borrowers/import/preview?mode=${mode}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    },
+    body: file,
+  });
+}
+export function commitBorrowerImport(
+  file: File,
+  mode: BorrowerImportMode,
+  confirmationToken: string,
+): Promise<BorrowerImportResult> {
+  return api(`/borrowers/import/commit?mode=${mode}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'x-borrower-import-confirmation': confirmationToken,
+    },
+    body: file,
+  });
 }

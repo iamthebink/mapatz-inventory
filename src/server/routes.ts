@@ -13,7 +13,12 @@ import type {
 import type { InventoryService } from '../domain/inventory.js';
 import type { InventoryTransferService } from '../domain/import-export.js';
 import { DomainError, type Role } from '../domain/types.js';
-import { exportWorkbook, parseRecoveryWorkbook, parseResetWorkbook } from '../io/workbook.js';
+import {
+  exportWorkbook,
+  parseRecoveryWorkbook,
+  parseResetWorkbook,
+  parseBorrowerWorkbook,
+} from '../io/workbook.js';
 import { WORKBOOK_CONTRACT } from '../io/workbook-contract.js';
 import type { SessionStore } from './session.js';
 
@@ -403,6 +408,29 @@ export function apiRouter(
       res.status(204).end();
     }),
   );
+
+  for (const operation of ['preview', 'commit'] as const) {
+    api.post(
+      `/borrowers/import/${operation}`,
+      requireRole('admin'),
+      express.raw({ type: WORKBOOK_CONTRACT.mimeType, limit: '10mb' }),
+      route(async (req, res) => {
+        const mode = parse(z.enum(['merge', 'replace']), req.query.mode);
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0)
+          throw new DomainError('invalid_workbook', 'יש לבחור קובץ XLSX לייבוא');
+        const rows = await parseBorrowerWorkbook(req.body);
+        if (operation === 'preview') {
+          res.json(service.previewBorrowerImport(rows, mode));
+        } else {
+          const token = parse(
+            z.string().regex(/^[a-f0-9]{64}$/),
+            req.header('x-borrower-import-confirmation'),
+          );
+          res.json(service.importBorrowers(rows, mode, token));
+        }
+      }),
+    );
+  }
 
   api.get('/loans', (req, res) => res.json(service.listLoans()));
   api.get('/ledger', (req, res) => res.json(service.listLedger()));

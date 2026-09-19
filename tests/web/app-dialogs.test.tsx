@@ -163,6 +163,10 @@ function installApiMock({
       document.dispatchEvent(new Event('visibilitychange'));
     },
     releaseSessionReconciliation: () => releaseSession?.(),
+    restoreAdmin: () => {
+      role = 'admin';
+      window.dispatchEvent(new Event('mapatz-auth-stale'));
+    },
     expireAdmin: () => {
       role = 'operator';
       window.dispatchEvent(new Event('mapatz-auth-stale'));
@@ -644,6 +648,22 @@ describe('App dialog workflows', () => {
 
     api.releaseHeld();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('does not reopen borrower import after admin expiry and reauthorization', async () => {
+    const controls = installApiMock();
+    const user = await renderReadyApp();
+    await user.click(screen.getByRole('link', { name: 'ניהול' }));
+    await user.click(screen.getByRole('tab', { name: /שואלים/ }));
+    await user.click(screen.getByRole('button', { name: 'ייבוא שואלים מקובץ' }));
+    expect(screen.getByRole('dialog', { name: 'ייבוא שואלים מקובץ' })).toBeTruthy();
+    controls.expireAdmin();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'ייבוא שואלים מקובץ' })).toBeNull(),
+    );
+    controls.restoreAdmin();
+    await screen.findByRole('button', { name: 'ייבוא שואלים מקובץ' });
+    expect(screen.queryByRole('dialog', { name: 'ייבוא שואלים מקובץ' })).toBeNull();
   });
 
   it('closes an admin-only dialog as soon as authorization is reconciled away', async () => {
