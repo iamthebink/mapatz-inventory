@@ -1,0 +1,55 @@
+name: Verify
+on: [push, pull_request]
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm desktop:package
+      - run: pnpm test:desktop
+      - run: pnpm desktop:make
+      - name: Install Windows artifact and verify installed app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem desktop-stage/out/make -Filter '*Setup.exe' -Recurse | Select-Object -First 1
+          $process = Start-Process $installer.FullName -ArgumentList '--silent' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Installation failed' }
+          $installed = Get-ChildItem "$env:LOCALAPPDATA/mapatz_inventory" -Filter 'mapatz-inventory.exe' -Recurse | Select-Object -First 1
+          if (!$installed) { throw 'Installed executable missing' }
+          $env:MAPATZ_EXECUTABLE = $installed.FullName
+          pnpm test:desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Installed application verification failed' }
+      - name: Verify extracted Mac distributable
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          artifact="$(find desktop-stage/out/make -name '*.zip' -type f | head -n 1)"
+          ditto -x -k "$artifact" "$RUNNER_TEMP/mapatz-installed"
+          MAPATZ_EXECUTABLE="$RUNNER_TEMP/mapatz-installed/Mapatz Inventory.app/Contents/MacOS/mapatz-inventory" pnpm test:desktop
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            desktop-stage/out/make
+            test-results-desktop
+            playwright-report
