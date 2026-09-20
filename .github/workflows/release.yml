@@ -80,6 +80,7 @@ jobs:
     needs: verify
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/windows-upgrade.yml
     with:
       artifact: packages-windows-latest

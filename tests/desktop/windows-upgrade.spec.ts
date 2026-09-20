@@ -30,6 +30,18 @@ async function post(page: Page, path: string, body: unknown, key?: string) {
   );
 }
 
+async function authenticate(page: Page) {
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
+  // Initial parallel API requests establish cookies. Let that bootstrap finish
+  // before changing role; URL navigation alone does not mean the app is ready.
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'הפעל מצב מנהל', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'הפעלת מצב מנהל' });
+  await dialog.getByLabel('סיסמה', { exact: true }).fill(password);
+  await dialog.getByRole('button', { name: 'הפעל מצב מנהל', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'סיום מצב מנהל', exact: true })).toBeVisible();
+}
+
 async function snapshot(page: Page) {
   return page.evaluate(async () => {
     const get = async (path: string) => {
@@ -124,7 +136,7 @@ test('published Windows installation upgrades in place without losing field stat
     await page.getByRole('button', { name: 'שמירה ופתיחה' }).click();
     await page.waitForURL('http://127.0.0.1:*/');
     const origin = new URL(page.url()).origin;
-    await post(page, '/session/role', { role: 'admin', password });
+    await authenticate(page);
     const item = await post(page, '/items', { name: 'אוהל שדרוג', kind: 'non_consumable' });
     await post(page, '/stock/add', { itemId: item.id, quantity: 5 });
     const { borrower } = await post(
@@ -209,7 +221,7 @@ test('published Windows installation upgrades in place without losing field stat
     expect(await page.evaluate(() => localStorage.getItem('upgrade-rehearsal'))).toBe(
       'preserve-origin-storage',
     );
-    await post(page, '/session/role', { role: 'admin', password });
+    await authenticate(page);
     expect(await snapshot(page)).toEqual(before);
     expect(await post(page, `/borrowers/${borrower.id}/operations`, borrowBody, borrowKey)).toEqual(
       { ...borrowReceipt, replayed: true },
@@ -235,7 +247,7 @@ test('published Windows installation upgrades in place without losing field stat
     application = await launch(candidateVersion);
     page = await application.firstWindow();
     await page.waitForURL(`${origin}/`);
-    await post(page, '/session/role', { role: 'admin', password });
+    await authenticate(page);
     expect(await snapshot(page)).toEqual(afterReturn);
     await finishApplication(application, true);
     application = undefined;

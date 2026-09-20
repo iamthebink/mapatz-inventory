@@ -69,4 +69,6 @@ Bump `package.json` and the two root version fields in `scripts/desktop-package-
 
 CI and release publication require a real Windows installer upgrade from the checksum-pinned published `0.1.0` baseline to the candidate. A separate clean hosted runner installs both Setup packages in sequence using the default profile. It verifies the new version, original password, profile/origin, localStorage, inventory, borrower and ledger records, idempotent command replay, and a return that survives another restart. Evidence is uploaded as `windows-upgrade-evidence`. The candidate must have a newer stable version than the baseline; update the pinned baseline deliberately when changing the supported upgrade floor. This does not exercise schema migration unless the candidate includes one.
 
+For test-harness debugging, manually dispatch **Windows installer upgrade** with the completed CI run ID and its Windows artifact name; this reuses the installer and does not publish a release. The normal release gate always uses its own verified artifact.
+
 The dedicated `playwright.upgrade.config.ts` suite is restricted to clean GitHub-hosted Windows runners because it installs software and uses the normal Windows profile. The ordinary `test:desktop` suite excludes it.
