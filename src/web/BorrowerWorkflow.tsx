@@ -566,6 +566,14 @@ export const BorrowerWorkflow = forwardRef<
     }
     setQuantity(null);
     window.setTimeout(() => {
+      const trigger =
+        quantity.direction === 'return'
+          ? returnButtonRefs.current.get(returnKey)
+          : itemSearchRef.current;
+      // Dialog cleanup restores the trigger first. If the operator has already
+      // moved elsewhere, this deferred fallback must not steal their focus.
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== trigger) return;
       if (quantity.direction === 'return') {
         const preferred = returnButtonRefs.current.get(returnKey);
         const remaining = [...returnButtonRefs.current.values()];

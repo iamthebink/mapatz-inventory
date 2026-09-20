@@ -10,6 +10,25 @@ on:
 permissions:
   contents: write
 jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: regression-diagnostics
+          path: |
+            test-results
+            playwright-report
   verify:
     strategy:
       matrix:
@@ -33,10 +52,13 @@ jobs:
           $installer = Get-ChildItem desktop-stage/out/make -Filter '*Setup.exe' -Recurse | Select-Object -First 1
           $process = Start-Process $installer.FullName -ArgumentList '--silent' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw 'Installation failed' }
-          $installed = Get-ChildItem "$env:LOCALAPPDATA/mapatz_inventory" -Filter 'mapatz-inventory.exe' -Recurse | Select-Object -First 1
-          if (!$installed) { throw 'Installed executable missing' }
-          $env:MAPATZ_EXECUTABLE = $installed.FullName
-          pnpm test:desktop
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          # Playwright must attach to Electron itself, not Squirrel's root launcher shim.
+          $installed = Join-Path $env:LOCALAPPDATA "mapatz_inventory/app-$version/mapatz-inventory.exe"
+          if (!(Test-Path $installed -PathType Leaf)) { throw "Installed executable missing: $installed" }
+          Write-Host "Testing installed executable: $installed"
+          $env:MAPATZ_EXECUTABLE = $installed
+          pnpm test:desktop --max-failures=1
           if ($LASTEXITCODE -ne 0) { throw 'Installed application verification failed' }
       - name: Verify extracted Mac distributable
         if: runner.os == 'macOS'
@@ -55,7 +77,7 @@ jobs:
           name: diagnostics-${{ matrix.os }}
           path: test-results-desktop
   publish:
-    needs: verify
+    needs: [regression, verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

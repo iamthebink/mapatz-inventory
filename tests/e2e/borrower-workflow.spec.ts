@@ -295,6 +295,24 @@ test('resolves an ambiguous committed response after reload without duplicating 
   ).toBe(1);
 });
 
+test('keeps a new item search focused when deferred return focus runs', async ({ page, seed }) => {
+  await openSeededCard(page, seed.borrower.username);
+  await page.getByRole('button', { name: 'תקין', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'החזרה תקינה' });
+  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  // Hold the return-focus timer until the operator has started their next action.
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(dialog).toHaveCount(0);
+  const search = page.getByRole('combobox', { name: 'חיפוש פריט' });
+  await search.fill(seed.archiveItem.name);
+  await expect(search).toBeFocused();
+  await page.clock.runFor(1);
+  await expect(search).toBeFocused();
+  await expect(page.getByRole('option', { name: new RegExp(seed.archiveItem.name) })).toBeVisible();
+});
+
 test('renders a fresh conflict, keeps staging, and requires a new deliberate save key', async ({
   page,
   request,
@@ -390,6 +408,9 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   const rootActions = page.locator('[data-dialog-level="root"] .dialog-shell-actions');
   await rootActions.getByRole('button', { name: 'סגירה', exact: true }).click();
   await page.getByRole('button', { name: 'מחיקת הפעולות וסגירה' }).click();
+  // Closing consumes the history sentinel asynchronously; finish that traversal
+  // before starting a new document navigation.
+  await page.waitForFunction(() => !history.state?.mapatzBorrowerWorkflow);
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.stockItem.name);
   await page.getByRole('button', { name: 'שמירה', exact: true }).click();
