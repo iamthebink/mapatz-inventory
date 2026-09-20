@@ -212,7 +212,7 @@ test('published Windows installation upgrades in place without losing field stat
     await post(page, '/session/role', { role: 'admin', password });
     expect(await snapshot(page)).toEqual(before);
     expect(await post(page, `/borrowers/${borrower.id}/operations`, borrowBody, borrowKey)).toEqual(
-      borrowReceipt,
+      { ...borrowReceipt, replayed: true },
     );
     expect(await snapshot(page)).toEqual(before); // Persisted receipt must prevent duplicate borrowing.
     await post(
@@ -263,7 +263,7 @@ try {
   if (!$opened.CloseMainWindow()) { throw 'Could not close shortcut-launched application' }
   if (!$opened.WaitForExit(30000)) { throw 'Shortcut-launched application did not exit' }
 } finally {
-  Get-Process -Name 'mapatz-inventory' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($env:MAPATZ_INSTALL_ROOT, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process | Where-Object { $_.ProcessName -eq 'mapatz-inventory' -and $_.Path -and $_.Path.StartsWith($env:MAPATZ_INSTALL_ROOT, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 `,
       ],
