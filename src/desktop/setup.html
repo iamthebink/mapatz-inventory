@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>הגדרת מפ״ץ</title>
+    <style>
+      body {
+        font: 20px sans-serif;
+        max-width: 480px;
+        margin: 15vh auto;
+        padding: 24px;
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 12px;
+        display: block;
+        margin: 16px 0;
+        width: 100%;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ברוכים הבאים למפ״ץ</h1>
+    <p>בחרו סיסמת מנהל. הנתונים נשמרים במחשב הזה.</p>
+    <form>
+      <label for="password">סיסמה (8–256 תווים)</label
+      ><input
+        id="password"
+        type="password"
+        minlength="8"
+        maxlength="256"
+        required
+        autocomplete="new-password"
+      /><label for="confirmation">אימות סיסמה</label
+      ><input id="confirmation" type="password" required autocomplete="new-password" /><button
+        disabled
+      >
+        שמירה ופתיחה
+      </button>
+    </form>
+    <p role="alert"></p>
+    <p>לביטול, סגרו את החלון.</p>
+    <script src="setup.js"></script>
+  </body>
+</html>

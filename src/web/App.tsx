@@ -1,3 +1,4 @@
+import { desktop } from './desktop';
 import { BorrowerImportDialog } from './BorrowerImportDialog';
 import {
   FormEvent,
@@ -406,6 +407,20 @@ export function App() {
     setSelectedIssueItemId(null);
     setIssueQuery('');
   }, [items, selectedIssueItemId]);
+  useEffect(
+    () =>
+      desktop?.onCloseRequest(() => {
+        if (pendingRef.current) {
+          showToast('הפעולה מוגנת', 'יש להמתין לסיום הפעולה.', 'warning');
+          return;
+        }
+        if (borrowerWorkflowRef.current)
+          borrowerWorkflowRef.current.requestNavigation(() => desktop?.approveClose());
+        else desktop?.approveClose();
+      }),
+    [showToast],
+  );
+
   async function action(title: string, operation: () => Promise<unknown>) {
     if (pendingRef.current) return false;
     pendingRef.current = true;
@@ -414,7 +429,7 @@ export function App() {
       // A pointer/keyboard event may have started a deadline extension immediately
       // before this action. Preserve event order at the API boundary.
       await activityRequestRef.current;
-      await operation();
+      if ((await operation()) === 'cancelled') return false;
       try {
         await refresh();
         showToast(title, 'הפעולה הושלמה בהצלחה', 'success');

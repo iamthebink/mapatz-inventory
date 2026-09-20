@@ -1,3 +1,4 @@
+import { desktop } from './desktop';
 import {
   forwardRef,
   useCallback,
@@ -321,6 +322,12 @@ export const BorrowerWorkflow = forwardRef<
           showToast('הפעולה מוגנת', 'לא ניתן לצאת בזמן שמצב השמירה אינו ודאי.', 'warning');
           return;
         }
+        if (
+          desktop &&
+          (creation.values.name || creation.values.username || creation.values.contact) &&
+          !window.confirm('לבטל את טיוטת השואל ולצאת?')
+        )
+          return;
         closeInitiatorRef.current = initiator;
         closeCreation(complete);
         return;
@@ -359,12 +366,28 @@ export const BorrowerWorkflow = forwardRef<
     ],
   );
 
+  useEffect(
+    () =>
+      desktop?.onResume(() => {
+        // Existing frozen-envelope initialization reconciles the exact original keys.
+        if (!selectedBorrower && !createOpen) void initialize();
+        else showToast('חזרה לעבודה', 'בדקו שמירה ממתינה לפני המשך העבודה.', 'warning');
+      }),
+    [createOpen, initialize, selectedBorrower, showToast],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
-      requestNavigation: (complete) => requestExit(null, complete),
+      requestNavigation: (complete) => {
+        if (desktop && startup !== 'ready') {
+          showToast('הפעולה מוגנת', 'יש להשלים שחזור לפני היציאה.', 'warning');
+          return;
+        }
+        requestExit(null, complete);
+      },
     }),
-    [requestExit],
+    [requestExit, showToast, startup],
   );
 
   useEffect(() => {

@@ -5,14 +5,27 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+export const migrations = [
+  { version: 1, filename: '001_initial.sql', disableForeignKeys: false },
+  { version: 2, filename: '002_import_export.sql', disableForeignKeys: true },
+  { version: 3, filename: '003_admin_only_credentials.sql', disableForeignKeys: false },
+  { version: 4, filename: '004_camp_equipment.sql', disableForeignKeys: true },
+  { version: 5, filename: '005_idempotency.sql', disableForeignKeys: false },
+];
+
 export type InventoryDatabase = DatabaseSync;
 
 export function openDatabase(filename: string): InventoryDatabase {
   if (filename !== ':memory:') mkdirSync(dirname(resolve(filename)), { recursive: true });
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  migrate(db);
-  return db;
+  try {
+    migrate(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 export function migrate(db: InventoryDatabase): void {
@@ -25,13 +38,10 @@ export function migrate(db: InventoryDatabase): void {
       Number(row.version),
     ),
   );
-  const migrations = [
-    { version: 1, filename: '001_initial.sql', disableForeignKeys: false },
-    { version: 2, filename: '002_import_export.sql', disableForeignKeys: true },
-    { version: 3, filename: '003_admin_only_credentials.sql', disableForeignKeys: false },
-    { version: 4, filename: '004_camp_equipment.sql', disableForeignKeys: true },
-    { version: 5, filename: '005_idempotency.sql', disableForeignKeys: false },
-  ];
+  if (
+    [...applied].some((version) => !migrations.some((migration) => migration.version === version))
+  )
+    throw new Error('Database schema is newer than this application; install the newer version.');
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
     const sql = readFileSync(resolve(here, `migrations/${migration.filename}`), 'utf8');

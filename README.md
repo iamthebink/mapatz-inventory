@@ -45,6 +45,20 @@ The browser suite starts a local application server backed by a unique temporary
 
 Item codes begin at 100 and never repeat. Item aliases, names, and codes are searchable; archived records disappear from operating pickers but remain in history. The database prevents event updates or deletion, negative availability, over-return, and archiving records with unresolved equipment.
 
-## Deliberately deferred
+## Desktop installation and camp use
 
-This slice does not import or export spreadsheets, generate reports, automate cloud recovery, track individual serialized instances or opened lots, record operator identity, or infer laptop lock state. The normalized catalog plus append-only event schema is intended to support later import/export, reporting, and backup adapters without replacing the ledger.
+Desktop builds are unsigned. Download the Windows x64 installer or the Mac ZIP matching the laptop (Apple Silicon arm64 or Intel x64). Windows: run the installer, then open Mapatz Inventory. Windows SmartScreen or organizational policy may block unsigned software; use only artifacts supplied by your trusted camp maintainer, and ask that maintainer for assistance if blocked. Mac: extract the ZIP and move Mapatz Inventory to Applications. Gatekeeper may require an explicit approval in System Settings → Privacy & Security; organizational policy can prohibit unsigned applications. There is no paid signing or automatic updater.
+
+The app works offline without Node, Git, Docker, or a terminal. On first launch, choose an admin password (8–256 characters). Closing setup cancels safely; subsequent launches keep the credential and start as an operator. A second launch focuses the existing window. This application supports one local laptop and one database only.
+
+Data lives outside the installation: `%APPDATA%/Mapatz Inventory` on Windows and `~/Library/Application Support/Mapatz Inventory` on Mac. Keep the **entire** directory when upgrading: it includes `inventory.sqlite`, the stable-origin `profile.json`, Chromium recovery storage, `backups/` and `desktop.log`. Never delete the profile to solve a startup failure. With the app completely closed, copy the entire profile to another disk for a recoverable backup. Before pending schema migrations, the app also creates a consistent SQLite backup in `backups/`. A newer database schema blocks an older app safely.
+
+For a manual update, finish or resolve pending operations, quit, back up the whole profile, and replace the application/install the new version. Do not uninstall or delete user data. Native workbook export reports success only after the file has been written; cancelling the save dialog is neutral. Inventory workbook export, reset/recovery import, and borrower spreadsheet import are supported. Pending commands retain their original keys across restart and must be reconciled before new work.
+
+Startup failures offer retry/quit and identify `desktop.log`. Send that log and the application version to your camp maintainer; do not share a database containing personal records casually. Port conflicts require closing the conflicting process rather than changing the saved port, because browser recovery belongs to that origin.
+
+## Desktop build and verification
+
+Use Node 24 LTS for desktop builds (the host Node 26 runtime silently failed during Forge archive extraction). Run `pnpm desktop:package`, `pnpm test:desktop`, and `pnpm desktop:make` on each target platform. Forge stages production dependencies and assets into `desktop-stage` and produces unsigned artifacts in `desktop-stage/out/make`. CI covers Windows x64 and Mac arm64/x64, including installed Windows launch. Releases require explicit workflow dispatch and successful verification on all targets. `MAPATZ_PROFILE` isolates test profiles and `MAPATZ_EXECUTABLE` selects an installed artifact for verification.
+
+Automated results do not replace a supervised rehearsal on the actual Windows camp laptop: test SmartScreen/policy, native save dialogs, Hebrew file paths, display scaling, sleep/resume, offline launch, and a manual update with the full profile preserved. This rehearsal must be reported separately; it has not been performed by adding these workflows.

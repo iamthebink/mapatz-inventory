@@ -7,5 +7,5 @@
     "rootDir": "src",
     "noEmit": false
   },
-  "include": ["src/server/**/*.ts", "src/domain/**/*.ts", "src/db/**/*.ts"]
+  "include": ["src/server/**/*.ts", "src/domain/**/*.ts", "src/db/**/*.ts", "src/desktop/**/*.ts"]
 }

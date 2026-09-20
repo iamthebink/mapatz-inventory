@@ -1,3 +1,4 @@
+import { desktop } from './desktop';
 import type {
   BorrowerImportMode,
   BorrowerImportPreview,
@@ -550,9 +551,13 @@ async function requireSuccess(response: Response): Promise<void> {
   }
 }
 
-export async function downloadInventoryWorkbook(): Promise<void> {
+export async function downloadInventoryWorkbook(): Promise<void | 'cancelled'> {
   const response = await fetch('/api/workbook');
   await requireSuccess(response);
+  if (desktop) {
+    const result = await desktop.saveWorkbook(new Uint8Array(await response.arrayBuffer()));
+    return result === 'cancelled' ? 'cancelled' : undefined;
+  }
   const disposition = response.headers.get('content-disposition') ?? '';
   const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? 'mapatz-inventory.xlsx';
   const url = URL.createObjectURL(await response.blob());

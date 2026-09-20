@@ -13,3 +13,7 @@ node_modules
 .bmad-loop/cache/
 .bmad-loop/policy.toml
 _bmad/render/
+
+desktop-stage/
+out/
+test-results-desktop/
