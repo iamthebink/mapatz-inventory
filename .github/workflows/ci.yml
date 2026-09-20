@@ -63,3 +63,11 @@ jobs:
             desktop-stage/out/make
             test-results-desktop
             playwright-report
+  upgrade:
+    needs: desktop
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows-upgrade.yml
+    with:
+      artifact: desktop-windows-latest
+      ref: ${{ github.sha }}

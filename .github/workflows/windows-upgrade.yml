@@ -1,0 +1,51 @@
+name: Windows installer upgrade
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: upgrade-candidate
+      - name: Download published baseline and verify upgrade
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download 0.1.0 --pattern '*Setup.exe' --dir "$env:RUNNER_TEMP/upgrade-baseline"
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline installer download failed' }
+          $baseline = @(Get-ChildItem "$env:RUNNER_TEMP/upgrade-baseline" -Filter '*Setup.exe' -Recurse)
+          $candidate = @(Get-ChildItem upgrade-candidate -Filter '*Setup.exe' -Recurse)
+          if ($baseline.Count -ne 1 -or $candidate.Count -ne 1) { throw 'Expected exactly one installer per version' }
+          $env:MAPATZ_BASELINE_INSTALLER = $baseline[0].FullName
+          $env:MAPATZ_CANDIDATE_INSTALLER = $candidate[0].FullName
+          pnpm exec playwright test -c playwright.upgrade.config.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer upgrade verification failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-upgrade-evidence
+          path: |
+            test-results-upgrade
+            ~/AppData/Local/SquirrelTemp/SquirrelSetup.log
+            ~/AppData/Local/mapatz_inventory/SquirrelSetup.log
