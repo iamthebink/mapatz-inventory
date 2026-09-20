@@ -179,7 +179,7 @@ test('published Windows installation upgrades in place without losing field stat
       const found: { shortcut: string; target: string; args: string }[] = [];
       for (const folder of folders) {
         for (const name of fs.readdirSync(folder, { recursive: true })) {
-          if (typeof name !== 'string' || !name.endsWith('.lnk')) continue;
+          if (typeof name !== 'string' || !name.endsWith('.lnk') || !/mapatz/i.test(name)) continue;
           const link = shell.readShortcutLink(path.join(folder, name));
           if (!link.target.toLowerCase().startsWith(root.toLowerCase() + path.sep)) continue;
           if (!fs.existsSync(link.target))
@@ -193,6 +193,7 @@ test('published Windows installation upgrades in place without losing field stat
       }
       return found;
     }, installRoot);
+    await checkpoint('candidate-launched', { shortcuts });
     expect(
       shortcuts.length,
       'Installer must retain a working application shortcut',
@@ -260,7 +261,7 @@ try {
   if ($opened.Path -ne $env:MAPATZ_EXPECTED_EXE) { throw "Shortcut opened wrong executable: $($opened.Path)" }
   $opened.Path
   if (!$opened.CloseMainWindow()) { throw 'Could not close shortcut-launched application' }
-  Wait-Process -Id $opened.Id -Timeout 30
+  if (!$opened.WaitForExit(30000)) { throw 'Shortcut-launched application did not exit' }
 } finally {
   Get-Process -Name 'mapatz-inventory' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($env:MAPATZ_INSTALL_ROOT, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
 }
@@ -277,12 +278,25 @@ try {
       },
     );
     await checkpoint('complete', { shortcutExecutable: shortcutResult.stdout.trim() });
+  } catch (error) {
+    await checkpoint('failed', {
+      failedAfter: proof.phase,
+      error: error instanceof Error ? error.stack : String(error),
+    });
+    throw error;
   } finally {
     for (const name of ['desktop.log', 'profile.json']) {
       const data = await readFile(join(profile, name)).catch(() => undefined);
       if (data) await writeFile(test.info().outputPath(name), data);
     }
     if (application) {
+      const child = (() => {
+        try {
+          return application.process();
+        } catch {
+          return undefined;
+        }
+      })();
       const closing = (async () => {
         await saveDiagnostics(application).catch(() => {});
         await finishApplication(application).catch(() => {});
@@ -295,8 +309,7 @@ try {
         }),
       ]);
       clearTimeout(timer);
-      const child = application.process();
-      if (child.exitCode === null && child.signalCode === null)
+      if (child && child.exitCode === null && child.signalCode === null)
         await exec('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 10_000 }).catch(
           () => {},
         );
