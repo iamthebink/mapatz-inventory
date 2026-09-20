@@ -6,6 +6,10 @@ on:
         description: Completed CI run containing the candidate installer
         type: string
         required: true
+      version:
+        description: Candidate version; leave empty for the checkout development version
+        type: string
+        required: false
       artifact:
         description: Candidate artifact name
         type: string
@@ -13,6 +17,10 @@ on:
         required: true
   workflow_call:
     inputs:
+      version:
+        type: string
+        required: false
+        default: ''
       artifact:
         type: string
         required: true
@@ -34,6 +42,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '24', cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Stamp candidate version
+        if: inputs.version != ''
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/desktop-version.mjs stamp "$RELEASE_VERSION"
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact }}

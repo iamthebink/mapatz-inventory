@@ -10,16 +10,42 @@ on:
 permissions:
   contents: write
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: Validate release tag and pin source commit
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          version="$(node scripts/desktop-version.mjs validate-tag "$RELEASE_TAG")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   regression:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '24', cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Stamp release version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/desktop-version.mjs stamp "$RELEASE_VERSION"
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build
       - uses: actions/upload-artifact@v4
@@ -30,6 +56,7 @@ jobs:
             test-results
             playwright-report
   verify:
+    needs: prepare
     strategy:
       matrix:
         os: [windows-latest, macos-15, macos-15-intel]
@@ -37,11 +64,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: '24', cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - name: Stamp release version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/desktop-version.mjs stamp "$RELEASE_VERSION"
       - run: pnpm desktop:package
       - run: pnpm test:desktop
       - run: pnpm desktop:make
@@ -77,18 +109,34 @@ jobs:
           name: diagnostics-${{ matrix.os }}
           path: test-results-desktop
   upgrade:
-    needs: verify
+    needs: [prepare, verify]
     permissions:
       contents: read
       actions: read
     uses: ./.github/workflows/windows-upgrade.yml
     with:
+      version: ${{ needs.prepare.outputs.version }}
       artifact: packages-windows-latest
-      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      ref: ${{ needs.prepare.outputs.commit }}
   publish:
-    needs: [regression, verify, upgrade]
+    needs: [prepare, regression, verify, upgrade]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - name: Verify tag still identifies the tested source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+          actual="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          if [[ "$actual" != "$RELEASE_COMMIT" ]]; then
+            echo 'Release tag moved during verification; refusing to publish' >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with: { path: packages, pattern: 'packages-*', merge-multiple: true }
       - env:

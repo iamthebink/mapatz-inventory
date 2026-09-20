@@ -51,3 +51,7 @@
 - source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-frontdesk-route-alias.md`
   summary: Add production-static-server regression coverage for the `/frontdesk` SPA alias.
   evidence: Browser coverage proves direct entry through the development server, while the production Express catch-all is generic and unchanged; testing its built-index response cleanly still requires the previously identified static-root fixture seam.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-tag-derived-release-version.md`
+  summary: Suppress setup navigation errors caused by an intentional quit during early desktop startup.
+  evidence: A version-only probe requested app.quit before setup.html completed loading; its isolated desktop.log records quit then ERR_FAILED and a blocking failure dialog. Normal setup/relaunch tests pass. The precise early-quit sequence should become a regression test before adjusting lifecycle handling.
