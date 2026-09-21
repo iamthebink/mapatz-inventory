@@ -512,6 +512,13 @@ export const BorrowerWorkflow = forwardRef<
       }));
   }, [itemSearch, operation]);
 
+  const quantityItem =
+    quantity && operation
+      ? operation.snapshot.inventory.find((item) => item.id === quantity.itemId)
+      : undefined;
+  if (quantity && operation && !quantityItem)
+    throw new Error(`Quantity dialog item ${quantity.itemId} is missing from operation inventory`);
+
   const submitQuantity = (event: FormEvent) => {
     event.preventDefault();
     if (!operation || !quantity) return;
@@ -1353,7 +1360,7 @@ export const BorrowerWorkflow = forwardRef<
         </Dialog>
       )}
 
-      {quantity && operation && (
+      {quantity && operation && quantityItem && (
         <Dialog
           title={
             quantity.direction === 'borrow'
@@ -1363,6 +1370,11 @@ export const BorrowerWorkflow = forwardRef<
                 : quantity.condition === 'lost'
                   ? 'החזרת ציוד אבוד'
                   : 'החזרה פגומה'
+          }
+          description={
+            <>
+              פריט: <bdi>{quantityItem.name}</bdi>
+            </>
           }
           level="subordinate"
           role="dialog"

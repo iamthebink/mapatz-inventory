@@ -403,7 +403,7 @@ export function Dialog({
   showClose = true,
 }: {
   title: string;
-  description?: string;
+  description?: ReactNode;
   level: DialogLevel;
   role: DialogRole;
   variant: DialogVariant;

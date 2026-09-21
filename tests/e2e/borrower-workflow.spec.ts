@@ -38,6 +38,7 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   await itemSearch.press('ArrowDown');
   await itemSearch.press('Enter');
   const dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
+  await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
   await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(quantity);
@@ -45,7 +46,7 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(1);
 }
 
-async function stageReturn(page: Page, usable = '1', damaged = '0') {
+async function stageReturn(page: Page, itemName: string, usable = '1', damaged = '0') {
   const holdings = page.getByRole('heading', { name: /ציוד באחריות השואל/ }).locator('..');
   if (Number(usable) > 0) {
     await holdings
@@ -53,6 +54,7 @@ async function stageReturn(page: Page, usable = '1', damaged = '0') {
       .filter({ hasText: /^תקין$/ })
       .click();
     const dialog = page.getByRole('dialog', { name: 'החזרה תקינה' });
+    await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
     await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(usable);
     await dialog.getByRole('button', { name: 'אישור' }).click();
   }
@@ -62,6 +64,7 @@ async function stageReturn(page: Page, usable = '1', damaged = '0') {
       .filter({ hasText: /^פגום$/ })
       .click();
     const dialog = page.getByRole('dialog', { name: 'החזרה פגומה' });
+    await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
     await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(damaged);
     await dialog.getByRole('button', { name: 'אישור' }).click();
   }
@@ -139,7 +142,7 @@ test('commits a mixed Save-and-Close exactly once with deterministic ledger orde
 }) => {
   const borrowerSearch = await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.item.name);
-  await stageReturn(page, '1', '1');
+  await stageReturn(page, seed.item.name, '1', '1');
 
   const staged = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   await expect(staged.getByText('השאלה')).toBeVisible();
@@ -191,7 +194,7 @@ test('keeps an incremental save open and supports another operation after author
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await expect(itemSearch).toBeFocused();
-  await stageReturn(page);
+  await stageReturn(page, seed.item.name);
   await page.getByRole('button', { name: 'שמירה', exact: true }).click();
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
 
@@ -322,7 +325,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.stockItem.name, '3');
-  await stageReturn(page, '2');
+  await stageReturn(page, seed.item.name, '2');
   await stageBorrow(page, seed.archiveItem.name);
   let frozenRequest: { key: string; body: unknown } | undefined;
   page.on('request', (outgoing) => {
@@ -764,6 +767,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await expect(lost).toBeEnabled();
   await lost.click();
   const creditDialog = page.getByRole('dialog', { name: 'החזרת ציוד אבוד' });
+  await expect(creditDialog).toHaveAccessibleDescription(`פריט: ${seed.item.name}`);
   await creditDialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
   await creditDialog.getByRole('button', { name: 'אישור' }).click();
   await page.getByRole('button', { name: 'שמירה', exact: true }).click();

@@ -55,6 +55,16 @@ async function activateBorrowerAction(key: 'Enter' | ' ' = 'Enter') {
   await userEvent.keyboard(key === 'Enter' ? '{Enter}' : ' ');
 }
 
+function expectDialogItem(dialog: HTMLElement, itemName: string) {
+  const descriptionId = dialog.getAttribute('aria-describedby');
+  expect(descriptionId).toBeTruthy();
+  const description = document.getElementById(descriptionId!);
+  expect(description).toBeTruthy();
+  expect(dialog.contains(description)).toBe(true);
+  expect(description?.textContent).toBe(`פריט: ${itemName}`);
+  expect(description?.querySelector('bdi')?.textContent).toBe(itemName);
+}
+
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
   return {
@@ -208,11 +218,18 @@ describe('borrower desk workflow', () => {
     const lost = screen.getByRole('button', { name: 'אבוד' });
     expect((lost as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(lost);
-    expect(screen.getByRole('dialog', { name: 'החזרת ציוד אבוד' })).toBeTruthy();
-    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('spinbutton', { name: 'כמות' })),
-    );
+    const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד אבוד' });
+    expectDialogItem(dialog, item.name);
+    const quantityInput = screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement;
+    expect(quantityInput.value).toBe('2');
+    await waitFor(() => expect(document.activeElement).toBe(quantityInput));
+    await userEvent.clear(quantityInput);
+    await userEvent.type(quantityInput, '0');
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('alert').textContent).toContain('בין 1 ל־2');
+    expectDialogItem(dialog, item.name);
+    await userEvent.clear(quantityInput);
+    await userEvent.type(quantityInput, '2');
     await userEvent.keyboard('{Enter}');
 
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
@@ -246,10 +263,12 @@ describe('borrower desk workflow', () => {
     await activateBorrowerAction();
 
     await userEvent.click(await screen.findByRole('button', { name: 'תקין' }));
+    expectDialogItem(screen.getByRole('dialog', { name: 'החזרה תקינה' }), item.name);
     expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
     await userEvent.click(screen.getByRole('button', { name: 'ביטול' }));
 
     await userEvent.click(screen.getByRole('button', { name: 'פגום' }));
+    expectDialogItem(screen.getByRole('dialog', { name: 'החזרה פגומה' }), item.name);
     expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('1');
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
@@ -408,7 +427,20 @@ describe('borrower desk workflow', () => {
     expect(within(catalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
     expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
-    expect(await screen.findByRole('dialog', { name: 'הוספת השאלה' })).toBeTruthy();
+    let dialog = await screen.findByRole('dialog', { name: 'הוספת השאלה' });
+    expectDialogItem(dialog, item.name);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'ביטול' }));
+
+    await userEvent.click(itemSearch);
+    await userEvent.type(itemSearch, 'canopy');
+    await userEvent.click(screen.getByRole('option', { name: /צילייה/ }));
+    dialog = await screen.findByRole('dialog', { name: 'הוספת השאלה' });
+    expectDialogItem(dialog, secondItem.name);
+    expect(within(dialog).queryByText(`פריט: ${item.name}`)).toBeNull();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+    expect(
+      within(screen.getByRole('region', { name: 'פעולות ממתינות' })).getByText('צילייה'),
+    ).toBeTruthy();
   });
 
   it('loads authoritative search, separates archived matches, stages opposing directions, and persists before save transport', async () => {
