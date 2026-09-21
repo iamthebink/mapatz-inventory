@@ -1,5 +1,6 @@
 import type { BorrowerImportRow } from '../contracts/borrower-import.js';
 import { normalizeBorrowerText } from '../domain/inventory.js';
+import { normalizeItemName } from '../domain/item-name.js';
 import ExcelJS, { type CellValue, type Worksheet } from 'exceljs';
 import {
   consumablesUsageReport,
@@ -285,6 +286,7 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
   }
   const rawItems = dataRows(itemSheet, 8);
   const usedCodes = new Set<number>();
+  const usedNames = new Set<string>();
   const blankCodeRows: number[] = [];
   const items: Array<Omit<ResetItem, 'code'> & { code?: number }> = [];
   rawItems.forEach((row, index) => {
@@ -311,9 +313,13 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
     const lotSize = optionalInteger(row[5], `Reset Items row ${rowNumber} Lot Size`, 1);
     if (kind !== 'consumable' && lotSize != null)
       return importError(`Reset Items row ${rowNumber} Lot Size is only valid for consumables`);
+    const name = requiredText(row[1], `Reset Items row ${rowNumber} Name`);
+    const nameKey = normalizeItemName(name);
+    if (usedNames.has(nameKey)) return importError(`Reset Items contains duplicate Name "${name}"`);
+    usedNames.add(nameKey);
     items.push({
       ...(suppliedCode == null ? {} : { code: suppliedCode }),
-      name: requiredText(row[1], `Reset Items row ${rowNumber} Name`),
+      name,
       kind,
       location,
       aliases: aliases(row[4], `Reset Items row ${rowNumber} Aliases`),

@@ -471,6 +471,41 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
+  it('returns a specific conflict for duplicate item creation and rename', async () => {
+    const { db, inventory, agent } = fixture();
+    const original = inventory.createItem({ name: 'Tent', kind: 'non_consumable' });
+    inventory.archiveItem(original.id, true);
+    const other = inventory.createItem({ name: 'Lantern', kind: 'non_consumable' });
+    const nextCodeBeforeConflict = db
+      .prepare('SELECT next_code FROM code_sequence WHERE singleton=1')
+      .get();
+    await role(agent, 'admin', 'admin-pass');
+
+    await agent
+      .post('/api/items')
+      .send({ name: '  tEnT  ', kind: 'consumable' })
+      .expect(409)
+      .expect(({ body }) =>
+        expect(body).toEqual({
+          error: 'duplicate_item_name',
+          message: 'כבר קיים פריט בשם הזה',
+        }),
+      );
+    expect(db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get()).toEqual(
+      nextCodeBeforeConflict,
+    );
+
+    await agent
+      .put(`/api/items/${other.id}`)
+      .send({ name: 'TENT' })
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toBe('duplicate_item_name'));
+    expect(inventory.listItems('', true).find((item) => item.id === other.id)?.name).toBe(
+      'Lantern',
+    );
+    db.close();
+  });
+
   it('preserves history while hiding archived records and rejects archive with outstanding equipment', async () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' });

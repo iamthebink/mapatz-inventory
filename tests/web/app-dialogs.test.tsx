@@ -371,6 +371,40 @@ describe('App dialog workflows', () => {
     expect(api.requests.some((request) => request.path === '/api/items')).toBe(true);
   });
 
+  it('reports duplicate item creation through the error Toast without success feedback', async () => {
+    const api = installApiMock({ failPath: '/api/items' });
+    const user = await renderReadyApp();
+    await openManagement(user, 'פריטים ומיקומים');
+
+    const form = screen.getByText('פריט חדש').closest('form')!;
+    await user.type(within(form).getByLabelText('שם'), 'פטיש');
+    await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+
+    const toast = await screen.findByRole('alert', { name: /הוספת פריט חדש/ });
+    expect(toast.textContent).toContain('השרת דחה את הפעולה');
+    expect(toast.className).toContain('toast-error');
+    expect(toast.textContent).not.toContain('הפעולה הושלמה בהצלחה');
+    expect(api.requests.filter((request) => request.path === '/api/items')).toHaveLength(1);
+  });
+
+  it('keeps item editing open when a duplicate-name conflict is Toasted', async () => {
+    installApiMock({ failPath: '/api/items/11' });
+    const user = await renderReadyApp();
+    await openManagement(user, 'פריטים ומיקומים');
+
+    const itemSection = screen.getByRole('heading', { name: 'קטלוג פריטים' }).closest('section')!;
+    await user.click(within(itemSection).getByRole('button', { name: 'עריכה' }));
+    const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+    await user.clear(within(dialog).getByLabelText('שם פריט'));
+    await user.type(within(dialog).getByLabelText('שם פריט'), 'שם כפול');
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+
+    const toast = await screen.findByRole('alert', { name: /עריכת פריט/ });
+    expect(toast.textContent).toContain('השרת דחה את הפעולה');
+    expect(screen.getByRole('dialog', { name: 'עריכת פריט' })).toBe(dialog);
+    expect((within(dialog).getByLabelText('שם פריט') as HTMLInputElement).value).toBe('שם כפול');
+  });
+
   it('keeps only admin-gated lost controls with outstanding equipment in Management stock', async () => {
     const api = installApiMock();
     const user = await renderReadyApp();

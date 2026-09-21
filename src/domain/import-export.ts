@@ -1,5 +1,6 @@
 import type { InventoryDatabase } from '../db/database.js';
 import { transaction } from '../db/database.js';
+import { normalizeItemName } from './item-name.js';
 import { DomainError, type BorrowerType, type EventKind, type ItemKind } from './types.js';
 
 type Row = Record<string, unknown>;
@@ -177,10 +178,14 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   }
 
   const items = new Map<number, RecoveryItem>();
+  const itemNames = new Map<string, RecoveryItem>();
   const states = new Map<number, RecoveryItemState>();
   for (const item of payload.items) {
     if (items.has(item.code))
       invalidWorkbook(`Recovery Items contains duplicate Item Code ${item.code}`);
+    const nameKey = normalizeItemName(item.name);
+    if (itemNames.has(nameKey))
+      invalidWorkbook(`Recovery Items contains duplicate Name "${item.name}"`);
     if (item.location != null && !locations.has(item.location.toLocaleLowerCase()))
       invalidWorkbook(`Recovery item ${item.code} references unknown Location "${item.location}"`);
     if (item.kind !== 'consumable' && item.lotSize != null)
@@ -188,6 +193,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     if (item.startingStock < 0)
       invalidWorkbook(`Recovery item ${item.code} Starting Stock must be nonnegative`);
     items.set(item.code, item);
+    itemNames.set(nameKey, item);
     states.set(item.code, {
       available: 0,
       damaged: 0,

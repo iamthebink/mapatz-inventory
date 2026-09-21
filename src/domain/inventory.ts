@@ -7,6 +7,7 @@ import type {
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
+import { normalizeItemName } from './item-name.js';
 import type {
   BorrowerDeskSnapshot,
   BorrowerCreateRequest,
@@ -255,6 +256,8 @@ export class InventoryService {
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (input.lotSize != null) integer(input.lotSize, 'lotSize');
     return transaction(this.db, () => {
+      const name = input.name.trim();
+      this.requireUniqueItemName(name);
       const code = Number(
         (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
           .next_code,
@@ -262,7 +265,7 @@ export class InventoryService {
       this.db.prepare('UPDATE code_sequence SET next_code=next_code+1 WHERE singleton=1').run();
       const result = this.db
         .prepare('INSERT INTO items(code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
-        .run(code, input.name.trim(), input.kind, input.lotSize ?? null, input.locationId ?? null);
+        .run(code, name, input.kind, input.lotSize ?? null, input.locationId ?? null);
       const id = Number(result.lastInsertRowid);
       this.setAliases(id, input.aliases ?? []);
       this.db
@@ -290,12 +293,22 @@ export class InventoryService {
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (lotSize != null) integer(lotSize, 'lotSize');
     return transaction(this.db, () => {
+      const name = input.name.trim();
+      this.requireUniqueItemName(name, id);
       this.db
         .prepare('UPDATE items SET name=?,lot_size=?,location_id=? WHERE id=?')
-        .run(input.name.trim(), lotSize, locationId, id);
+        .run(name, lotSize, locationId, id);
       if (input.aliases !== undefined) this.setAliases(id, input.aliases);
       return this.getItem(id);
     });
+  }
+
+  private requireUniqueItemName(name: string, excludedItemId?: number): void {
+    const key = normalizeItemName(name);
+    const duplicate = (this.db.prepare('SELECT id,name FROM items').all() as Row[]).some(
+      (item) => Number(item.id) !== excludedItemId && normalizeItemName(String(item.name)) === key,
+    );
+    if (duplicate) throw new DomainError('duplicate_item_name', 'כבר קיים פריט בשם הזה', 409);
   }
 
   archiveItem(id: number, archived: boolean): void {

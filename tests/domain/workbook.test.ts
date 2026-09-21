@@ -290,6 +290,11 @@ describe('inventory XLSX workbook', () => {
       [8, 'One', 'consumable', '', '', '', '', 1],
       [8, 'Two', 'consumable', '', '', '', '', 1],
     ],
+    [
+      'duplicate names',
+      [8, 'Duplicate', 'consumable', '', '', '', '', 1],
+      [9, ' duplicate ', 'non_consumable', '', '', '', '', 1],
+    ],
     ['blank total', [8, 'One', 'consumable', '', '', '', '', ''], null],
     ['invalid explicit archive', [8, 'One', 'consumable', '', '', '', 'maybe', 1], null],
     ['unknown location', [8, 'One', 'consumable', 'Missing', '', '', '', 1], null],
@@ -303,6 +308,24 @@ describe('inventory XLSX workbook', () => {
     await expect(parseResetWorkbook(await save(workbook))).rejects.toMatchObject({
       code: 'invalid_workbook',
     });
+  });
+
+  it('rejects case-insensitive duplicate item names in recovery workbooks', async () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    inventory.createItem({ name: 'Récovery item', kind: 'consumable' });
+    const workbook = await load(await exportWorkbook(new InventoryTransferService(db).snapshot()));
+    const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!;
+    const duplicate = [...(items.getRow(2).values as unknown[])];
+    duplicate[1] = 101;
+    duplicate[2] = ' RE\u0301COVERY ITEM ';
+    items.addRow(duplicate.slice(1));
+
+    await expect(parseRecoveryWorkbook(await save(workbook))).rejects.toMatchObject({
+      code: 'invalid_workbook',
+      message: expect.stringContaining('duplicate Name'),
+    });
+    db.close();
   });
 
   it('rejects missing sheets and altered column contracts with legible errors', async () => {

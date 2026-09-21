@@ -90,7 +90,7 @@ describe('inventory domain', () => {
     legacy.close();
 
     const migrated = openDatabase(filename);
-    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 6 });
+    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 7 });
     expect(migrated.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(migrated.prepare('SELECT code,name,kind,location_id FROM items').all()).toEqual([
       { code: 100, name: 'Existing', kind: 'non_consumable', location_id: locationId },
@@ -129,7 +129,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(6);
+    ).toBe(7);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);
@@ -137,6 +137,51 @@ describe('inventory domain', () => {
       /immutable/,
     );
     expect(() => db.prepare('DELETE FROM inventory_events WHERE id=1').run()).toThrow(/immutable/);
+    db.close();
+  });
+
+  it('keeps item names unique across create, update, archive state, and direct writes', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const original = inventory.createItem({
+      name: 'TÉNT',
+      kind: 'non_consumable',
+      aliases: ['Shelter'],
+    });
+    inventory.archiveItem(original.id, true);
+    const nextCodeBeforeConflict = db
+      .prepare('SELECT next_code FROM code_sequence WHERE singleton=1')
+      .get();
+
+    expect(() => inventory.createItem({ name: '\t  tént\n', kind: 'consumable' })).toThrow(
+      expect.objectContaining({ code: 'duplicate_item_name', status: 409 }),
+    );
+    expect(db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get()).toEqual(
+      nextCodeBeforeConflict,
+    );
+
+    const other = inventory.createItem({ name: 'Lantern', kind: 'non_consumable' });
+    expect(() =>
+      inventory.updateItem(other.id, {
+        name: 'TE\u0301NT',
+        aliases: ['Changed only on success'],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'duplicate_item_name', status: 409 }));
+    expect(inventory.listItems('', true).find((item) => item.id === other.id)).toMatchObject({
+      name: 'Lantern',
+      aliases: [],
+    });
+
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO items(code,name,kind) VALUES (999,char(9) || 'tént' || char(10),'non_consumable')",
+        )
+        .run(),
+    ).toThrow(/UNIQUE/);
+    expect(() => db.prepare("UPDATE items SET name='TÉNT' WHERE id=?").run(other.id)).toThrow(
+      /UNIQUE/,
+    );
     db.close();
   });
 

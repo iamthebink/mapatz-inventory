@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeItemName } from '../domain/item-name.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -12,6 +13,7 @@ export const migrations = [
   { version: 4, filename: '004_camp_equipment.sql', disableForeignKeys: true },
   { version: 5, filename: '005_idempotency.sql', disableForeignKeys: false },
   { version: 6, filename: '006_found_returned.sql', disableForeignKeys: true },
+  { version: 7, filename: '007_unique_item_names.sql', disableForeignKeys: false },
 ];
 
 export type InventoryDatabase = DatabaseSync;
@@ -30,6 +32,9 @@ export function openDatabase(filename: string): InventoryDatabase {
 }
 
 export function migrate(db: InventoryDatabase): void {
+  db.function('normalize_item_name', { deterministic: true }, (value) =>
+    normalizeItemName(String(value)),
+  );
   db.exec(`CREATE TABLE IF NOT EXISTS migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
