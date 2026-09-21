@@ -1372,9 +1372,12 @@ export const BorrowerWorkflow = forwardRef<
                   : 'החזרה פגומה'
           }
           description={
-            <>
-              פריט: <bdi>{quantityItem.name}</bdi>
-            </>
+            <span className="quantity-dialog-item">
+              <span className="quantity-dialog-item-label">פריט: </span>
+              <strong className="quantity-dialog-item-name">
+                <bdi>{quantityItem.name}</bdi>
+              </strong>
+            </span>
           }
           level="subordinate"
           role="dialog"

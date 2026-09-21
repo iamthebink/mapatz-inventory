@@ -31,6 +31,33 @@ async function openSeededCard(page: Page, username: string) {
   return search;
 }
 
+async function expectQuantityDialogItem(dialog: Locator, itemName: string) {
+  await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
+  const callout = dialog.locator('.quantity-dialog-item');
+  const name = callout.locator('.quantity-dialog-item-name');
+  await expect(callout).toBeVisible();
+  await expect(name).toHaveText(itemName);
+}
+
+async function expectEmphasizedQuantityDialogItem(dialog: Locator, itemName: string) {
+  await expectQuantityDialogItem(dialog, itemName);
+  const callout = dialog.locator('.quantity-dialog-item');
+  const name = callout.locator('.quantity-dialog-item-name');
+  await expect(name).toHaveCSS('font-size', '24px');
+  await expect(name).toHaveCSS('font-weight', '700');
+  const presentation = await callout.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderWidth: Number.parseFloat(style.borderTopWidth),
+      padding: Number.parseFloat(style.paddingTop),
+    };
+  });
+  expect(presentation.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+  expect(presentation.borderWidth).toBeGreaterThanOrEqual(1);
+  expect(presentation.padding).toBeGreaterThanOrEqual(12);
+}
+
 async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await itemSearch.fill(itemName);
@@ -38,7 +65,7 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   await itemSearch.press('ArrowDown');
   await itemSearch.press('Enter');
   const dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
-  await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
+  await expectQuantityDialogItem(dialog, itemName);
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
   await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(quantity);
@@ -54,7 +81,7 @@ async function stageReturn(page: Page, itemName: string, usable = '1', damaged =
       .filter({ hasText: /^תקין$/ })
       .click();
     const dialog = page.getByRole('dialog', { name: 'החזרה תקינה' });
-    await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
+    await expectQuantityDialogItem(dialog, itemName);
     await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(usable);
     await dialog.getByRole('button', { name: 'אישור' }).click();
   }
@@ -64,7 +91,7 @@ async function stageReturn(page: Page, itemName: string, usable = '1', damaged =
       .filter({ hasText: /^פגום$/ })
       .click();
     const dialog = page.getByRole('dialog', { name: 'החזרה פגומה' });
-    await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
+    await expectQuantityDialogItem(dialog, itemName);
     await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(damaged);
     await dialog.getByRole('button', { name: 'אישור' }).click();
   }
@@ -133,6 +160,48 @@ test('browses, filters, and opens the responsive borrower directory without dial
   await create.click();
   const createDialog = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   await expect(createDialog.getByText('מעבר למסך אחר')).toHaveCount(0);
+});
+
+test('keeps an emphasized maximum-length item identity legible at minimum width', async ({
+  page,
+  request,
+  seed,
+}) => {
+  const longItemName =
+    `${seed.item.code} פריט VeryLongUnbrokenEquipmentIdentifierABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789`.slice(
+      0,
+      100,
+    );
+  await request.post('/api/session/role', {
+    data: { role: 'admin', password: 'e2e-admin-password' },
+  });
+  const created = await request.post('/api/items', {
+    data: { name: longItemName, kind: 'non_consumable' },
+  });
+  expect(created.ok()).toBe(true);
+  const createdItem = (await created.json()) as { id: number };
+  const stocked = await request.post('/api/stock/add', {
+    data: { itemId: createdItem.id, quantity: 1, note: '' },
+  });
+  expect(stocked.ok()).toBe(true);
+
+  await page.setViewportSize({ width: 320, height: 720 });
+  await openSeededCard(page, seed.borrower.username);
+  const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
+  await itemSearch.fill(longItemName);
+  await itemSearch.press('ArrowDown');
+  await itemSearch.press('Enter');
+
+  const dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
+  await expectEmphasizedQuantityDialogItem(dialog, longItemName);
+  await expect(dialog.getByRole('button', { name: 'אישור' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'ביטול' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const [dialogBox, calloutBox] = await Promise.all([
+    dialog.boundingBox(),
+    dialog.locator('.quantity-dialog-item').boundingBox(),
+  ]);
+  expect(calloutBox!.width / dialogBox!.width).toBeGreaterThan(0.8);
 });
 
 test('commits a mixed Save-and-Close exactly once with deterministic ledger order', async ({
@@ -767,7 +836,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await expect(lost).toBeEnabled();
   await lost.click();
   const creditDialog = page.getByRole('dialog', { name: 'החזרת ציוד אבוד' });
-  await expect(creditDialog).toHaveAccessibleDescription(`פריט: ${seed.item.name}`);
+  await expectQuantityDialogItem(creditDialog, seed.item.name);
   await creditDialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
   await creditDialog.getByRole('button', { name: 'אישור' }).click();
   await page.getByRole('button', { name: 'שמירה', exact: true }).click();

@@ -350,6 +350,19 @@
   .dialog-description {
     @apply mt-1 pe-10 text-sm leading-6 text-ctp-subtext;
   }
+  .dialog-description:has(> .quantity-dialog-item) {
+    @apply pe-0;
+  }
+  .quantity-dialog-item {
+    @apply mt-3 grid min-w-0 gap-0.5 rounded-xl border border-ctp-lavender/30 bg-ctp-lavender/10 px-4 py-3 text-ctp-text;
+  }
+  .quantity-dialog-item-label {
+    @apply text-sm font-semibold text-ctp-subtext;
+  }
+  .quantity-dialog-item-name {
+    @apply min-w-0 text-2xl font-bold leading-tight text-ctp-text;
+    overflow-wrap: anywhere;
+  }
   .dialog-heading-icon {
     @apply mt-4 grid size-11 place-items-center rounded-2xl bg-ctp-lavender/10 text-ctp-lavender;
   }

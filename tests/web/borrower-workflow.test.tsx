@@ -62,7 +62,10 @@ function expectDialogItem(dialog: HTMLElement, itemName: string) {
   expect(description).toBeTruthy();
   expect(dialog.contains(description)).toBe(true);
   expect(description?.textContent).toBe(`פריט: ${itemName}`);
-  expect(description?.querySelector('bdi')?.textContent).toBe(itemName);
+  const callout = description?.querySelector('.quantity-dialog-item');
+  expect(callout).toBeTruthy();
+  expect(callout?.querySelector('.quantity-dialog-item-label')?.textContent).toBe('פריט: ');
+  expect(callout?.querySelector('.quantity-dialog-item-name bdi')?.textContent).toBe(itemName);
 }
 
 function memoryStorage(): Storage {
