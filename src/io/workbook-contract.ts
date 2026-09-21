@@ -1,5 +1,5 @@
 export const WORKBOOK_CONTRACT = {
-  version: 1,
+  version: 2,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   filename: 'mapatz-inventory.xlsx',
   sheets: {

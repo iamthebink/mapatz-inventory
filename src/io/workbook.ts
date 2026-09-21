@@ -340,7 +340,7 @@ const eventKinds = new Set<EventKind>([
   'returned_usable',
   'returned_damaged',
   'marked_lost',
-  'unmarked_lost',
+  'found_returned',
   'repaired',
   'written_off',
 ]);

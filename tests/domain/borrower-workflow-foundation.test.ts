@@ -1,3 +1,4 @@
+import { foundReturned } from '../helpers/found-returned.js';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
@@ -102,7 +103,7 @@ describe('borrower workflow persistence foundation', () => {
     migrate(db);
 
     expect(db.prepare('SELECT version FROM migrations ORDER BY version').all()).toEqual(
-      [1, 2, 3, 4, 5].map((version) => ({ version })),
+      [1, 2, 3, 4, 5, 6].map((version) => ({ version })),
     );
     expect(
       db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),
@@ -447,7 +448,7 @@ describe('borrower workflow persistence foundation', () => {
     const firstCheckout = inventory.checkout(first.id, borrower.id, 5);
     inventory.returnCheckout(firstCheckout, 1, 1);
     inventory.markLost(firstCheckout, 2, true);
-    inventory.markLost(firstCheckout, 1, false);
+    foundReturned(inventory, firstCheckout, 1);
     const secondFirstCheckout = inventory.checkout(first.id, borrower.id, 3);
     inventory.returnCheckout(secondFirstCheckout, 1, 0);
     inventory.markLost(secondFirstCheckout, 1, true);
@@ -470,7 +471,7 @@ describe('borrower workflow persistence foundation', () => {
       { code: returned.code, kind: 'non_consumable', selectable: true },
     ]);
     expect(snapshot.holdings).toEqual([
-      { itemId: first.id, returnable: 3, lost: 2 },
+      { itemId: first.id, returnable: 2, lost: 2 },
       { itemId: lostOnly.id, returnable: 0, lost: 2 },
     ]);
     expect(snapshot.inventory.find((item) => item.id === first.id)).toMatchObject({ damaged: 1 });
@@ -525,6 +526,74 @@ describe('borrower workflow persistence foundation', () => {
     ).toThrow(expect.objectContaining({ code: 'internal_error' }));
     expect(inventory.listItems('', true)).toEqual([expect.objectContaining({ available: 2 })]);
     expect(db.isTransaction).toBe(false);
+    db.close();
+  });
+});
+
+describe('found-returned migration', () => {
+  it('rejects ambiguous legacy history transactionally and preserves schema and ledger', () => {
+    const db = versionFourDatabase();
+    applyMigration(db, 5, '005_idempotency.sql');
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'Legacy', kind: 'non_consumable' });
+    const borrower = inventory.createBorrower({
+      username: 'legacy',
+      name: 'Legacy',
+      type: 'other',
+    });
+    inventory.addStock(item.id, 2);
+    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    inventory.markLost(checkout, 1, true);
+    db.prepare(
+      "INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,related_event_id) VALUES ('unmarked_lost',?,?,1,?)",
+    ).run(item.id, borrower.id, checkout);
+    const before = db.prepare('SELECT * FROM inventory_events').all();
+    const schema = db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all();
+    expect(() => migrate(db)).toThrow(/legacy unmarked_lost history is ambiguous/);
+    expect(db.prepare('SELECT * FROM inventory_events').all()).toEqual(before);
+    expect(db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all()).toEqual(
+      schema,
+    );
+    expect(db.isTransaction).toBe(false);
+    expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+    expect(() => db.exec('UPDATE inventory_events SET quantity=2')).toThrow(/immutable/);
+    db.close();
+  });
+
+  it('upgrades valid history with all indexes, references and immutability intact', () => {
+    const db = versionFourDatabase();
+    applyMigration(db, 5, '005_idempotency.sql');
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'Valid', kind: 'non_consumable' });
+    const borrower = inventory.createBorrower({ username: 'valid', name: 'Valid', type: 'other' });
+    inventory.addStock(item.id, 2);
+    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    inventory.markLost(checkout, 1, true);
+    const before = inventory.listLedger();
+    const indexes = db
+      .prepare(
+        "SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='inventory_events' ORDER BY name",
+      )
+      .all();
+    migrate(db);
+    expect(inventory.listLedger()).toEqual(before);
+    expect(
+      db
+        .prepare(
+          "SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='inventory_events' ORDER BY name",
+        )
+        .all(),
+    ).toEqual(indexes);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    foundReturned(inventory, checkout, 1);
+    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 1, lost: 0 });
+    expect(() => db.exec('UPDATE inventory_events SET quantity=2')).toThrow(/immutable/);
+    expect(() => db.exec('DELETE FROM inventory_events')).toThrow(/immutable/);
+    expect(() =>
+      db
+        .prepare("INSERT INTO inventory_events(kind,item_id,quantity) VALUES ('unmarked_lost',?,1)")
+        .run(item.id),
+    ).toThrow(/CHECK/);
     db.close();
   });
 });

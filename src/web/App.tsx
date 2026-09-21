@@ -107,7 +107,7 @@ const eventNames: Record<string, string> = {
   returned_usable: 'החזרה תקינה',
   returned_damaged: 'החזרה פגומה',
   marked_lost: 'סומן כאבוד',
-  unmarked_lost: 'בוטל אובדן',
+  found_returned: 'נמצא והוחזר',
   repaired: 'תיקון',
   written_off: 'גריעה',
 };
@@ -508,7 +508,7 @@ export function App() {
     let succeeded = false;
     switch (submission.kind) {
       case 'lost':
-        succeeded = await action(submission.lost ? 'סימון ציוד כאבוד' : 'ביטול סימון אובדן', () =>
+        succeeded = await action('סימון ציוד כאבוד', () =>
           api('/lost', {
             method: 'POST',
             body: JSON.stringify({
@@ -659,20 +659,9 @@ export function App() {
           <SmallButton
             icon={TriangleAlert}
             disabled={pending || !adminActionsEnabled || loan.outstanding < 1}
-            onClick={() =>
-              openInventoryDialog({ kind: 'lost', loan, lost: true }, managementTabRef.current)
-            }
+            onClick={() => openInventoryDialog({ kind: 'lost', loan }, managementTabRef.current)}
           >
             סמן אבוד
-          </SmallButton>
-          <SmallButton
-            icon={RotateCcw}
-            disabled={pending || !adminActionsEnabled || loan.lost < 1}
-            onClick={() =>
-              openInventoryDialog({ kind: 'lost', loan, lost: false }, managementTabRef.current)
-            }
-          >
-            בטל אובדן
           </SmallButton>
         </div>
       ),

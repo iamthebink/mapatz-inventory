@@ -1,3 +1,4 @@
+import { foundReturned } from '../helpers/found-returned.js';
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/db/database.js';
@@ -159,6 +160,7 @@ describe('inventory XLSX workbook', () => {
     const checkout = inventory.checkout(tent.id, borrower.id, 5, 'loan');
     inventory.markLost(checkout, 1, true, 'lost');
     inventory.returnCheckout(checkout, 0, 1, 'damaged');
+    foundReturned(inventory, checkout, 1);
     db.prepare(
       `INSERT INTO idempotency_receipts(
         key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
@@ -191,6 +193,7 @@ describe('inventory XLSX workbook', () => {
       'checked_out',
       'marked_lost',
       'returned_damaged',
+      'found_returned',
     ]);
 
     const workbook = await load(await exportWorkbook(snapshot));

@@ -384,15 +384,11 @@ describe('App dialog workflows', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.getByText('סימון ציוד כאבוד')).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: 'בטל אובדן' }));
-    await user.click(screen.getByRole('button', { name: 'שמירה' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(screen.getByText('ביטול סימון אובדן')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'בטל אובדן' })).toBeNull();
 
     const lostRequests = api.requests.filter((request) => request.path === '/api/lost');
     expect(lostRequests.map(bodyOf)).toEqual([
       { checkoutId: 41, quantity: 2, lost: true, note: '' },
-      { checkoutId: 41, quantity: 1, lost: false, note: '' },
     ]);
 
     api.expireAdmin();

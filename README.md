@@ -38,8 +38,8 @@ The browser suite starts a local application server backed by a unique temporary
 
 ## Roles and operating model
 
-- Non-admin users can immediately create borrowers, issue consumables, and use the borrower desk to borrow non-consumables or record usable and damaged returns without a password. The borrower desk is the single borrowing and return path.
-- Admins can additionally manage catalogs and the admin password, receive stock, archive inactive records, resolve damage, and mark or unmark lost equipment.
+- Non-admin users can immediately create borrowers, issue consumables, and use the borrower desk to borrow non-consumables or record usable and damaged returns or found-and-returned lost equipment without a password. The borrower desk is the single borrowing and return path.
+- Admins can additionally manage catalogs and the admin password, receive stock, archive inactive records, resolve damage, and mark outstanding equipment lost.
 - Admin privileges return to non-admin after ten idle minutes. The UI warns during the last ten seconds, while the server independently enforces the deadline. Non-admin access does not expire.
 - The admin password is an accidental-action barrier for a trusted operating environment, not a security boundary against malicious local or network access.
 
@@ -74,3 +74,20 @@ CI and release publication require a real Windows installer upgrade from the che
 Once the workflow is on the default branch, for test-harness debugging manually dispatch **Windows installer upgrade** with the completed CI run ID and its Windows artifact name. Supply the candidate version for a tag-stamped installer; leave it empty for a development build. This reuses the installer and does not publish a release. The normal release gate always uses its own verified artifact.
 
 The dedicated `playwright.upgrade.config.ts` suite is restricted to clean GitHub-hosted Windows runners because it installs software and uses the normal Windows profile. The ordinary `test:desktop` suite excludes it.
+
+## Lost equipment and recovery workbook contract
+
+Lost equipment becomes available only through the borrower desk’s found-and-returned operation. Direct restoration to outstanding is rejected by both the domain and `POST /api/lost` (`lost` must be `true`). The operator command retains its `lostCredit` parts and allocates them to lost checkouts in creation-time / event-ID order within one atomic save.
+
+| Event              | Outstanding |      Lost | Available |   Damaged |
+| ------------------ | ----------: | --------: | --------: | --------: |
+| `marked_lost`      |   −quantity | +quantity |         0 |         0 |
+| `returned_usable`  |   −quantity |         0 | +quantity |         0 |
+| `returned_damaged` |   −quantity |         0 |         0 | +quantity |
+| `found_returned`   |           0 | −quantity | +quantity |         0 |
+
+Workbook contract version 2 is a source-contract revision; no embedded workbook version field is currently written or read. Import validates the event vocabulary, which uses `stock_added`, `stock_removed`, `issued`, `checked_out`, `returned_usable`, `returned_damaged`, `marked_lost`, `found_returned`, `repaired`, and `written_off`. Recovery events preserve their checkout reference, borrower, quantity, note, and timestamp. Found returns require a matching checkout with sufficient previously recorded lost quantity. Recovery rejects invalid relationships, excess recovery, and `unmarked_lost`; older exports have no compatibility adapter.
+
+Migration 006 preserves valid existing history, foreign keys, ledger indexes, and immutability guards. A database containing `unmarked_lost` is blocked transactionally because its history cannot be classified safely. Preserve that database and its backup; explicitly reconcile the history with the operator before upgrading, or point `DATA_DIR` at a separate fresh development directory. Never delete a developer database or infer a conversion from adjacent rows, dates, notes, or quantities.
+
+Reports select ordinary returns with `kind IN ('returned_usable','returned_damaged')`, and found returns with `kind = 'found_returned'`. For example, a checkout of 5 followed by a loss of 2, an ordinary usable return of 1, a damaged return of 1, and a found return of 1 produces ordinary-return total 2 and found-return total 1. Outstanding stays at 1, lost is 1, and the two usable return categories add 2 to available stock. No event-neighbor heuristics are needed. This contract does not implement the planned סיכום view.

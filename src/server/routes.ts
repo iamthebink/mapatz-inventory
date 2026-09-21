@@ -551,7 +551,7 @@ export function apiRouter(
         z.object({
           checkoutId: positive,
           quantity: positive,
-          lost: z.boolean(),
+          lost: z.literal(true),
           note: z.string().max(500).optional(),
         }),
         req.body,

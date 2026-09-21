@@ -36,14 +36,14 @@ export type Loan = {
 export type Location = { id: number; code: string; name: string; archived: boolean };
 
 export type ActiveDialog =
-  | { kind: 'lost'; loan: Loan; lost: boolean }
+  | { kind: 'lost'; loan: Loan }
   | { kind: 'edit-item'; item: Item }
   | { kind: 'edit-borrower'; borrower: Borrower }
   | { kind: 'edit-location'; location: Location }
   | { kind: 'import'; mode: 'reset' | 'recovery'; file: File };
 
 export type DialogSubmission =
-  | { kind: 'lost'; checkoutId: number; quantity: number; lost: boolean; note: string }
+  | { kind: 'lost'; checkoutId: number; quantity: number; lost: true; note: string }
   | {
       kind: 'edit-item';
       itemId: number;
@@ -152,13 +152,13 @@ function LostDialog({
   onSubmit,
   returnFocusRef,
   fallbackFocusRef,
-}: DialogProps<{ kind: 'lost'; loan: Loan; lost: boolean }>) {
+}: DialogProps<{ kind: 'lost'; loan: Loan }>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState('');
-  const maximum = active.lost ? active.loan.outstanding : active.loan.lost;
+  const maximum = active.loan.outstanding;
   return (
     <FormDialog
-      title={active.lost ? 'סימון ציוד כאבוד' : 'ביטול סימון אובדן'}
+      title="סימון ציוד כאבוד"
       description={`${active.loan.itemName} · ${active.loan.borrowerName}`}
       pending={pending}
       onClose={onClose}
@@ -180,7 +180,7 @@ function LostDialog({
           kind: 'lost',
           checkoutId: active.loan.checkoutId,
           quantity,
-          lost: active.lost,
+          lost: true,
           note: value(form, 'note'),
         });
       }}

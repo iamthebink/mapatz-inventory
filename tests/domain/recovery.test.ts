@@ -1,3 +1,4 @@
+import { foundReturned } from '../helpers/found-returned.js';
 import ExcelJS from 'exceljs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -167,7 +168,7 @@ describe('complete inventory recovery', () => {
     const water = destinationInventory.listItems(String(source.waterCode), true)[0]!;
     destinationInventory.issue(water.id, 1, 'future issue');
     const loan = destinationInventory.listLoans().find((entry) => entry.code === source.tentCode)!;
-    destinationInventory.markLost(loan.checkoutId, 1, false, 'found');
+    foundReturned(destinationInventory, loan.checkoutId, 1);
     const restoredLoan = destinationInventory
       .listLoans()
       .find((entry) => entry.checkoutId === loan.checkoutId)!;
@@ -271,4 +272,62 @@ describe('complete inventory recovery', () => {
     source.db.close();
     destination.close();
   });
+});
+
+it('round-trips mixed ordinary and found returns and rejects malformed recoveries atomically', async () => {
+  const source = sourceFixture();
+  const loan = source.inventory.listLoans()[0]!;
+  source.inventory.returnCheckout(loan.checkoutId, 1, 0, 'ordinary');
+  foundReturned(source.inventory, loan.checkoutId, 1, 'found separately');
+  const snapshot = source.transfers.snapshot();
+  const bytes = await exportWorkbook(snapshot);
+  const payload = await parseRecoveryWorkbook(bytes);
+  const destination = database('mixed-found-returned');
+  const transfers = new InventoryTransferService(destination);
+  transfers.replaceWithRecovery(payload);
+  expect(transfers.snapshot()).toEqual(snapshot);
+  const totals = destination
+    .prepare(
+      "SELECT kind,SUM(quantity) quantity FROM inventory_events WHERE kind IN ('returned_usable','returned_damaged','found_returned') GROUP BY kind ORDER BY kind",
+    )
+    .all();
+  expect(totals).toEqual([
+    { kind: 'found_returned', quantity: 1 },
+    { kind: 'returned_damaged', quantity: 1 },
+    { kind: 'returned_usable', quantity: 1 },
+  ]);
+  expect(new InventoryService(destination).listLoans()[0]).toMatchObject({
+    outstanding: 1,
+    lost: 0,
+  });
+  const before = transfers.snapshot();
+  const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
+  for (const changes of [
+    { relatedEventId: null },
+    { relatedEventId: 999999 },
+    { relatedEventId: payload.events[0]!.id },
+    { borrowerUsername: 'retired' },
+    { itemCode: source.waterCode },
+    { quantity: 2 },
+    { kind: 'unmarked_lost' },
+  ]) {
+    const malformed = structuredClone(payload);
+    Object.assign(
+      malformed.events.find((event) => event.kind === 'found_returned')!,
+      changes,
+    );
+    expect(() => transfers.replaceWithRecovery(malformed)).toThrow();
+    expect(transfers.snapshot()).toEqual(before);
+    expect(
+      destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual(epoch);
+  }
+  const legacy = await workbook(bytes);
+  const events = legacy.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
+  events.eachRow((row) => {
+    if (row.getCell(2).value === 'found_returned') row.getCell(2).value = 'unmarked_lost';
+  });
+  await expect(parseRecoveryWorkbook(await save(legacy))).rejects.toThrow(/unsupported Kind/);
+  source.db.close();
+  destination.close();
 });

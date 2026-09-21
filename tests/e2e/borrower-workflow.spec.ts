@@ -672,7 +672,7 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await expect(borrowerSearch).toBeFocused();
 });
 
-test('marks and unmarks lost equipment through real admin authorization and closes on auth loss', async ({
+test('marks lost equipment without offering restoration through real admin authorization and closes on auth loss', async ({
   page,
   seed,
   openLedger,
@@ -693,27 +693,20 @@ test('marks and unmarks lost equipment through real admin authorization and clos
   await expect(markLost).toBeEnabled();
   await markLost.click();
   let lostDialog = page.getByRole('dialog', { name: 'סימון ציוד כאבוד' });
+  await lostDialog.locator('input[name="quantity"]').fill('1');
   await lostDialog.getByRole('button', { name: 'שמירה' }).click();
   await expect(lostDialog).toBeHidden();
 
-  const unmarkLost = loanRow.getByRole('button', { name: 'בטל אובדן' });
-  await expect(unmarkLost).toBeEnabled();
-  await unmarkLost.click();
-  lostDialog = page.getByRole('dialog', { name: 'ביטול סימון אובדן' });
-  await lostDialog.getByRole('button', { name: 'שמירה' }).click();
-  await expect(lostDialog).toBeHidden();
+  await expect(loanRow.getByRole('button', { name: 'בטל אובדן' })).toHaveCount(0);
 
   const database = openLedger();
   expect(
     rows<{ kind: string; quantity: number }>(
       database,
-      "SELECT kind,quantity FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','unmarked_lost') ORDER BY id",
+      "SELECT kind,quantity FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','found_returned') ORDER BY id",
       seed.checkoutId,
     ),
-  ).toEqual([
-    { kind: 'marked_lost', quantity: 2 },
-    { kind: 'unmarked_lost', quantity: 2 },
-  ]);
+  ).toEqual([{ kind: 'marked_lost', quantity: 1 }]);
 
   await markLost.click();
   lostDialog = page.getByRole('dialog', { name: 'סימון ציוד כאבוד' });
@@ -730,10 +723,10 @@ test('marks and unmarks lost equipment through real admin authorization and clos
   expect(
     rows<{ count: number }>(
       database,
-      "SELECT COUNT(*) count FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','unmarked_lost')",
+      "SELECT COUNT(*) count FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','found_returned')",
       seed.checkoutId,
     )[0]!.count,
-  ).toBe(2);
+  ).toBe(1);
 });
 
 test('operator credits a previously lost unit back to usable inventory', async ({
@@ -785,14 +778,13 @@ test('operator credits a previously lost unit back to usable inventory', async (
     ),
   ).toEqual([
     { kind: 'marked_lost', quantity: 2 },
-    { kind: 'unmarked_lost', quantity: 1 },
-    { kind: 'returned_usable', quantity: 1 },
+    { kind: 'found_returned', quantity: 1 },
   ]);
   expect(
     rows<{ available: number }>(
       database,
       `SELECT SUM(CASE kind
-        WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity
+        WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity
         WHEN 'checked_out' THEN -quantity ELSE 0 END) available
        FROM inventory_events WHERE item_id=?`,
       seed.item.id,

@@ -31,6 +31,28 @@ describe('field-scale sample workbook', () => {
     expect(payload.items).toHaveLength(72);
     expect(payload.borrowers).toHaveLength(12);
     expect(payload.events).toHaveLength(221);
+    // Three deliberately authored histories each return one outstanding and recover one lost unit.
+    for (const [checkout, recovered, ordinary] of [
+      [135, 137, 138],
+      [167, 169, 170],
+      [199, 201, 202],
+    ]) {
+      expect(payload.events.find((event) => event.id === recovered)).toMatchObject({
+        kind: 'found_returned',
+        quantity: 1,
+        relatedEventId: checkout,
+      });
+      expect(payload.events.find((event) => event.id === ordinary)).toMatchObject({
+        kind: 'returned_usable',
+        quantity: 1,
+        relatedEventId: checkout,
+      });
+    }
+    expect(
+      payload.events
+        .filter((event) => event.kind === 'found_returned')
+        .reduce((sum, event) => sum + event.quantity, 0),
+    ).toBe(3);
 
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
@@ -49,7 +71,7 @@ describe('field-scale sample workbook', () => {
         'returned_usable',
         'returned_damaged',
         'marked_lost',
-        'unmarked_lost',
+        'found_returned',
         'repaired',
         'written_off',
       ]),

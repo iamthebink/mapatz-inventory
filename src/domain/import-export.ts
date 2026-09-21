@@ -269,7 +269,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       event.kind === 'returned_usable' ||
       event.kind === 'returned_damaged' ||
       event.kind === 'marked_lost' ||
-      event.kind === 'unmarked_lost'
+      event.kind === 'found_returned'
     ) {
       if (event.relatedEventId == null)
         invalidWorkbook(`Recovery event ${event.id} requires a related checkout`);
@@ -284,10 +284,12 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       )
         invalidWorkbook(`Recovery event ${event.id} does not match its checkout item and borrower`);
       const outstanding = checkout.quantity - checkout.returned - checkout.lost;
-      if (event.kind === 'unmarked_lost') {
+      if (event.kind === 'found_returned') {
         if (event.quantity > checkout.lost)
-          invalidWorkbook(`Recovery event ${event.id} unmarks more lost stock than exists`);
+          invalidWorkbook(`Recovery event ${event.id} recovers more lost stock than exists`);
         checkout.lost -= event.quantity;
+        checkout.returned += event.quantity;
+        state.available += event.quantity;
       } else if (event.kind === 'marked_lost') {
         if (event.quantity > outstanding)
           invalidWorkbook(`Recovery event ${event.id} marks more stock lost than is outstanding`);
@@ -300,6 +302,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
         else state.damaged += event.quantity;
       }
     } else {
+      if (event.kind !== 'repaired' && event.kind !== 'written_off')
+        invalidWorkbook(`Recovery event ${event.id} has unsupported Kind "${event.kind}"`);
       if (event.borrowerUsername != null || event.relatedEventId != null)
         invalidWorkbook(`Recovery damage event ${event.id} cannot reference a borrower or event`);
       if (event.quantity > state.damaged)
@@ -346,7 +350,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
 }
 
 const availableEffect = `CASE kind
-  WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'repaired' THEN quantity
+  WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity WHEN 'repaired' THEN quantity
   WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
 const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
 
@@ -375,10 +379,10 @@ export class InventoryTransferService {
           COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
           COALESCE((SELECT SUM(e.quantity-COALESCE((SELECT SUM(CASE x.kind
             WHEN 'returned_usable' THEN x.quantity WHEN 'returned_damaged' THEN x.quantity
-            WHEN 'marked_lost' THEN x.quantity WHEN 'unmarked_lost' THEN -x.quantity ELSE 0 END)
+            WHEN 'marked_lost' THEN x.quantity ELSE 0 END)
           FROM inventory_events x WHERE x.related_event_id=e.id),0))
           FROM inventory_events e WHERE e.item_id=i.id AND e.kind='checked_out'),0) outstanding,
-          COALESCE((SELECT SUM(CASE e.kind WHEN 'marked_lost' THEN e.quantity WHEN 'unmarked_lost' THEN -e.quantity ELSE 0 END)
+          COALESCE((SELECT SUM(CASE e.kind WHEN 'marked_lost' THEN e.quantity WHEN 'found_returned' THEN -e.quantity ELSE 0 END)
           FROM inventory_events e WHERE e.item_id=i.id),0) lost
           FROM items i LEFT JOIN locations l ON l.id=i.location_id
           LEFT JOIN inventory_baselines b ON b.item_id=i.id ORDER BY i.code`,

@@ -11,6 +11,7 @@ export const migrations = [
   { version: 3, filename: '003_admin_only_credentials.sql', disableForeignKeys: false },
   { version: 4, filename: '004_camp_equipment.sql', disableForeignKeys: true },
   { version: 5, filename: '005_idempotency.sql', disableForeignKeys: false },
+  { version: 6, filename: '006_found_returned.sql', disableForeignKeys: true },
 ];
 
 export type InventoryDatabase = DatabaseSync;
@@ -48,6 +49,13 @@ export function migrate(db: InventoryDatabase): void {
     if (migration.disableForeignKeys) db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN IMMEDIATE');
     try {
+      if (
+        migration.version === 6 &&
+        db.prepare("SELECT 1 FROM inventory_events WHERE kind='unmarked_lost' LIMIT 1").get()
+      )
+        throw new Error(
+          'Migration 006 blocked: legacy unmarked_lost history is ambiguous. Preserve this database and explicitly reconcile its history with an operator before upgrading, or use a separate fresh database. No history was changed.',
+        );
       db.exec(sql);
       if (migration.disableForeignKeys) {
         const violations = db.prepare('PRAGMA foreign_key_check').all();

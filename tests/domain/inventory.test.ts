@@ -1,3 +1,4 @@
+import { foundReturned } from '../helpers/found-returned.js';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
@@ -89,7 +90,7 @@ describe('inventory domain', () => {
     legacy.close();
 
     const migrated = openDatabase(filename);
-    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 5 });
+    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 6 });
     expect(migrated.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(migrated.prepare('SELECT code,name,kind,location_id FROM items').all()).toEqual([
       { code: 100, name: 'Existing', kind: 'non_consumable', location_id: locationId },
@@ -128,7 +129,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(5);
+    ).toBe(6);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);
@@ -206,17 +207,65 @@ describe('inventory domain', () => {
     const checkoutId = inventory.checkout(item.id, borrower.id, 3);
     inventory.markLost(checkoutId, 1, true);
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
-    expect(() => inventory.markLost(checkoutId, 2, false)).toThrow(
-      expect.objectContaining({ code: 'excessive_quantity' }),
+    const beforeRestoration = inventory.listLedger();
+    expect(() => inventory.markLost(checkoutId, 2, false as unknown as true)).toThrow(
+      expect.objectContaining({ code: 'unsupported_restoration' }),
     );
-    inventory.markLost(checkoutId, 1, false);
-    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 3, lost: 0 });
-    inventory.returnCheckout(checkoutId, 1, 2);
+    expect(inventory.listLedger()).toEqual(beforeRestoration);
+    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
+    foundReturned(inventory, checkoutId, 1);
+    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 0 });
+    inventory.returnCheckout(checkoutId, 0, 2);
     expect(inventory.listItems('מסור')[0]).toMatchObject({ available: 1, damaged: 2 });
     inventory.resolveDamage(item.id, 1, true);
     inventory.resolveDamage(item.id, 1, false);
     expect(inventory.listItems('מסור')[0]).toMatchObject({ available: 2, damaged: 0 });
-    expect(inventory.listLedger()).toHaveLength(8);
+    expect(inventory.listLedger()).toHaveLength(7);
+    db.close();
+  });
+
+  it('blocks archival through partial recovery and permits it after all equipment is settled', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'Archival lifecycle', kind: 'non_consumable' });
+    const borrower = inventory.createBorrower({
+      username: 'archive-lifecycle',
+      name: 'Archive lifecycle',
+      type: 'other',
+    });
+    inventory.addStock(item.id, 4);
+    const checkout = inventory.checkout(item.id, borrower.id, 4);
+    inventory.markLost(checkout, 2, true);
+    foundReturned(inventory, checkout, 1);
+    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
+    const expectArchivalBlocked = () => {
+      expect(() => inventory.archiveItem(item.id, true)).toThrow(
+        expect.objectContaining({ code: 'active_loan' }),
+      );
+      expect(() => inventory.archiveBorrower(borrower.id, true)).toThrow(
+        expect.objectContaining({ code: 'active_loan' }),
+      );
+      expect(db.prepare('SELECT archived FROM items WHERE id=?').get(item.id)).toEqual({
+        archived: 0,
+      });
+      expect(db.prepare('SELECT archived FROM borrowers WHERE id=?').get(borrower.id)).toEqual({
+        archived: 0,
+      });
+    };
+    expectArchivalBlocked();
+    inventory.returnCheckout(checkout, 2, 0);
+    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 0, lost: 1 });
+    expectArchivalBlocked();
+    foundReturned(inventory, checkout, 1);
+    expect(inventory.listLoans()).toEqual([]);
+    inventory.archiveItem(item.id, true);
+    inventory.archiveBorrower(borrower.id, true);
+    expect(db.prepare('SELECT archived FROM items WHERE id=?').get(item.id)).toEqual({
+      archived: 1,
+    });
+    expect(db.prepare('SELECT archived FROM borrowers WHERE id=?').get(borrower.id)).toEqual({
+      archived: 1,
+    });
     db.close();
   });
 

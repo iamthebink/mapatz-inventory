@@ -1,3 +1,4 @@
+import { foundReturned } from '../helpers/found-returned.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase, type InventoryDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
@@ -188,19 +189,19 @@ describe('atomic borrower imports', () => {
       returned: 3,
     });
   });
-  it('requires reactivation before reversing an archived imported borrower loss', async () => {
+  it('requires reactivation before recovering an archived imported borrower loss', async () => {
     const { db, service, removed, removedLoan } = fixture();
     const rows = [row('retained')];
     const preview = service.previewBorrowerImport(rows, 'replace');
     service.importBorrowers(rows, 'replace', preview.confirmationToken);
     const before = service.listLedger();
-    expect(() => service.markLost(removedLoan, 1, false)).toThrow('reactivate');
+    expect(() => foundReturned(service, removedLoan, 1)).toThrow('inactive');
     expect(service.listLedger()).toEqual(before);
     service.archiveBorrower(removed.id, false);
-    service.markLost(removedLoan, 1, false);
+    foundReturned(service, removedLoan, 1);
     expect(service.listLoans()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ checkoutId: removedLoan, outstanding: 1, lost: 1 }),
+        expect.objectContaining({ checkoutId: removedLoan, outstanding: 0, lost: 1 }),
       ]),
     );
     const transfers = new InventoryTransferService(db);

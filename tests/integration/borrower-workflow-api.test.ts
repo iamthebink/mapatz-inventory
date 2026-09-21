@@ -50,6 +50,18 @@ describe('borrower workflow snapshot API', () => {
     expect(
       db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='marked_lost'").get(),
     ).toEqual({ count: 1 });
+    expect(
+      db
+        .prepare(
+          'SELECT kind,quantity,related_event_id,note FROM inventory_events WHERE id>? ORDER BY id',
+        )
+        .all(checkoutId),
+    ).toEqual([
+      { kind: 'marked_lost', quantity: 1, related_event_id: checkoutId, note: '' },
+      { kind: 'found_returned', quantity: 1, related_event_id: checkoutId, note: 'found' },
+    ]);
+    expect(inventory.listItems().find((entry) => entry.id === item.id)!.available).toBe(1);
+    expect(inventory.listLoans()).toEqual([]);
 
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)

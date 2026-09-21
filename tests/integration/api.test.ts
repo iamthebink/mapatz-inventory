@@ -313,7 +313,7 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
-  it('restricts lost/unlost to admins and rejects excessive lifecycle quantities', async () => {
+  it('restricts marking lost to admins and rejects restoration and excessive quantities', async () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'גנרטור', kind: 'non_consumable' });
     inventory.addStock(item.id, 1);
@@ -323,8 +323,10 @@ describe('inventory API permission and edge-case matrix', () => {
     await role(agent, 'admin', 'admin-pass');
     await agent.post('/api/lost').send({ checkoutId, quantity: 2, lost: true }).expect(400);
     await agent.post('/api/lost').send({ checkoutId, quantity: 1, lost: true }).expect(201);
-    await agent.post('/api/lost').send({ checkoutId, quantity: 1, lost: false }).expect(201);
-    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 1, lost: 0 });
+    const beforeRestoration = inventory.listLedger();
+    await agent.post('/api/lost').send({ checkoutId, quantity: 1, lost: false }).expect(400);
+    expect(inventory.listLedger()).toEqual(beforeRestoration);
+    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 0, lost: 1 });
     db.close();
   });
 
