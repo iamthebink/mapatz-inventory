@@ -554,16 +554,20 @@ export const BorrowerWorkflow = forwardRef<
               .toLocaleLowerCase()
               .includes(query)),
       )
-      .map((item) => ({
-        id: `item-option-${item.id}`,
-        value: item,
-        label: (
-          <>
-            <bdi dir="ltr">{item.code}</bdi> — {item.name}
-          </>
-        ),
-        description: `זמין: ${item.available}`,
-      }));
+      .map((item) => {
+        const available = projectItem(operation, item.id)?.projectedAvailability ?? 0;
+        return {
+          id: `item-option-${item.id}`,
+          value: item,
+          label: (
+            <>
+              <bdi dir="ltr">{item.code}</bdi> — {item.name}
+            </>
+          ),
+          description: `זמין: ${available}`,
+          disabled: available <= 0,
+        };
+      });
   }, [itemSearch, operation]);
 
   const quantityItem =
@@ -585,6 +589,12 @@ export const BorrowerWorkflow = forwardRef<
       const amount = Number(quantity.quantity);
       if (!Number.isSafeInteger(amount) || amount < 1) {
         setQuantity({ ...quantity, error: 'יש להזין כמות חיובית ושלמה' });
+        queueMicrotask(() => quantityErrorRef.current?.focus());
+        return;
+      }
+      const available = projectItem(operation, quantity.itemId)?.projectedAvailability;
+      if (available == null || amount > available) {
+        setQuantity({ ...quantity, error: `ניתן להשאיל עד ${available ?? 0} יחידות` });
         queueMicrotask(() => quantityErrorRef.current?.focus());
         return;
       }
@@ -1496,7 +1506,7 @@ export const BorrowerWorkflow = forwardRef<
                     ? quantity.condition === 'found'
                       ? projectItem(operation, quantity.itemId)?.lostNow
                       : projectItem(operation, quantity.itemId)?.returnableNow
-                    : undefined
+                    : (projectItem(operation, quantity.itemId)?.projectedAvailability ?? undefined)
                 }
                 aria-invalid={Boolean(quantity.error)}
                 value={quantity.quantity}
