@@ -307,6 +307,8 @@ test('stages loss and dependent found return from the borrower card with keyboar
   await expect(lostTable.getByRole('columnheader', { name: 'אבוד' })).toBeVisible();
   const lostRow = lostTable.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await expect(lostRow.getByRole('cell').first()).toHaveText('2');
+  await expect(lostRow.getByRole('rowheader')).toHaveCSS('vertical-align', 'middle');
+  await expect(lostRow.getByRole('cell').first()).toHaveCSS('vertical-align', 'middle');
   await page.getByRole('button', { name: 'נמצא והוחזר' }).click();
   const foundDialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
   await expectQuantityDialogItem(foundDialog, seed.item.name);
@@ -1242,6 +1244,8 @@ test('retires legacy presentation while preserving gated lost controls and respo
   await expect(holdingsTable.getByRole('columnheader', { name: 'אצל השואל' })).toBeVisible();
   const heldRow = holdingsTable.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await expect(heldRow.getByRole('cell').first()).toHaveText('3');
+  await expect(heldRow.getByRole('rowheader')).toHaveCSS('vertical-align', 'middle');
+  await expect(heldRow.getByRole('cell').first()).toHaveCSS('vertical-align', 'middle');
   const quantityPadding = await heldRow
     .getByRole('cell')
     .first()

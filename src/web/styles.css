@@ -577,6 +577,10 @@
     font-variant-numeric: tabular-nums;
     unicode-bidi: isolate;
   }
+  .borrower-equipment-table th,
+  .borrower-equipment-table td {
+    vertical-align: middle;
+  }
   .borrower-equipment-table thead th:first-child {
     width: 31%;
   }
