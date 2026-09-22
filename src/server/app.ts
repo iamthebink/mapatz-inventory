@@ -15,6 +15,7 @@ export interface AppOptions {
   adminIdleMs?: number;
   serveWeb?: boolean;
   accessToken?: string;
+  desktopRecovery?: boolean;
 }
 
 export function createApp(options: AppOptions): Express {
@@ -33,6 +34,8 @@ export function createApp(options: AppOptions): Express {
     options.adminPassword,
     options.now,
     options.adminIdleMs,
+    undefined,
+    options.desktopRecovery === true && Boolean(options.accessToken),
   );
   const service = new InventoryService(options.database);
   const transfers = new InventoryTransferService(options.database);
@@ -57,7 +60,12 @@ export function createApp(options: AppOptions): Express {
       res.locals.session = session;
       next();
     },
-    apiRouter(service, transfers, sessions),
+    apiRouter(
+      service,
+      transfers,
+      sessions,
+      options.desktopRecovery === true && Boolean(options.accessToken),
+    ),
     (_req, res) => {
       res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
     },

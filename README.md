@@ -13,7 +13,7 @@ docker run --rm -p 3000:3000 \
   -v "$(pwd)/data:/data" mapatz-inventory
 ```
 
-Open `http://localhost:3000`. The application requires no internet connection at runtime. The admin password is used only to initialize a missing credential and is persisted as a salted scrypt hash; admins can replace it from the management screen. An existing persisted credential is not overwritten on restart.
+Open `http://localhost:3000`. The application requires no internet connection at runtime. In browser/Docker mode, the admin password is persisted only as a salted scrypt hash; admins can replace it from the management screen. In the desktop app, the exact password is also stored locally to support the deliberate password recovery ritual. An existing persisted credential is not overwritten on restart.
 
 ## Develop and verify
 
@@ -32,7 +32,7 @@ pnpm build
 
 Run `pnpm dev` separately when you want the local development server and Vite watcher.
 
-Development data defaults to `./data/inventory.sqlite`. A fresh database requires an explicit, non-empty `ADMIN_PASSWORD`; startup fails with a clear error if it is absent. Once its salted hash exists, later restarts use the persisted credential and ignore a changed or absent bootstrap environment value. Set `DATA_DIR` and `PORT` as needed; `.env.example` lists all environment keys without shipping a known password.
+Development data defaults to `./data/inventory.sqlite`. A fresh database requires an explicit, non-empty `ADMIN_PASSWORD`; startup fails with a clear error if it is absent. Once its credential exists, later restarts use the persisted credential and ignore a changed or absent bootstrap environment value. Set `DATA_DIR` and `PORT` as needed; `.env.example` lists all environment keys without shipping a known password.
 
 The browser suite starts a local application server backed by a unique temporary SQLite database, seeds its own deterministic records, and removes that database when it exits. It does not use or mutate `./data` and requires no network access after Chromium is installed.
 
@@ -50,6 +50,8 @@ Item codes begin at 100 and never repeat. Item aliases, names, and codes are sea
 Desktop builds are unsigned. Download the Windows x64 installer or the Mac ZIP matching the laptop (Apple Silicon arm64 or Intel x64). Windows: run the installer, then open Mapatz Inventory. Windows SmartScreen or organizational policy may block unsigned software; use only artifacts supplied by your trusted camp maintainer, and ask that maintainer for assistance if blocked. Mac: extract the ZIP and move Mapatz Inventory to Applications. Gatekeeper may require an explicit approval in System Settings → Privacy & Security; organizational policy can prohibit unsigned applications. There is no paid signing or automatic updater.
 
 The app works offline without Node, Git, Docker, or a terminal. On first launch, choose an admin password (8–256 characters). Closing setup cancels safely; subsequent launches keep the credential and start as an operator. A second launch focuses the existing window. This application supports one local laptop and one database only.
+
+If the desktop admin password is forgotten, choose `שכחתי את סיסמת המנהל` in the admin sign-in dialog. The fixed recovery ritual takes at least twenty seconds and then displays the current password. This local recovery path is unavailable in browser/Docker mode. Treat the desktop profile and its backups as containing the recoverable password; the password remains an accidental-action barrier, not protection from someone with access to the machine. Profiles created before this feature gain the new database column on upgrade, but their existing password cannot be reconstructed from its hash. Recovery becomes available after that password is changed in the new build.
 
 Data lives outside the installation: `%APPDATA%/Mapatz Inventory` on Windows and `~/Library/Application Support/Mapatz Inventory` on Mac. Keep the **entire** directory when upgrading: it includes `inventory.sqlite`, the stable-origin `profile.json`, Chromium recovery storage, `backups/` and `desktop.log`. Never delete the profile to solve a startup failure. With the app completely closed, copy the entire profile to another disk for a recoverable backup. Before pending schema migrations, the app also creates a consistent SQLite backup in `backups/`. A newer database schema blocks an older app safely.
 

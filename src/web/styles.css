@@ -392,6 +392,27 @@
   .dialog-actions .danger-button {
     @apply flex-1;
   }
+  .admin-recovery-link,
+  .admin-recovery-exit {
+    @apply mt-4 min-h-11 text-sm font-medium text-ctp-subtext underline underline-offset-4 hover:text-ctp-text;
+  }
+  .admin-recovery {
+    @apply mt-5 grid min-w-0 gap-4 text-sm leading-7;
+  }
+  .admin-recovery-progress {
+    @apply text-ctp-subtext;
+  }
+  .admin-recovery-timer {
+    @apply rounded-xl bg-ctp-base px-4 py-3 font-semibold text-ctp-text;
+  }
+  .admin-recovery-actions {
+    @apply grid gap-2 sm:grid-cols-2;
+  }
+  .admin-recovery-password {
+    @apply block min-w-0 rounded-xl border border-ctp-lavender/30 bg-ctp-base px-4 py-4 font-mono text-lg font-bold text-ctp-text;
+    unicode-bidi: isolate;
+    overflow-wrap: anywhere;
+  }
   .dialog-form-error {
     @apply mt-4 rounded-xl border border-ctp-red/20 bg-ctp-red/5 px-3 py-2 text-sm text-ctp-red;
   }

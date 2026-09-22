@@ -112,6 +112,28 @@ async function freshApp() {
   return { application, page, profile, launch, executablePath };
 }
 
+test('packaged desktop recovery reveals the current password after the full ritual', async () => {
+  test.setTimeout(90_000);
+  const context = await freshApp();
+  try {
+    await context.page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
+    await context.page.getByRole('button', { name: 'שכחתי את סיסמת המנהל' }).click();
+    for (const name of ['כן, עשיתי את זה', 'להמשיך בהשפלה', 'זה אני, לעזאזל', 'יאללה, תראה לי']) {
+      await context.page.getByRole('button', { name }).click();
+    }
+    await expect(context.page.locator('output.admin-recovery-password')).toHaveText(
+      'camp-password-123',
+    );
+    await context.page.locator('.admin-recovery').getByRole('button', { name: 'סגירה' }).click();
+    await expect(context.page.getByRole('alertdialog')).toContainText('הסיסמה תוסתר');
+    await context.page.getByRole('button', { name: 'יציאה' }).click();
+    await expect(context.page.getByRole('dialog')).toHaveCount(0);
+  } finally {
+    await finishApplication(context.application);
+    await cleanupProfile(context.profile);
+  }
+});
+
 test('lost response survives replacement, replays once, and retains credential and origin', async () => {
   const context = await freshApp();
   let application = context.application;

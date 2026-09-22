@@ -2,15 +2,105 @@
 
 import { createRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from '../../src/web/AdminMode';
-import { formatAdminCountdown } from '../../src/web/admin-mode';
+import {
+  AdminModeControl,
+  AdminModeStatus,
+  AdminPasswordDialog,
+  AdminRecoveryDialog,
+} from '../../src/web/AdminMode';
+import { formatAdminCountdown, recoveryRemainingMs } from '../../src/web/admin-mode';
 import { DialogStackProvider } from '../../src/web/Dialog';
 
 afterEach(() => cleanup());
 
 describe('admin mode presentation', () => {
+  it('requires each five-second gate and the full twenty seconds, with mercy adding time', () => {
+    expect(recoveryRemainingMs(0, 19_000, 4_999, 0)).toBe(1);
+    expect(recoveryRemainingMs(1, 19_000, 5_000, 0)).toBe(0);
+    expect(recoveryRemainingMs(3, 19_000, 5_000, 0)).toBe(1_000);
+    expect(recoveryRemainingMs(3, 20_000, 5_000, 8_000)).toBe(8_000);
+  });
+
+  it('confirms exit neutrally and keeps the current stage when continuing', async () => {
+    const onClose = vi.fn();
+    render(
+      <DialogStackProvider>
+        <AdminRecoveryDialog
+          returnFocusRef={createRef<HTMLButtonElement>()}
+          onClose={onClose}
+          onError={() => undefined}
+        />
+      </DialogStackProvider>,
+    );
+    expect(screen.getByText('שלב 1 מתוך 4')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('ההתקדמות תאבד');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+    fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+    expect(screen.getByText('שלב 1 מתוך 4')).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'יציאה מהשחזור' })),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('runs the fixed gates, makes mercy longer, and renders the exact password as text', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ password: '<secret&value>' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    try {
+      render(
+        <DialogStackProvider>
+          <AdminRecoveryDialog
+            returnFocusRef={createRef<HTMLButtonElement>()}
+            onClose={() => undefined}
+            onError={() => undefined}
+          />
+        </DialogStackProvider>,
+      );
+      expect(screen.getByRole('button', { name: 'כן, עשיתי את זה' }).hasAttribute('disabled')).toBe(
+        true,
+      );
+      await act(async () => vi.advanceTimersByTime(5_000));
+      fireEvent.click(screen.getByRole('button', { name: 'כן, עשיתי את זה' }));
+      expect(screen.getByText('שלב 2 מתוך 4')).toBeTruthy();
+      expect(document.activeElement?.classList.contains('admin-recovery')).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'רחמים, נמאס לי' }));
+      expect(screen.getByText(/״רחמים״ זה שם של מדף ריק/)).toBeTruthy();
+      await act(async () => vi.advanceTimersByTime(8_000));
+      fireEvent.click(screen.getByRole('button', { name: 'חזרה למסלול' }));
+      fireEvent.click(screen.getByRole('button', { name: 'להמשיך בהשפלה' }));
+      expect(screen.getByText('שלב 3 מתוך 4')).toBeTruthy();
+      await act(async () => vi.advanceTimersByTime(5_000));
+      fireEvent.click(screen.getByRole('button', { name: 'זה אני, לעזאזל' }));
+      await act(async () => vi.advanceTimersByTime(5_000));
+      expect(screen.getByRole('button', { name: 'יאללה, תראה לי' }).hasAttribute('disabled')).toBe(
+        true,
+      );
+      await act(async () => vi.advanceTimersByTime(5_000));
+      await act(async () =>
+        fireEvent.click(screen.getByRole('button', { name: 'יאללה, תראה לי' })),
+      );
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(screen.getByText('<secret&value>').tagName).toBe('OUTPUT');
+      expect(document.body.innerHTML).toContain('&lt;secret&amp;value&gt;');
+      fireEvent.click(screen.getByText('סגירה'));
+      expect(screen.getByRole('alertdialog').textContent).toContain('הסיסמה תוסתר');
+    } finally {
+      fetchSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
   it('formats the ten-minute countdown without exceeding the configured window', () => {
     expect(formatAdminCountdown(601)).toBe('10:00');
     expect(formatAdminCountdown(600)).toBe('10:00');

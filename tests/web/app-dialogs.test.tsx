@@ -195,6 +195,15 @@ async function openManagement(user: ReturnType<typeof userEvent.setup>, tabName:
   await user.click(screen.getByRole('tab', { name: new RegExp(tabName) }));
 }
 
+it('does not offer desktop password recovery in a browser admin dialog', async () => {
+  const api = installApiMock({});
+  const user = await renderReadyApp();
+  api.expireAdmin();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'הפעל מצב מנהל' })).toBeTruthy());
+  await user.click(screen.getByRole('button', { name: 'הפעל מצב מנהל' }));
+  expect(screen.getByRole('dialog').textContent).not.toContain('שכחתי את סיסמת המנהל');
+});
+
 it('keeps consumable issue and the borrower desk while retiring legacy borrowing routes', async () => {
   const api = installApiMock({
     inventoryItems: [

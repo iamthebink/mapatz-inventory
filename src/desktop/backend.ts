@@ -17,7 +17,7 @@ const activeRequests = new Map<Socket, number>();
 let settings: { directory: string; port: number; token: string };
 function listen() {
   if (!db) throw new Error('Database not open');
-  const app = createApp({ database: db, accessToken: settings.token });
+  const app = createApp({ database: db, accessToken: settings.token, desktopRecovery: true });
   server = createServer((request, response) => {
     if (shuttingDown) {
       response.writeHead(503, { Connection: 'close' });
@@ -73,7 +73,7 @@ parent.on('message', ({ data }) => {
         data.password.length > 256
       )
         throw new Error('Password must contain 8–256 characters');
-      new SessionStore(db, data.password);
+      new SessionStore(db, data.password, undefined, undefined, undefined, true);
       listen();
     } else if (data.type === 'stop') {
       if (shuttingDown) return;

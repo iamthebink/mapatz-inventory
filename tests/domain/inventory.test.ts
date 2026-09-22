@@ -13,6 +13,24 @@ afterEach(() => {
 });
 
 describe('inventory domain', () => {
+  it('adds the recoverable credential column to an existing version-7 profile', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-password-migration-'));
+    cleanup.push(directory);
+    const filename = join(directory, 'inventory.sqlite');
+    const legacy = openDatabase(filename);
+    legacy.exec('ALTER TABLE credentials DROP COLUMN recoverable_password');
+    legacy.prepare('DELETE FROM migrations WHERE version=8').run();
+    legacy.close();
+
+    const migrated = openDatabase(filename);
+    const columns = migrated.prepare('PRAGMA table_info(credentials)').all() as { name: string }[];
+    expect(columns.some((column) => column.name === 'recoverable_password')).toBe(true);
+    expect(migrated.prepare('SELECT version FROM migrations WHERE version=8').get()).toEqual({
+      version: 8,
+    });
+    migrated.close();
+  });
+
   it('migrates legacy operator credentials to the admin-only credential model', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-credentials-migration-'));
     cleanup.push(directory);
@@ -90,7 +108,7 @@ describe('inventory domain', () => {
     legacy.close();
 
     const migrated = openDatabase(filename);
-    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 7 });
+    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 8 });
     expect(migrated.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(migrated.prepare('SELECT code,name,kind,location_id FROM items').all()).toEqual([
       { code: 100, name: 'Existing', kind: 'non_consumable', location_id: locationId },
@@ -129,7 +147,7 @@ describe('inventory domain', () => {
     inventory = new InventoryService(db);
     expect(
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
-    ).toBe(7);
+    ).toBe(8);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('100')[0]?.available).toBe(9);
     expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);

@@ -17,6 +17,7 @@ export class SessionStore {
     private readonly now: () => number = Date.now,
     private readonly adminIdleMs = 600_000,
     private readonly maxSessions = 1_024,
+    private readonly desktopRecoveryEnabled = false,
   ) {
     this.ensureCredential(adminPassword);
   }
@@ -61,16 +62,29 @@ export class SessionStore {
     const hash = scryptSync(password, salt, 64);
     this.db
       .prepare(
-        `INSERT INTO credentials(role,salt,password_hash,updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP)
-      ON CONFLICT(role) DO UPDATE SET salt=excluded.salt,password_hash=excluded.password_hash,updated_at=CURRENT_TIMESTAMP`,
+        `INSERT INTO credentials(role,salt,password_hash,recoverable_password,updated_at) VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(role) DO UPDATE SET salt=excluded.salt,password_hash=excluded.password_hash,recoverable_password=excluded.recoverable_password,updated_at=CURRENT_TIMESTAMP`,
       )
-      .run('admin', salt.toString('hex'), hash.toString('hex'));
+      .run(
+        'admin',
+        salt.toString('hex'),
+        hash.toString('hex'),
+        this.desktopRecoveryEnabled ? password : null,
+      );
     for (const session of this.sessions.values()) {
       if (session.role === 'admin') {
         session.role = 'operator';
         session.deadline = null;
       }
     }
+  }
+
+  recoverPassword(): string | null {
+    if (!this.desktopRecoveryEnabled) return null;
+    const row = this.db
+      .prepare('SELECT recoverable_password FROM credentials WHERE role=?')
+      .get('admin') as { recoverable_password: string | null } | undefined;
+    return row?.recoverable_password ?? null;
   }
 
   private ensureCredential(password?: string): void {

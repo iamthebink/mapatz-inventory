@@ -272,9 +272,21 @@ export function apiRouter(
   service: InventoryService,
   transfers: InventoryTransferService,
   sessions: SessionStore,
+  desktopRecovery = false,
 ): Router {
   const api = Router();
   const commandJson = express.json({ limit: '32kb' });
+
+  if (desktopRecovery)
+    api.post('/password/recovery', (_req, res) => {
+      res.set('Cache-Control', 'no-store');
+      const password = sessions.recoverPassword();
+      if (password == null) {
+        res.status(404).json({ error: 'not_found', message: 'Recovery unavailable' });
+        return;
+      }
+      res.json({ password });
+    });
 
   api.get('/session', (req, res) =>
     res.json({ role: res.locals.session.role, deadline: res.locals.session.deadline }),

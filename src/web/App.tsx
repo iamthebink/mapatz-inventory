@@ -35,7 +35,12 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { AdminModeControl, AdminModeStatus, AdminPasswordDialog } from './AdminMode';
+import {
+  AdminModeControl,
+  AdminModeStatus,
+  AdminPasswordDialog,
+  AdminRecoveryDialog,
+} from './AdminMode';
 import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
 import {
   ApiError,
@@ -166,6 +171,7 @@ export function App() {
   const [pending, setPending] = useState(false);
   const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
+  const [adminRecoveryOpen, setAdminRecoveryOpen] = useState(false);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
   const [adminPasswordError, setAdminPasswordError] = useState('');
   const [sessionReconciling, setSessionReconciling] = useState(false);
@@ -454,6 +460,11 @@ export function App() {
   const closeAdminDialog = useCallback(() => {
     setAdminDialogOpen(false);
     setAdminPasswordError('');
+  }, []);
+  const openAdminRecovery = useCallback(() => {
+    setAdminDialogOpen(false);
+    setAdminPasswordError('');
+    setAdminRecoveryOpen(true);
   }, []);
   function toggleAdminMode() {
     if (!isAdmin) {
@@ -1518,6 +1529,14 @@ export function App() {
           returnFocusRef={adminControlRef}
           onClose={closeAdminDialog}
           onSubmit={(password) => void authenticateAdmin(password)}
+          onRecovery={desktop ? openAdminRecovery : undefined}
+        />
+      )}
+      {adminRecoveryOpen && desktop && (
+        <AdminRecoveryDialog
+          returnFocusRef={adminControlRef}
+          onClose={() => setAdminRecoveryOpen(false)}
+          onError={(error) => showError('שחזור סיסמת המנהל', error)}
         />
       )}
       {activeDialog && (

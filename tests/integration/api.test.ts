@@ -32,6 +32,132 @@ function role(agent: ReturnType<typeof request.agent>, target: string, password?
 }
 
 describe('inventory API permission and edge-case matrix', () => {
+  it('keeps password recovery unavailable in browser mode and requires the desktop token for exact recovery', async () => {
+    const browser = fixture();
+    await browser.agent.post('/api/password/recovery').expect(404);
+    expect(
+      browser.db.prepare("SELECT recoverable_password FROM credentials WHERE role='admin'").get(),
+    ).toEqual({ recoverable_password: null });
+    browser.db.close();
+
+    const db = openDatabase(':memory:');
+    const token = 'desktop-launch-token';
+    const app = createApp({
+      database: db,
+      adminPassword: 'exact 👋 password',
+      accessToken: token,
+      desktopRecovery: true,
+      serveWeb: false,
+    });
+    await request(app).post('/api/password/recovery').expect(403);
+    const recovered = await request(app)
+      .post('/api/password/recovery')
+      .set('x-mapatz-desktop-token', token)
+      .expect('Cache-Control', 'no-store')
+      .expect(200);
+    expect(recovered.body).toEqual({ password: 'exact 👋 password' });
+    expect(
+      db.prepare("SELECT recoverable_password FROM credentials WHERE role='admin'").get(),
+    ).toEqual({ recoverable_password: 'exact 👋 password' });
+
+    const agent = request.agent(app);
+    await agent
+      .post('/api/session/role')
+      .set('x-mapatz-desktop-token', token)
+      .send({ role: 'admin', password: 'exact 👋 password' })
+      .expect(200);
+    await agent
+      .post('/api/password')
+      .set('x-mapatz-desktop-token', token)
+      .send({ password: '<new&short>' })
+      .expect(204);
+    const changed = await agent
+      .post('/api/password/recovery')
+      .set('x-mapatz-desktop-token', token)
+      .expect(200);
+    expect(changed.body).toEqual({ password: '<new&short>' });
+    await agent
+      .post('/api/session/role')
+      .set('x-mapatz-desktop-token', token)
+      .send({ role: 'admin', password: 'exact 👋 password' })
+      .expect(401);
+    await agent
+      .post('/api/session/role')
+      .set('x-mapatz-desktop-token', token)
+      .send({ role: 'admin', password: '<new&short>' })
+      .expect(200);
+    db.close();
+  });
+
+  it('reveals the changed desktop password after reopening the same database', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-desktop-credential-'));
+    cleanup.push(directory);
+    const filename = join(directory, 'inventory.sqlite');
+    const token = 'desktop-launch-token';
+    let db = openDatabase(filename);
+    const first = createApp({
+      database: db,
+      adminPassword: 'original-password',
+      accessToken: token,
+      desktopRecovery: true,
+      serveWeb: false,
+    });
+    const agent = request.agent(first);
+    await agent
+      .post('/api/session/role')
+      .set('x-mapatz-desktop-token', token)
+      .send({ role: 'admin', password: 'original-password' })
+      .expect(200);
+    await agent
+      .post('/api/password')
+      .set('x-mapatz-desktop-token', token)
+      .send({ password: 'new password 🔑' })
+      .expect(204);
+    db.close();
+
+    db = openDatabase(filename);
+    const reopened = createApp({
+      database: db,
+      accessToken: token,
+      desktopRecovery: true,
+      serveWeb: false,
+    });
+    const response = await request(reopened)
+      .post('/api/password/recovery')
+      .set('x-mapatz-desktop-token', token)
+      .expect(200);
+    expect(response.body).toEqual({ password: 'new password 🔑' });
+    db.close();
+  });
+
+  it('preserves the desktop recovery credential across workbook reset and recovery', async () => {
+    const db = openDatabase(':memory:');
+    const token = 'desktop-launch-token';
+    const app = createApp({
+      database: db,
+      adminPassword: 'still-here',
+      accessToken: token,
+      desktopRecovery: true,
+      serveWeb: false,
+    });
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'Existing', kind: 'consumable' });
+    inventory.addStock(item.id, 3);
+    const transfers = new InventoryTransferService(db);
+    const before = transfers.snapshot();
+    const recover = () =>
+      request(app)
+        .post('/api/password/recovery')
+        .set('x-mapatz-desktop-token', token)
+        .expect(200)
+        .expect(({ body }) => expect(body.password).toBe('still-here'));
+
+    transfers.replaceWithReset({ locations: [], items: [] });
+    await recover();
+    transfers.replaceWithRecovery(before);
+    await recover();
+    db.close();
+  });
   it('enforces admin-only workbook export and returns the standard offline XLSX', async () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'Exported', kind: 'consumable' });
