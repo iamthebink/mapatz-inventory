@@ -538,6 +538,12 @@
     min-width: 0;
     gap: 16px;
   }
+  .borrower-status-column {
+    display: grid;
+    align-content: start;
+    min-width: 0;
+    gap: 16px;
+  }
   .operational-section {
     min-width: 0;
     border: 1px solid var(--color-ctp-surface);
@@ -673,7 +679,16 @@
 
 @media (min-width: 761px) {
   .borrower-work-segment {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+  .borrower-status-column {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .staged-section {
+    grid-column: 1;
+    grid-row: 1;
   }
 }
 

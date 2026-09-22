@@ -1195,13 +1195,22 @@ test('retires legacy presentation while preserving gated lost controls and respo
   await stageBorrow(page, seed.item.name);
   const staged: Locator = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   const holdings: Locator = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
-  const wide = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
-  expect(wide[0]!.y).toBeGreaterThan(wide[1]!.y);
+  const lost: Locator = page.locator('.lost-equipment-section');
+  const wide = await Promise.all([
+    staged.boundingBox(),
+    holdings.boundingBox(),
+    lost.boundingBox(),
+  ]);
+  expect(wide[0]!.x).toBeGreaterThan(wide[1]!.x);
+  expect(Math.abs(wide[0]!.y - wide[1]!.y)).toBeLessThan(1);
+  expect(Math.abs(wide[0]!.width - wide[1]!.width)).toBeLessThan(1);
+  expect(wide[2]!.x).toBe(wide[1]!.x);
+  expect(wide[2]!.y).toBeGreaterThan(wide[1]!.y);
   const holdingsElement = await holdings.elementHandle();
   expect(
     await staged.evaluate(
       (node, other) =>
-        Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_PRECEDING),
+        Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING),
       holdingsElement,
     ),
   ).toBe(true);
@@ -1228,14 +1237,47 @@ test('retires legacy presentation while preserving gated lost controls and respo
     '0s',
   );
 
+  await page.setViewportSize({ width: 761, height: 720 });
+  const splitThreshold = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
+  expect(splitThreshold[0]!.x).toBeGreaterThan(splitThreshold[1]!.x);
+  expect(
+    await page
+      .locator('.dialog-workspace .dialog-shell-body')
+      .evaluate((body) => body.scrollWidth <= body.clientWidth),
+  ).toBe(true);
+
+  await page.setViewportSize({ width: 760, height: 720 });
+  const stackThreshold = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
+  expect(stackThreshold[0]!.y).toBeLessThan(stackThreshold[1]!.y);
+  expect(
+    await page
+      .locator('.dialog-workspace .dialog-shell-body')
+      .evaluate((body) => body.scrollWidth <= body.clientWidth),
+  ).toBe(true);
+
   await page.setViewportSize({ width: 640, height: 720 });
-  const zoomed = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
-  expect(zoomed[0]!.y).toBeGreaterThan(zoomed[1]!.y);
+  const zoomed = await Promise.all([
+    staged.boundingBox(),
+    holdings.boundingBox(),
+    lost.boundingBox(),
+  ]);
+  expect(zoomed[0]!.y).toBeLessThan(zoomed[1]!.y);
+  expect(zoomed[2]!.y).toBeGreaterThan(zoomed[1]!.y);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
   await page.setViewportSize({ width: 320, height: 720 });
-  const narrow = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
-  expect(narrow[0]!.y).toBeGreaterThan(narrow[1]!.y);
+  const narrow = await Promise.all([
+    staged.boundingBox(),
+    holdings.boundingBox(),
+    lost.boundingBox(),
+  ]);
+  expect(narrow[0]!.y).toBeLessThan(narrow[1]!.y);
+  expect(narrow[2]!.y).toBeGreaterThan(narrow[1]!.y);
+  expect(
+    await page
+      .locator('.dialog-workspace .dialog-shell-body')
+      .evaluate((body) => body.scrollWidth <= body.clientWidth),
+  ).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

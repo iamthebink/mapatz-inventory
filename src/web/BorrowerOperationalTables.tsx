@@ -110,152 +110,6 @@ export function BorrowerOperationalTables({
 
   return (
     <div ref={rootRef} className="borrower-work-segment">
-      <section className="operational-section holdings-section" aria-labelledby="holdings-heading">
-        <h3 id="holdings-heading" tabIndex={-1}>
-          ציוד אצל השואל
-          {state.unverifiedProjection && <span className="unverified-label"> — טרם אומת</span>}
-        </h3>
-        <div className="borrower-equipment-list">
-          {held.length === 0 ? (
-            <p className="operational-empty">אין ציוד אצל השואל</p>
-          ) : (
-            held.map((projection) => {
-              const itemName = inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`;
-              const menuOpen = openMenu === projection.itemId;
-              return (
-                <article className="borrower-equipment-row" key={projection.itemId}>
-                  <div className="borrower-equipment-summary">
-                    <div>
-                      <strong>{itemName}</strong>
-                      <p className="borrower-balance">אצל השואל {projection.projectedHeld}</p>
-                    </div>
-                    <div className="holding-return-actions">
-                      <button
-                        ref={(node) => setButtonRef(`${projection.itemId}-usable`, node)}
-                        type="button"
-                        className="small-button"
-                        disabled={
-                          disabled ||
-                          projection.returnableNow < 1 ||
-                          !inventory.get(projection.itemId)?.selectable
-                        }
-                        onClick={() => open(projection.itemId, 'usable')}
-                      >
-                        <CircleCheck className="size-4" aria-hidden="true" />
-                        החזרת ציוד
-                      </button>
-                      <div
-                        className="borrower-more-actions"
-                        onBlur={(event) => {
-                          if (!event.currentTarget.contains(event.relatedTarget)) setOpenMenu(null);
-                        }}
-                      >
-                        <button
-                          ref={(node) => setButtonRef(`${projection.itemId}-more`, node)}
-                          id={`borrower-more-trigger-${projection.itemId}`}
-                          type="button"
-                          className="small-button"
-                          aria-haspopup="menu"
-                          aria-expanded={menuOpen}
-                          aria-controls={`borrower-more-menu-${projection.itemId}`}
-                          disabled={disabled || projection.returnableNow < 1}
-                          onClick={() => {
-                            const next = menuOpen ? null : projection.itemId;
-                            setOpenMenu(next);
-                            if (next !== null)
-                              queueMicrotask(() =>
-                                document
-                                  .querySelector<HTMLButtonElement>(
-                                    `#borrower-more-menu-${projection.itemId} [role="menuitem"]`,
-                                  )
-                                  ?.focus(),
-                              );
-                          }}
-                          onKeyDown={(event) => {
-                            if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
-                            event.preventDefault();
-                            setOpenMenu(projection.itemId);
-                            queueMicrotask(() => {
-                              const choices = document.querySelectorAll<HTMLButtonElement>(
-                                `#borrower-more-menu-${projection.itemId} [role="menuitem"]`,
-                              );
-                              choices[event.key === 'ArrowUp' ? choices.length - 1 : 0]?.focus();
-                            });
-                          }}
-                        >
-                          <ChevronDown className="size-4" aria-hidden="true" />
-                          אפשרויות נוספות
-                        </button>
-                        {menuOpen && (
-                          <div
-                            id={`borrower-more-menu-${projection.itemId}`}
-                            className="borrower-action-menu"
-                            role="menu"
-                            aria-labelledby={`borrower-more-trigger-${projection.itemId}`}
-                            onKeyDown={(event) => handleMenuKeys(event, projection.itemId)}
-                          >
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => open(projection.itemId, 'mark-lost')}
-                            >
-                              <CircleHelp className="size-4" aria-hidden="true" />
-                              סמן כאבוד
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </article>
-              );
-            })
-          )}
-        </div>
-      </section>
-
-      <details className="operational-section lost-equipment-section">
-        <summary>
-          <span>ציוד אבוד של השואל</span>
-          <span className="borrower-balance">
-            {lostTotal} {lostTotal === 1 ? 'יחידה' : 'יחידות'}
-          </span>
-        </summary>
-        <div className="borrower-equipment-list">
-          {lost.length === 0 ? (
-            <p className="operational-empty">אין ציוד אבוד לשואל</p>
-          ) : (
-            lost.map((projection) => {
-              const itemName = inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`;
-              return (
-                <article className="borrower-equipment-row" key={projection.itemId}>
-                  <div className="borrower-equipment-summary">
-                    <div>
-                      <strong>{itemName}</strong>
-                      <p className="borrower-balance">אבוד {projection.lostNow}</p>
-                    </div>
-                    <button
-                      ref={(node) => setButtonRef(`${projection.itemId}-found`, node)}
-                      type="button"
-                      className="small-button"
-                      disabled={
-                        disabled ||
-                        projection.lostNow < 1 ||
-                        !inventory.get(projection.itemId)?.selectable
-                      }
-                      onClick={() => open(projection.itemId, 'found')}
-                    >
-                      <SearchCheck className="size-4" aria-hidden="true" />
-                      נמצא והוחזר
-                    </button>
-                  </div>
-                </article>
-              );
-            })
-          )}
-        </div>
-      </details>
-
       <section className="operational-section staged-section" aria-labelledby="staged-heading">
         <h3 id="staged-heading" tabIndex={-1}>
           פעולות ממתינות
@@ -367,6 +221,158 @@ export function BorrowerOperationalTables({
           </div>
         )}
       </section>
+
+      <div className="borrower-status-column">
+        <section
+          className="operational-section holdings-section"
+          aria-labelledby="holdings-heading"
+        >
+          <h3 id="holdings-heading" tabIndex={-1}>
+            ציוד אצל השואל
+            {state.unverifiedProjection && <span className="unverified-label"> — טרם אומת</span>}
+          </h3>
+          <div className="borrower-equipment-list">
+            {held.length === 0 ? (
+              <p className="operational-empty">אין ציוד אצל השואל</p>
+            ) : (
+              held.map((projection) => {
+                const itemName = inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`;
+                const menuOpen = openMenu === projection.itemId;
+                return (
+                  <article className="borrower-equipment-row" key={projection.itemId}>
+                    <div className="borrower-equipment-summary">
+                      <div>
+                        <strong>{itemName}</strong>
+                        <p className="borrower-balance">אצל השואל {projection.projectedHeld}</p>
+                      </div>
+                      <div className="holding-return-actions">
+                        <button
+                          ref={(node) => setButtonRef(`${projection.itemId}-usable`, node)}
+                          type="button"
+                          className="small-button"
+                          disabled={
+                            disabled ||
+                            projection.returnableNow < 1 ||
+                            !inventory.get(projection.itemId)?.selectable
+                          }
+                          onClick={() => open(projection.itemId, 'usable')}
+                        >
+                          <CircleCheck className="size-4" aria-hidden="true" />
+                          החזרת ציוד
+                        </button>
+                        <div
+                          className="borrower-more-actions"
+                          onBlur={(event) => {
+                            if (!event.currentTarget.contains(event.relatedTarget))
+                              setOpenMenu(null);
+                          }}
+                        >
+                          <button
+                            ref={(node) => setButtonRef(`${projection.itemId}-more`, node)}
+                            id={`borrower-more-trigger-${projection.itemId}`}
+                            type="button"
+                            className="small-button"
+                            aria-haspopup="menu"
+                            aria-expanded={menuOpen}
+                            aria-controls={`borrower-more-menu-${projection.itemId}`}
+                            disabled={disabled || projection.returnableNow < 1}
+                            onClick={() => {
+                              const next = menuOpen ? null : projection.itemId;
+                              setOpenMenu(next);
+                              if (next !== null)
+                                queueMicrotask(() =>
+                                  document
+                                    .querySelector<HTMLButtonElement>(
+                                      `#borrower-more-menu-${projection.itemId} [role="menuitem"]`,
+                                    )
+                                    ?.focus(),
+                                );
+                            }}
+                            onKeyDown={(event) => {
+                              if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+                              event.preventDefault();
+                              setOpenMenu(projection.itemId);
+                              queueMicrotask(() => {
+                                const choices = document.querySelectorAll<HTMLButtonElement>(
+                                  `#borrower-more-menu-${projection.itemId} [role="menuitem"]`,
+                                );
+                                choices[event.key === 'ArrowUp' ? choices.length - 1 : 0]?.focus();
+                              });
+                            }}
+                          >
+                            <ChevronDown className="size-4" aria-hidden="true" />
+                            אפשרויות נוספות
+                          </button>
+                          {menuOpen && (
+                            <div
+                              id={`borrower-more-menu-${projection.itemId}`}
+                              className="borrower-action-menu"
+                              role="menu"
+                              aria-labelledby={`borrower-more-trigger-${projection.itemId}`}
+                              onKeyDown={(event) => handleMenuKeys(event, projection.itemId)}
+                            >
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => open(projection.itemId, 'mark-lost')}
+                              >
+                                <CircleHelp className="size-4" aria-hidden="true" />
+                                סמן כאבוד
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <details className="operational-section lost-equipment-section">
+          <summary>
+            <span>ציוד אבוד של השואל</span>
+            <span className="borrower-balance">
+              {lostTotal} {lostTotal === 1 ? 'יחידה' : 'יחידות'}
+            </span>
+          </summary>
+          <div className="borrower-equipment-list">
+            {lost.length === 0 ? (
+              <p className="operational-empty">אין ציוד אבוד לשואל</p>
+            ) : (
+              lost.map((projection) => {
+                const itemName = inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`;
+                return (
+                  <article className="borrower-equipment-row" key={projection.itemId}>
+                    <div className="borrower-equipment-summary">
+                      <div>
+                        <strong>{itemName}</strong>
+                        <p className="borrower-balance">אבוד {projection.lostNow}</p>
+                      </div>
+                      <button
+                        ref={(node) => setButtonRef(`${projection.itemId}-found`, node)}
+                        type="button"
+                        className="small-button"
+                        disabled={
+                          disabled ||
+                          projection.lostNow < 1 ||
+                          !inventory.get(projection.itemId)?.selectable
+                        }
+                        onClick={() => open(projection.itemId, 'found')}
+                      >
+                        <SearchCheck className="size-4" aria-hidden="true" />
+                        נמצא והוחזר
+                      </button>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+        </details>
+      </div>
     </div>
   );
 }

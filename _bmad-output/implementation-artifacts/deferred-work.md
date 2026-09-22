@@ -58,3 +58,9 @@
 - source_spec: none
   summary: Add an operator-facing inventory action to restore damaged stock to usable stock outside the borrower card.
   evidence: Split from borrower-card returns for separate review; the updated contract resolves placement as ניהול → מלאי ופגומים → טיפול בפגום, with operator repair and admin-only write-off. Tracked in spec-operator-damage-restoration-in-management.md.
+- source_spec: `_bmad-output/implementation-artifacts/spec-restore-borrower-card-side-by-side-work-area.md`
+  summary: Reconcile the borrower work area's separate bordered sections with the older UX visual spine's continuous two-half surface.
+  evidence: The existing `.operational-section` card borders and 16px segment gap predate this orientation change; restoring columns keeps them. A continuous surface with one vertical separator would be a separate styling change.
+- source_spec: `_bmad-output/implementation-artifacts/spec-restore-borrower-card-side-by-side-work-area.md`
+  summary: Add the older UX visual spine's separator between item search and the borrower work segment.
+  evidence: The existing search/work segment has no explicit horizontal divider and this orientation change does not alter that boundary.
