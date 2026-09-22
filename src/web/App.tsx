@@ -1301,16 +1301,6 @@ export function App() {
               )}
               {managementTab === 'borrowers' && (
                 <div className="space-y-7">
-                  {isAdmin && (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={!adminActionsEnabled || pending}
-                      onClick={() => setBorrowerImportOpen(true)}
-                    >
-                      ייבוא שואלים מקובץ
-                    </button>
-                  )}
                   <div className="max-w-2xl">
                     <ActionCard
                       title="שואל חדש"
@@ -1405,6 +1395,27 @@ export function App() {
                       הקובץ כולל אזורי איפוס ושחזור נפרדים. שמרו אותו במקום מאובטח.
                     </p>
                   </ActionCard>
+                  <section className="action-card">
+                    <div className="mb-5 flex items-start gap-3">
+                      <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-ctp-blue/10 text-ctp-blue">
+                        <Users className="size-4.5" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold">ייבוא שואלים</h3>
+                        <p className="mt-0.5 text-xs text-ctp-subtext">
+                          הוספה או החלפה של רשימת השואלים מקובץ XLSX
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={!adminActionsEnabled || pending}
+                      onClick={() => setBorrowerImportOpen(true)}
+                    >
+                      ייבוא שואלים מקובץ
+                    </button>
+                  </section>
                   <section className="action-card">
                     <div className="mb-5 flex items-start gap-3">
                       <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-ctp-blue/10 text-ctp-blue">

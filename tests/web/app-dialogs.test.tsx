@@ -749,8 +749,7 @@ describe('App dialog workflows', () => {
   it('does not reopen borrower import after admin expiry and reauthorization', async () => {
     const controls = installApiMock();
     const user = await renderReadyApp();
-    await user.click(screen.getByRole('link', { name: 'ניהול' }));
-    await user.click(screen.getByRole('tab', { name: /שואלים/ }));
+    await openManagement(user, 'ייבוא וייצוא');
     await user.click(screen.getByRole('button', { name: 'ייבוא שואלים מקובץ' }));
     expect(screen.getByRole('dialog', { name: 'ייבוא שואלים מקובץ' })).toBeTruthy();
     controls.expireAdmin();
@@ -760,6 +759,23 @@ describe('App dialog workflows', () => {
     controls.restoreAdmin();
     await screen.findByRole('button', { name: 'ייבוא שואלים מקובץ' });
     expect(screen.queryByRole('dialog', { name: 'ייבוא שואלים מקובץ' })).toBeNull();
+  });
+
+  it('places borrower import in Import and Export and keeps it visible when admin mode is off', async () => {
+    const controls = installApiMock();
+    const user = await renderReadyApp();
+    await openManagement(user, 'שואלים');
+    expect(screen.queryByRole('button', { name: 'ייבוא שואלים מקובץ' })).toBeNull();
+
+    await user.click(screen.getByRole('tab', { name: /ייבוא וייצוא/ }));
+    const trigger = screen.getByRole('button', {
+      name: 'ייבוא שואלים מקובץ',
+    }) as HTMLButtonElement;
+    expect(trigger.disabled).toBe(false);
+
+    controls.expireAdmin();
+    await waitFor(() => expect(trigger.disabled).toBe(true));
+    expect(trigger.isConnected).toBe(true);
   });
 
   it('closes an admin-only dialog as soon as authorization is reconciled away', async () => {
