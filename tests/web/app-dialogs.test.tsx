@@ -522,9 +522,75 @@ describe('App dialog workflows', () => {
       await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
 
       expect(await screen.findByText(title)).toBeTruthy();
-      expect(api.requests.some((request) => request.path === '/api/damage')).toBe(true);
+      expect(bodyOf(api.requests.find((request) => request.path === '/api/damage')!)).toMatchObject(
+        { resolution },
+      );
     },
   );
+
+  it('offers operator restoration while keeping unrelated stock actions protected', async () => {
+    const api = installApiMock({ inventoryItems: [{ ...item, damaged: 2 }] });
+    const user = await renderReadyApp();
+    api.expireAdmin();
+    await openManagement(user, 'מלאי ופגומים');
+    await screen.findByText('החזרת ציוד פגום לשימוש');
+    const repair = screen.getByText('טיפול בפגום').closest('form')!;
+    const addStock = screen.getByText('הוספת מלאי').closest('form')!;
+    expect((repair.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+    expect((addStock.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+    expect(within(repair).queryByLabelText('פתרון')).toBeNull();
+    expect(screen.queryByText('המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.')).toBeNull();
+    await user.selectOptions(within(repair).getByLabelText('פריט'), String(item.id));
+    await user.type(within(repair).getByLabelText('כמות'), '1');
+    await user.click(within(repair).getByRole('button', { name: 'בצע פעולה' }));
+    expect(await screen.findByText('תיקון פריט פגום')).toBeTruthy();
+    expect(bodyOf(api.requests.find((request) => request.path === '/api/damage')!)).toMatchObject({
+      resolution: 'repair',
+      quantity: 1,
+    });
+  });
+
+  it('preserves selected write-off through role loss and requires fresh restoration intent', async () => {
+    const api = installApiMock({ inventoryItems: [{ ...item, damaged: 2 }] });
+    const user = await renderReadyApp();
+    await openManagement(user, 'מלאי ופגומים');
+    const form = screen.getByText('טיפול בפגום').closest('form')!;
+    await user.selectOptions(within(form).getByLabelText('פתרון'), 'write_off');
+    api.expireAdmin();
+    await waitFor(() =>
+      expect((form.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true),
+    );
+    expect(within(form).queryByLabelText('פתרון')).toBeNull();
+    fireEvent.submit(form);
+    expect(api.requests.filter((request) => request.path === '/api/damage')).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: 'בחירת החזרה לשימוש' }));
+    expect((form.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+    await user.selectOptions(within(form).getByLabelText('פריט'), String(item.id));
+    await user.type(within(form).getByLabelText('כמות'), '1');
+    await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+    expect(bodyOf(api.requests.find((request) => request.path === '/api/damage')!)).toMatchObject({
+      resolution: 'repair',
+    });
+  });
+
+  it('locks operator restoration during session reconciliation', async () => {
+    const api = installApiMock({ inventoryItems: [{ ...item, damaged: 2 }] });
+    const user = await renderReadyApp();
+    api.expireAdmin();
+    await openManagement(user, 'מלאי ופגומים');
+    await screen.findByText('החזרת ציוד פגום לשימוש');
+    const form = screen.getByText('טיפול בפגום').closest('form')!;
+    api.startSessionReconciliation();
+    await waitFor(() =>
+      expect((form.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true),
+    );
+    fireEvent.submit(form);
+    expect(api.requests.filter((request) => request.path === '/api/damage')).toHaveLength(0);
+    api.releaseSessionReconciliation();
+    await waitFor(() =>
+      expect((form.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false),
+    );
+  });
 
   it('does not expose an inventory correction action', async () => {
     installApiMock();

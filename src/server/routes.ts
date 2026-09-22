@@ -591,7 +591,7 @@ export function apiRouter(
   );
   api.post(
     '/damage',
-    requireRole('admin'),
+    requireRole('operator', 'admin'),
     route((req, res) => {
       const body = parse(
         z.object({
@@ -602,6 +602,11 @@ export function apiRouter(
         }),
         req.body,
       );
+      if (
+        body.resolution === 'write_off' &&
+        (res.locals.session as { role: Role }).role !== 'admin'
+      )
+        throw new DomainError('forbidden', 'אין הרשאה לפעולה זו', 403);
       res.status(201).json({
         eventId: service.resolveDamage(
           body.itemId,

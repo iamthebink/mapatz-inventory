@@ -330,6 +330,86 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
+  it('lets operators restore damaged stock but never write it off, including after admin expiry', async () => {
+    const clock = { now: 1_000 };
+    const { db, inventory, agent } = fixture(clock);
+    const item = inventory.createItem({ name: 'Damaged tool', kind: 'non_consumable' });
+    inventory.addStock(item.id, 3);
+    const borrower = inventory.createBorrower({
+      username: 'damage-test',
+      name: 'Borrower',
+      type: 'individual',
+    });
+    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+    inventory.returnCheckout(checkoutId, 0, 2);
+    const loans = inventory.listLoans();
+    const before = inventory.listLedger();
+    const requestBody = { itemId: item.id, quantity: 1, note: 'checked' };
+
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, resolution: 'write_off' })
+      .expect(403);
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, resolution: 'invalid' })
+      .expect(400);
+    expect(inventory.listLedger()).toEqual(before);
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, resolution: 'repair' })
+      .expect(201);
+    expect(inventory.listItems('', true)[0]).toMatchObject({ available: 2, damaged: 1 });
+    expect(inventory.listLedger()[0]).toMatchObject({
+      kind: 'repaired',
+      quantity: 1,
+      note: 'checked',
+    });
+    expect(inventory.listLoans()).toEqual(loans);
+
+    const afterRepair = inventory.listLedger();
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, quantity: 2, resolution: 'repair' })
+      .expect(400);
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, quantity: 0, resolution: 'repair' })
+      .expect(400);
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, note: 'x'.repeat(501), resolution: 'repair' })
+      .expect(400);
+    expect(inventory.listLedger()).toEqual(afterRepair);
+
+    await role(agent, 'admin', 'admin-pass').expect(200);
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, resolution: 'write_off' })
+      .expect(201);
+    expect(inventory.listLedger()[0]).toMatchObject({ kind: 'written_off', quantity: 1 });
+    expect(inventory.listItems('', true)[0]).toMatchObject({ available: 2, damaged: 0 });
+    expect(inventory.listLoans()).toEqual(loans);
+
+    inventory.returnCheckout(inventory.checkout(item.id, borrower.id, 1), 0, 1);
+    const beforeExpiry = inventory.listLedger();
+    clock.now += 600_000;
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, resolution: 'write_off' })
+      .expect(403);
+    expect(inventory.listLedger()).toEqual(beforeExpiry);
+    expect(inventory.listItems('', true)[0]).toMatchObject({ available: 1, damaged: 1 });
+    await agent
+      .post('/api/damage')
+      .send({ ...requestBody, resolution: 'repair' })
+      .expect(201);
+    expect(inventory.listLedger()[0]).toMatchObject({ kind: 'repaired', quantity: 1 });
+    expect(inventory.listItems('', true)[0]).toMatchObject({ available: 2, damaged: 0 });
+    expect(inventory.listLoans()).toEqual(loans);
+    db.close();
+  });
+
   it('expires idle privilege server-side and returns a stale mutation as forbidden', async () => {
     const clock = { now: 1_000 };
     const { db, inventory, agent } = fixture(clock);

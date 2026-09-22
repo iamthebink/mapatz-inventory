@@ -55,12 +55,25 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-tag-derived-release-version.md`
   summary: Suppress setup navigation errors caused by an intentional quit during early desktop startup.
   evidence: A version-only probe requested app.quit before setup.html completed loading; its isolated desktop.log records quit then ERR_FAILED and a blocking failure dialog. Normal setup/relaunch tests pass. The precise early-quit sequence should become a regression test before adjusting lifecycle handling.
-- source_spec: none
-  summary: Add an operator-facing inventory action to restore damaged stock to usable stock outside the borrower card.
-  evidence: Split from borrower-card returns for separate review; the updated contract resolves placement as ניהול → מלאי ופגומים → טיפול בפגום, with operator repair and admin-only write-off. Tracked in spec-operator-damage-restoration-in-management.md.
 - source_spec: `_bmad-output/implementation-artifacts/spec-restore-borrower-card-side-by-side-work-area.md`
   summary: Reconcile the borrower work area's separate bordered sections with the older UX visual spine's continuous two-half surface.
   evidence: The existing `.operational-section` card borders and 16px segment gap predate this orientation change; restoring columns keeps them. A continuous surface with one vertical separator would be a separate styling change.
 - source_spec: `_bmad-output/implementation-artifacts/spec-restore-borrower-card-side-by-side-work-area.md`
   summary: Add the older UX visual spine's separator between item search and the borrower work segment.
   evidence: The existing search/work segment has no explicit horizontal divider and this orientation change does not alter that boundary.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
+  summary: Keep borrower save-and-close recovery guarded against card dismissal and browser Back until committed truth is verified.
+  evidence: In the already-committed borrower workflow, `operationLocks` permits exit in `refresh-required` for save-and-close while the card remains mounted; hidden-card recovery also removes its history sentinel before verification.
+- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
+  summary: Persist the borrower post-commit truth-verification obligation across page reloads.
+  evidence: The prior borrower workflow clears its frozen attempt after confirmed commit, but its refresh/reload recovery lock exists only in component state and disappears on reload.
+- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
+  summary: Make borrower directory recovery requests single-flight with visible progress.
+  evidence: Existing recovery buttons stay enabled during refresh/reload and handlers do not reject a repeated start; overlapping snapshots can race and the operator sees no in-progress affordance.
+- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
+  summary: Focus the directory recovery control for hidden-card reload as well as refresh.
+  evidence: The prior borrower workflow's startup focus effect handles only hidden `refresh-required`, so a hidden `reload-required` phase falls through to borrower search instead.
+- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
+  summary: Reconcile inventory action state after a committed mutation whose general snapshot refresh fails.
+  evidence: Existing `action()` warns that refresh failed but releases pending state with stale quantities, allowing a second non-idempotent repair or other inventory action before a successful refresh.

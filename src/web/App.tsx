@@ -169,6 +169,7 @@ export function App() {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
   const [adminPasswordError, setAdminPasswordError] = useState('');
   const [sessionReconciling, setSessionReconciling] = useState(false);
+  const [damageResolution, setDamageResolution] = useState<'repair' | 'write_off'>('repair');
   const [announcement, setAnnouncement] = useState({ id: 0, text: '' });
   const pendingRef = useRef(false);
   const toastIdRef = useRef(0);
@@ -1095,11 +1096,16 @@ export function App() {
                     </ActionCard>
                     <ActionCard
                       title="טיפול בפגום"
-                      description="החזרה לשימוש או גריעה"
+                      description={isAdmin ? 'החזרה לשימוש או גריעה' : 'החזרת ציוד פגום לשימוש'}
                       icon={TriangleAlert}
-                      disabled={!adminActionsEnabled || pending}
+                      disabled={
+                        pending ||
+                        sessionReconciling ||
+                        (!isAdmin && damageResolution === 'write_off')
+                      }
                       onSubmit={(form) => {
-                        const resolution = form.get('resolution');
+                        const resolution = damageResolution;
+                        if (resolution === 'write_off' && !isAdmin) return;
                         void action(
                           resolution === 'repair'
                             ? 'תיקון פריט פגום'
@@ -1112,7 +1118,7 @@ export function App() {
                               body: JSON.stringify({
                                 itemId: number(form, 'itemId'),
                                 quantity: number(form, 'quantity'),
-                                resolution: form.get('resolution'),
+                                resolution,
                                 note: form.get('note'),
                               }),
                             }),
@@ -1130,15 +1136,40 @@ export function App() {
                           ])}
                       />
                       <Quantity />
-                      <label className="field-label">
-                        פתרון
-                        <select name="resolution" className="input-field">
-                          <option value="repair">תוקן</option>
-                          <option value="write_off">הוצאה מהמלאי</option>
-                        </select>
-                      </label>
+                      {isAdmin ? (
+                        <label className="field-label">
+                          פתרון
+                          <select
+                            name="resolution"
+                            className="input-field"
+                            value={damageResolution}
+                            onChange={(event) =>
+                              setDamageResolution(event.target.value as 'repair' | 'write_off')
+                            }
+                          >
+                            <option value="repair">תוקן</option>
+                            <option value="write_off">הוצאה מהמלאי</option>
+                          </select>
+                        </label>
+                      ) : damageResolution === 'write_off' ? (
+                        <p className="text-sm text-ctp-subtext">
+                          גריעה דורשת מצב מנהל. יש לבחור שחזור במפורש כדי להמשיך.
+                        </p>
+                      ) : (
+                        <p className="text-sm text-ctp-subtext">פתרון: החזרה לשימוש</p>
+                      )}
                       <Note />
                     </ActionCard>
+                    {!isAdmin && damageResolution === 'write_off' && (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={sessionReconciling || pending}
+                        onClick={() => setDamageResolution('repair')}
+                      >
+                        בחירת החזרה לשימוש
+                      </button>
+                    )}
                   </div>
                   <div className="mt-7">
                     <h3 className="mb-3 text-lg font-semibold">ציוד בחוץ ואבוד</h3>
@@ -1158,7 +1189,9 @@ export function App() {
                       searchPlaceholder="סינון לפי פריט, שואל או קוד…"
                     />
                   </div>
-                  {!isAdmin && <PermissionNote />}
+                  {!isAdmin && (
+                    <PermissionNote text="החזרת ציוד פגום לשימוש זמינה גם במצב מפעיל. פעולות ניהול אחרות דורשות מצב מנהל." />
+                  )}
                 </>
               )}
               {managementTab === 'catalog' && (
@@ -1560,6 +1593,7 @@ function ActionCard({
       className="action-card"
       onSubmit={(event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
+        if (disabled) return;
         onSubmit(new FormData(event.currentTarget));
       }}
     >
@@ -1677,11 +1711,15 @@ function Select({
     </label>
   );
 }
-function PermissionNote() {
+function PermissionNote({
+  text = 'המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.',
+}: {
+  text?: string;
+}) {
   return (
     <p className="permission-note">
       <ShieldCheck className="size-4 shrink-0" />
-      המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.
+      {text}
     </p>
   );
 }
