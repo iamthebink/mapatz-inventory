@@ -108,6 +108,7 @@ const eventNames: Record<string, string> = {
   returned_damaged: 'החזרה פגומה',
   marked_lost: 'סומן כאבוד',
   found_returned: 'נמצא והוחזר',
+  found_returned_damaged: 'נמצא והוחזר פגום',
   repaired: 'תיקון',
   written_off: 'גריעה',
 };

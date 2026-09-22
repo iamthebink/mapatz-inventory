@@ -8,6 +8,7 @@ import {
   type BorrowerOperationRequest,
   type BorrowerOperationResult,
   type CommandProtocolError,
+  type LostPart,
   type LostCreditPart,
   type ReturnPart,
   type ValidationFieldError,
@@ -26,6 +27,7 @@ export type StagedItem = {
   itemId: number;
   borrow: BorrowPart[];
   return: ReturnPart[];
+  lost?: LostPart[];
   lostCredit: LostCreditPart[];
 };
 
@@ -87,13 +89,15 @@ export type OperationState = {
 export type OperationAction =
   | { type: 'stage-borrow'; itemId: number; part: BorrowPart }
   | { type: 'stage-return'; itemId: number; part: ReturnPart }
+  | { type: 'stage-lost'; itemId: number; part: LostPart }
   | { type: 'stage-lost-credit'; itemId: number; part: LostCreditPart }
   | { type: 'update-borrow'; itemId: number; index: number; part: BorrowPart }
   | { type: 'update-return'; itemId: number; index: number; part: ReturnPart }
   | {
       type: 'rollback';
       itemId: number;
-      direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lostCredit';
+      direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit';
+      condition?: 'usable' | 'damaged';
     }
   | { type: 'dispatch'; attemptKey: string; intent: SaveIntent }
   | { type: 'dispatch-unknown'; attemptKey: string }
@@ -254,6 +258,7 @@ const totalReturn = (parts: ReturnPart[]): number | null =>
   safeSum(parts.flatMap((part) => [part.usable, part.damaged]));
 const usableReturn = (parts: ReturnPart[]): number | null =>
   safeSum(parts.map((part) => part.usable));
+const totalLost = (parts: LostPart[]): number | null => safeSum(parts.map((part) => part.quantity));
 const totalLostCredit = (parts: LostCreditPart[]): number | null =>
   safeSum(parts.map((part) => part.quantity));
 
@@ -287,6 +292,15 @@ function validReturn(part: ReturnPart): boolean {
 }
 
 function validLostCredit(part: LostCreditPart): boolean {
+  return (
+    isSafePositive(part.quantity) &&
+    (part.condition === 'usable' || part.condition === 'damaged') &&
+    typeof part.note === 'string' &&
+    part.note.length <= 500
+  );
+}
+
+function validLost(part: LostPart): boolean {
   return isSafePositive(part.quantity) && typeof part.note === 'string' && part.note.length <= 500;
 }
 
@@ -310,30 +324,39 @@ function holdingAfter(state: OperationState, itemId: number, staged = state.stag
   const group = staged.find((entry) => entry.itemId === itemId);
   const borrowed = totalBorrow(group?.borrow ?? []);
   const returned = totalReturn(group?.return ?? []);
-  return borrowed === null || returned === null ? null : safeArithmetic(base, -returned, borrowed);
+  const markedLost = totalLost(group?.lost ?? []);
+  return borrowed === null || returned === null || markedLost === null
+    ? null
+    : safeArithmetic(base, -returned, -markedLost, borrowed);
 }
 
 function lostAfter(state: OperationState, itemId: number, staged = state.staged): number | null {
   const base = state.snapshot.holdings.find((holding) => holding.itemId === itemId)?.lost ?? 0;
   const group = staged.find((entry) => entry.itemId === itemId);
+  const markedLost = totalLost(group?.lost ?? []);
   const credited = totalLostCredit(group?.lostCredit ?? []);
-  return credited === null ? null : safeArithmetic(base, -credited);
+  return credited === null || markedLost === null
+    ? null
+    : safeArithmetic(base, markedLost, -credited);
 }
 
 function announcement(
   state: OperationState,
   itemId: number,
-  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lostCredit',
+  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
   quantity: number,
   staged: StagedItem[],
 ): string | null {
   const resulting =
-    direction === 'lostCredit'
+    direction === 'lost' || direction === 'lostCredit'
       ? lostAfter(state, itemId, staged)
       : holdingAfter(state, itemId, staged);
   if (resulting === null) return null;
   if (direction === 'lostCredit') {
     return `${itemName(state, itemId)}: החזרת אבוד, כמות ${quantity}; יתרת הציוד האבוד כעת ${resulting}`;
+  }
+  if (direction === 'lost') {
+    return `${itemName(state, itemId)}: סימון כאבוד, כמות ${quantity}; יתרת הציוד האבוד כעת ${resulting}`;
   }
   const directionLabel = direction === 'borrow' ? 'השאלה' : 'החזרה';
   return `${itemName(state, itemId)}: ${directionLabel}, כמות ${quantity}; באחריות השואל כעת ${resulting}`;
@@ -345,14 +368,18 @@ function updateGroup(
   update: (group: StagedItem) => StagedItem,
 ): StagedItem[] {
   const index = staged.findIndex((group) => group.itemId === itemId);
-  if (index < 0) return [...staged, update({ itemId, borrow: [], return: [], lostCredit: [] })];
+  if (index < 0)
+    return [...staged, update({ itemId, borrow: [], return: [], lost: [], lostCredit: [] })];
   return staged.map((group, position) => (position === index ? update(group) : group));
 }
 
 function retainNonEmpty(staged: StagedItem[]): StagedItem[] {
   return staged.filter(
     (group) =>
-      group.borrow.length > 0 || group.return.length > 0 || (group.lostCredit ?? []).length > 0,
+      group.borrow.length > 0 ||
+      group.return.length > 0 ||
+      (group.lost ?? []).length > 0 ||
+      (group.lostCredit ?? []).length > 0,
   );
 }
 
@@ -360,10 +387,12 @@ export type ItemProjection = {
   itemId: number;
   borrowParts: BorrowPart[];
   returnParts: ReturnPart[];
+  lostParts: LostPart[];
   lostCreditParts: LostCreditPart[];
   comments: string[];
   stagedBorrow: number;
   stagedReturn: number;
+  stagedLost: number;
   stagedLostCredit: number;
   projectedHeld: number;
   returnableNow: number;
@@ -395,30 +424,54 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
   const borrowed = totalBorrow(group?.borrow ?? []);
   const returned = totalReturn(group?.return ?? []);
   const usable = usableReturn(group?.return ?? []);
+  const markedLost = totalLost(group?.lost ?? []);
   const lostCredit = totalLostCredit(group?.lostCredit ?? []);
+  const usableLostCredit = safeSum(
+    (group?.lostCredit ?? [])
+      .filter((part) => part.condition === 'usable')
+      .map((part) => part.quantity),
+  );
   const baseReturnable = holding?.returnable ?? 0;
   const lost = holding?.lost ?? 0;
   const conflicts = scopedConflicts.filter((conflict) => {
     if (conflict.scope === 'return') return returned !== null && returned > baseReturnable;
-    if (conflict.scope === 'lost-credit') return lostCredit !== null && lostCredit > lost;
+    if (conflict.scope === 'held')
+      return returned !== null && markedLost !== null && returned + markedLost > baseReturnable;
+    if (conflict.scope === 'lost-credit')
+      return lostCredit !== null && markedLost !== null && lostCredit > lost + markedLost;
     if (conflict.scope === 'borrow') {
       if (!item || borrowed === null || usable === null) return true;
       const usableCredit = returned !== null && returned <= baseReturnable ? usable : 0;
-      const recoveredCredit = lostCredit !== null && lostCredit <= lost ? lostCredit : 0;
+      const recoveredCredit =
+        lostCredit !== null &&
+        usableLostCredit !== null &&
+        markedLost !== null &&
+        lostCredit <= lost + markedLost
+          ? usableLostCredit
+          : 0;
       const available = safeArithmetic(item.available, usableCredit, recoveredCredit);
       return available === null || borrowed > available;
     }
     return true;
   });
   const projectedHeld =
-    borrowed === null || returned === null
+    borrowed === null || returned === null || markedLost === null
       ? null
-      : safeArithmetic(baseReturnable, -returned, borrowed);
-  const returnableNow = returned === null ? null : safeArithmetic(baseReturnable, -returned);
-  const lostNow = lostCredit === null ? null : safeArithmetic(lost, -lostCredit);
+      : safeArithmetic(baseReturnable, -returned, -markedLost, borrowed);
+  const returnableNow =
+    returned === null || markedLost === null
+      ? null
+      : safeArithmetic(baseReturnable, -returned, -markedLost);
+  const lostNow =
+    lostCredit === null || markedLost === null
+      ? null
+      : safeArithmetic(lost, markedLost, -lostCredit);
   const returnBlocked = conflicts.some(
     (conflict) =>
-      conflict.scope === 'borrower' || conflict.scope === 'item' || conflict.scope === 'return',
+      conflict.scope === 'borrower' ||
+      conflict.scope === 'item' ||
+      conflict.scope === 'return' ||
+      conflict.scope === 'held',
   );
   const returnCompatible =
     item !== undefined &&
@@ -430,6 +483,19 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     returnableNow >= 0 &&
     !returnBlocked &&
     (group?.return ?? []).every(validReturn);
+  const markLostCompatible =
+    item !== undefined &&
+    item.selectable &&
+    item.kind === 'non_consumable' &&
+    !item.archived &&
+    markedLost !== null &&
+    returnableNow !== null &&
+    returnableNow >= 0 &&
+    !conflicts.some(
+      (conflict) =>
+        conflict.scope === 'borrower' || conflict.scope === 'item' || conflict.scope === 'held',
+    ) &&
+    (group?.lost ?? []).every(validLost);
   const lostBlocked = conflicts.some(
     (conflict) =>
       conflict.scope === 'borrower' ||
@@ -444,14 +510,15 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     lostNow !== null &&
     lostNow >= 0 &&
     !lostBlocked &&
-    (group?.lostCredit ?? []).every(validLostCredit);
+    (group?.lostCredit ?? []).every(validLostCredit) &&
+    markLostCompatible;
   const projectedAvailability =
-    borrowed === null || usable === null || lostCredit === null
+    borrowed === null || usable === null || lostCredit === null || usableLostCredit === null
       ? null
       : safeArithmetic(
           item?.available ?? 0,
           returnCompatible ? usable : 0,
-          lostCompatible ? lostCredit : 0,
+          lostCompatible ? usableLostCredit : 0,
           -borrowed,
         );
   const compatible =
@@ -463,6 +530,8 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     returned !== null &&
     usable !== null &&
     lostCredit !== null &&
+    usableLostCredit !== null &&
+    markedLost !== null &&
     projectedHeld !== null &&
     returnableNow !== null &&
     lostNow !== null &&
@@ -475,14 +544,17 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     itemId,
     borrowParts: (group?.borrow ?? []).map((part) => ({ ...part })),
     returnParts: (group?.return ?? []).map((part) => ({ ...part })),
+    lostParts: (group?.lost ?? []).map((part) => ({ ...part })),
     lostCreditParts: (group?.lostCredit ?? []).map((part) => ({ ...part })),
     comments: [
       ...(group?.borrow ?? []).map((part) => part.note),
       ...(group?.return ?? []).map((part) => part.note),
+      ...(group?.lost ?? []).map((part) => part.note),
       ...(group?.lostCredit ?? []).map((part) => part.note),
     ],
     stagedBorrow: borrowed ?? 0,
     stagedReturn: returned ?? 0,
+    stagedLost: markedLost ?? 0,
     stagedLostCredit: lostCredit ?? 0,
     projectedHeld: projectedHeld ?? 0,
     returnableNow: returnableNow ?? 0,
@@ -497,15 +569,21 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
 function clearDirectionalConflict(
   conflicts: BorrowerOperationConflict[],
   itemId: number,
-  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lostCredit',
+  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
 ): BorrowerOperationConflict[] {
-  const scope =
+  const scopes =
     direction === 'lostCredit'
-      ? 'lost-credit'
-      : direction === 'usable' || direction === 'damaged'
-        ? 'return'
-        : direction;
-  return conflicts.filter((conflict) => !(conflict.scope === scope && conflict.itemId === itemId));
+      ? ['lost-credit']
+      : direction === 'lost'
+        ? ['held']
+        : direction === 'return' || direction === 'usable' || direction === 'damaged'
+          ? ['return', 'held']
+          : [direction];
+  return conflicts.filter(
+    (conflict) =>
+      conflict.scope === 'borrower' ||
+      !(scopes.includes(conflict.scope) && conflict.itemId === itemId),
+  );
 }
 
 export function operationRequest(state: OperationState): BorrowerOperationRequest {
@@ -516,6 +594,9 @@ export function operationRequest(state: OperationState): BorrowerOperationReques
       itemId: group.itemId,
       ...(group.borrow.length > 0 ? { borrow: group.borrow.map((part) => ({ ...part })) } : {}),
       ...(group.return.length > 0 ? { return: group.return.map((part) => ({ ...part })) } : {}),
+      ...((group.lost ?? []).length > 0
+        ? { lost: (group.lost ?? []).map((part) => ({ ...part })) }
+        : {}),
       ...((group.lostCredit ?? []).length > 0
         ? { lostCredit: (group.lostCredit ?? []).map((part) => ({ ...part })) }
         : {}),
@@ -533,6 +614,8 @@ export function canSave(state: OperationState): boolean {
       state.staged.flatMap((group) => group.return.map((part) => part.usable + part.damaged)),
     ) === null ||
     safeSum(state.staged.flatMap((group) => group.return.map((part) => part.usable))) === null ||
+    safeSum(state.staged.flatMap((group) => (group.lost ?? []).map((part) => part.quantity))) ===
+      null ||
     safeSum(
       state.staged.flatMap((group) => (group.lostCredit ?? []).map((part) => part.quantity)),
     ) === null
@@ -542,6 +625,7 @@ export function canSave(state: OperationState): boolean {
     if (
       !group.borrow.every(validBorrow) ||
       !group.return.every(validReturn) ||
+      !(group.lost ?? []).every(validLost) ||
       !(group.lostCredit ?? []).every(validLostCredit)
     )
       return false;
@@ -630,15 +714,43 @@ function conflictsBelongToState(
         requested > returnable
       );
     }
+    if (conflict.scope === 'held') {
+      const requestedReturn = totalReturn(group.return ?? []);
+      const requestedLost = totalLost(group.lost ?? []);
+      const returnable =
+        snapshot.holdings.find((holding) => holding.itemId === conflict.itemId)?.returnable ?? 0;
+      const requested =
+        requestedReturn === null || requestedLost === null
+          ? null
+          : safeArithmetic(requestedReturn, requestedLost);
+      return (
+        requested === conflict.requested &&
+        conflict.returnable === returnable &&
+        requested !== null &&
+        requested > returnable
+      );
+    }
     if (conflict.scope === 'lost-credit') {
       const requested = totalLostCredit(group.lostCredit ?? []);
-      const lost =
+      const markedLost = totalLost(group.lost ?? []);
+      const lostBase =
         snapshot.holdings.find((holding) => holding.itemId === conflict.itemId)?.lost ?? 0;
-      return requested === conflict.requested && conflict.lost === lost && requested > lost;
+      const lost = markedLost === null ? null : safeArithmetic(lostBase, markedLost);
+      return (
+        requested === conflict.requested &&
+        conflict.lost === lost &&
+        requested !== null &&
+        lost !== null &&
+        requested > lost
+      );
     }
     const requested = totalBorrow(group.borrow ?? []);
     const usable = usableReturn(group.return ?? []);
-    const lostCredit = totalLostCredit(group.lostCredit ?? []);
+    const lostCredit = safeSum(
+      (group.lostCredit ?? [])
+        .filter((part) => part.condition === 'usable')
+        .map((part) => part.quantity),
+    );
     const available =
       item && usable !== null && lostCredit !== null
         ? safeArithmetic(item.available, usable, lostCredit)
@@ -682,6 +794,20 @@ export function operationReducer(state: OperationState, action: OperationAction)
       conflicts: clearDirectionalConflict(state.conflicts, action.itemId, 'return'),
       phase: { kind: 'ready', retiredAttemptKey: retiredKey(state.phase) },
       announcement: announcement(state, action.itemId, 'return', quantity, staged),
+    };
+  }
+  if (action.type === 'stage-lost' && editable(state) && validLost(action.part)) {
+    const ownedPart = { ...action.part };
+    const staged = updateGroup(state.staged, action.itemId, (group) => ({
+      ...group,
+      lost: [...(group.lost ?? []), ownedPart],
+    }));
+    return {
+      ...state,
+      staged,
+      conflicts: clearDirectionalConflict(state.conflicts, action.itemId, 'lost'),
+      phase: { kind: 'ready', retiredAttemptKey: retiredKey(state.phase) },
+      announcement: announcement(state, action.itemId, 'lost', action.part.quantity, staged),
     };
   }
   if (action.type === 'stage-lost-credit' && editable(state) && validLostCredit(action.part)) {
@@ -748,7 +874,13 @@ export function operationReducer(state: OperationState, action: OperationAction)
             ? safeSum(group.return.map((part) => part.usable))
             : action.direction === 'damaged'
               ? safeSum(group.return.map((part) => part.damaged))
-              : totalLostCredit(group.lostCredit ?? []);
+              : action.direction === 'lost'
+                ? totalLost(group.lost ?? [])
+                : totalLostCredit(
+                    (group.lostCredit ?? []).filter(
+                      (part) => !action.condition || part.condition === action.condition,
+                    ),
+                  );
     if (quantity === null || quantity === 0) return state;
     const staged = retainNonEmpty(
       updateGroup(state.staged, action.itemId, (entry) => {
@@ -766,9 +898,23 @@ export function operationReducer(state: OperationState, action: OperationAction)
               .map((part) => ({ ...part, damaged: 0 }))
               .filter((part) => part.usable > 0),
           };
+        if (action.direction === 'lostCredit' && action.condition)
+          return {
+            ...entry,
+            lostCredit: entry.lostCredit.filter((part) => part.condition !== action.condition),
+          };
         return { ...entry, [action.direction]: [] };
       }),
     );
+    if (action.direction === 'lost' && lostAfter(state, action.itemId, staged)! < 0)
+      return {
+        ...state,
+        feedback: {
+          kind: 'warning',
+          code: 'dependent_recovery',
+          message: 'Cancel the dependent recovery first',
+        },
+      };
     return {
       ...state,
       staged,

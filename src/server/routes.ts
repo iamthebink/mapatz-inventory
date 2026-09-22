@@ -69,8 +69,20 @@ const borrowerOperationInput = z
               )
               .min(1)
               .optional(),
-            lostCredit: z
+            lost: z
               .array(z.object({ quantity: safePositive, note }).strict())
+              .min(1)
+              .optional(),
+            lostCredit: z
+              .array(
+                z
+                  .object({
+                    quantity: safePositive,
+                    condition: z.enum(['usable', 'damaged']),
+                    note,
+                  })
+                  .strict(),
+              )
               .min(1)
               .optional(),
           })
@@ -79,9 +91,10 @@ const borrowerOperationInput = z
             (group) =>
               group.borrow !== undefined ||
               group.return !== undefined ||
+              group.lost !== undefined ||
               group.lostCredit !== undefined,
             {
-              message: 'An item group must include borrow, return, or lost-credit parts',
+              message: 'An item group must include borrow, return, lost, or lost-credit parts',
             },
           ),
       )
@@ -92,7 +105,9 @@ const borrowerOperationInput = z
     const seen = new Set<number>();
     const commandBorrow: number[] = [];
     const commandReturn: number[] = [];
+    const commandHeld: number[] = [];
     const commandUsable: number[] = [];
+    const commandLost: number[] = [];
     const commandLostCredit: number[] = [];
     request.items.forEach((group, index) => {
       if (seen.has(group.itemId))
@@ -105,7 +120,9 @@ const borrowerOperationInput = z
       const borrow = (group.borrow ?? []).map((part) => part.quantity);
       const returned = (group.return ?? []).map((part) => part.usable + part.damaged);
       const usable = (group.return ?? []).map((part) => part.usable);
+      const lost = (group.lost ?? []).map((part) => part.quantity);
       const lostCredit = (group.lostCredit ?? []).map((part) => part.quantity);
+      const held = [...returned, ...lost];
       group.return?.forEach((part, partIndex) => {
         if (!Number.isSafeInteger(part.usable + part.damaged))
           context.addIssue({
@@ -118,19 +135,30 @@ const borrowerOperationInput = z
         [borrow, 'borrow', 'Per-item borrow total must be a safe integer'],
         [returned, 'return', 'Per-item return total must be a safe integer'],
         [usable, 'return', 'Per-item usable-return total must be a safe integer'],
+        [lost, 'lost', 'Per-item lost total must be a safe integer'],
         [lostCredit, 'lostCredit', 'Per-item lost-credit total must be a safe integer'],
       ] as const)
         if (!isSafeAggregate(values))
           context.addIssue({ code: 'custom', path: ['items', index, path], message });
+      if (!isSafeAggregate(held))
+        context.addIssue({
+          code: 'custom',
+          path: ['items', index],
+          message: 'Per-item held-consumption total must be a safe integer',
+        });
       commandBorrow.push(...borrow);
       commandReturn.push(...returned);
+      commandHeld.push(...held);
       commandUsable.push(...usable);
+      commandLost.push(...lost);
       commandLostCredit.push(...lostCredit);
     });
     for (const [values, message] of [
       [commandBorrow, 'Command borrow total must be a safe integer'],
       [commandReturn, 'Command return total must be a safe integer'],
+      [commandHeld, 'Command held-consumption total must be a safe integer'],
       [commandUsable, 'Command usable-return total must be a safe integer'],
+      [commandLost, 'Command lost total must be a safe integer'],
       [commandLostCredit, 'Command lost-credit total must be a safe integer'],
     ] as const)
       if (!isSafeAggregate(values)) context.addIssue({ code: 'custom', path: ['items'], message });

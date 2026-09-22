@@ -60,6 +60,50 @@ function deepFreeze<T>(value: T): T {
 }
 
 describe('borrower operation state', () => {
+  it('moves staged loss between held and lost, funds recovery, and protects dependency rollback', () => {
+    let state = createOperationState(7, snapshot());
+    state = operationReducer(state, {
+      type: 'stage-lost',
+      itemId: 11,
+      part: { quantity: 2, note: 'missing' },
+    });
+    state = operationReducer(state, {
+      type: 'stage-lost-credit',
+      itemId: 11,
+      part: { quantity: 3, condition: 'usable', note: 'received' },
+    });
+
+    expect(operationRequest(state).items).toEqual([
+      {
+        itemId: 11,
+        lost: [{ quantity: 2, note: 'missing' }],
+        lostCredit: [{ quantity: 3, condition: 'usable', note: 'received' }],
+      },
+    ]);
+    expect(projectItem(state, 11)).toMatchObject({
+      projectedHeld: 3,
+      returnableNow: 3,
+      lostNow: 1,
+      stagedLost: 2,
+      stagedLostCredit: 3,
+      projectedAvailability: 9,
+      compatible: true,
+    });
+
+    const blocked = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lost' });
+    expect(blocked.staged).toEqual(state.staged);
+    expect(blocked.feedback?.code).toBe('dependent_recovery');
+
+    state = operationReducer(state, {
+      type: 'rollback',
+      itemId: 11,
+      direction: 'lostCredit',
+    });
+    state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lost' });
+    expect(state.staged).toEqual([]);
+    expect(projectItem(state, 11)).toMatchObject({ projectedHeld: 5, lostNow: 2 });
+  });
+
   it('stages lost credits against the independent lost balance and projects usable stock', () => {
     let state = createOperationState(
       7,
@@ -71,11 +115,11 @@ describe('borrower operation state', () => {
     state = operationReducer(state, {
       type: 'stage-lost-credit',
       itemId: 11,
-      part: { quantity: 1, note: 'found' },
+      part: { quantity: 1, condition: 'usable', note: 'found' },
     });
 
     expect(operationRequest(state).items).toEqual([
-      { itemId: 11, lostCredit: [{ quantity: 1, note: 'found' }] },
+      { itemId: 11, lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }] },
     ]);
     expect(projectItem(state, 11)).toMatchObject({
       returnableNow: 0,
@@ -90,6 +134,44 @@ describe('borrower operation state', () => {
 
     state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lostCredit' });
     expect(state.staged).toEqual([]);
+  });
+
+  it('keeps damaged recovery out of usable funding and cancels recovery conditions independently', () => {
+    let state = createOperationState(
+      7,
+      snapshot({
+        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        holdings: [{ itemId: 11, returnable: 0, lost: 2 }],
+      }),
+    );
+    state = operationReducer(state, {
+      type: 'stage-lost-credit',
+      itemId: 11,
+      part: { quantity: 1, condition: 'damaged', note: 'broken' },
+    });
+    expect(projectItem(state, 11)).toMatchObject({ lostNow: 1, projectedAvailability: 0 });
+    state = operationReducer(state, {
+      type: 'stage-borrow',
+      itemId: 11,
+      part: { quantity: 1, note: '' },
+    });
+    expect(projectItem(state, 11)?.compatible).toBe(false);
+    state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'borrow' });
+    state = operationReducer(state, {
+      type: 'stage-lost-credit',
+      itemId: 11,
+      part: { quantity: 1, condition: 'usable', note: 'intact' },
+    });
+    expect(projectItem(state, 11)).toMatchObject({ lostNow: 0, projectedAvailability: 1 });
+    state = operationReducer(state, {
+      type: 'rollback',
+      itemId: 11,
+      direction: 'lostCredit',
+      condition: 'damaged',
+    });
+    expect(operationRequest(state).items).toEqual([
+      { itemId: 11, lostCredit: [{ quantity: 1, condition: 'usable', note: 'intact' }] },
+    ]);
   });
 
   it('preserves ordered directional buckets, immutable truth, projection formulas, and announcements', () => {

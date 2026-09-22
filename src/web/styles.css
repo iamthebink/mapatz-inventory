@@ -573,6 +573,68 @@
     flex-wrap: wrap;
     gap: 6px;
   }
+  .borrower-equipment-list,
+  .borrower-pending-list,
+  .borrower-review-list {
+    min-width: 0;
+  }
+  .borrower-equipment-row,
+  .borrower-pending-row,
+  .borrower-review-row {
+    min-width: 0;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-ctp-surface);
+  }
+  .borrower-equipment-row:last-child,
+  .borrower-pending-row:last-child,
+  .borrower-review-row:last-child {
+    border-bottom: 0;
+  }
+  .borrower-equipment-summary,
+  .borrower-pending-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+  }
+  .borrower-equipment-summary > div:first-child,
+  .borrower-pending-row > div:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .borrower-balance {
+    @apply mt-1 inline-flex rounded-lg bg-ctp-base px-2 py-1 text-xs text-ctp-subtext;
+  }
+  .lost-equipment-section > summary {
+    @apply flex min-h-12 cursor-pointer items-center justify-between gap-3 px-4 py-3 font-semibold;
+  }
+  .borrower-more-actions {
+    position: relative;
+  }
+  .borrower-action-menu {
+    @apply absolute z-40 mt-1 grid rounded-xl border border-ctp-surface bg-white p-1 shadow-xl;
+    inset-inline-end: 0;
+    width: min(13rem, calc(100vw - 3rem));
+  }
+  .borrower-action-menu button {
+    @apply flex min-h-11 w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-right text-sm hover:bg-ctp-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ctp-blue;
+  }
+  .quantity-condition-checkbox {
+    @apply flex min-h-11 cursor-pointer items-center gap-2 text-sm;
+  }
+  .quantity-condition-checkbox input {
+    @apply size-4 accent-ctp-blue;
+  }
+  .borrower-pending-note,
+  .borrower-review-row small {
+    @apply mt-1 block text-sm text-ctp-subtext;
+    overflow-wrap: anywhere;
+  }
+  .borrower-review-row {
+    display: grid;
+    gap: 4px;
+  }
   .field-error {
     @apply mt-1 text-sm text-ctp-red;
   }
@@ -611,13 +673,7 @@
 
 @media (min-width: 761px) {
   .borrower-work-segment {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .staged-section {
-    grid-column: 1;
-  }
-  .holdings-section {
-    grid-column: 2;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -673,6 +729,15 @@
   .holding-return-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+  .borrower-equipment-summary,
+  .borrower-pending-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .borrower-action-menu {
+    inset-inline-start: 0;
+    inset-inline-end: auto;
   }
 }
 

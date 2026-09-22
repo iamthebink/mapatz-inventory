@@ -24,6 +24,52 @@ async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
 }
 
 describe('inventory workbook reports', () => {
+  it('includes damaged lost recovery in unresolved damage without usable credit', async () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const transfers = new InventoryTransferService(db);
+    const item = inventory.createItem({ name: 'Recovered damaged', kind: 'non_consumable' });
+    inventory.addStock(item.id, 2);
+    const borrower = inventory.createBorrower({
+      username: 'damage-report',
+      name: 'Damage Report',
+      type: 'individual',
+    });
+    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    inventory.markLost(checkout, 2, true);
+    inventory.commitBorrowerOperations(borrower.id, '00000000-0000-4000-8000-000000000025', {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [
+        {
+          itemId: item.id,
+          lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken' }],
+        },
+      ],
+    });
+
+    expect(inventory.listItems().find((entry) => entry.id === item.id)).toMatchObject({
+      available: 0,
+      damaged: 1,
+    });
+    const snapshot = transfers.snapshot();
+    expect(snapshot.items[0]).toMatchObject({ resetTotal: 2 });
+    expect(unresolvedDamageReport(snapshot)).toEqual([
+      {
+        itemCode: item.code,
+        itemName: item.name,
+        location: null,
+        unresolvedDamagedQuantity: 1,
+      },
+    ]);
+    const workbook = await load(await exportWorkbook(snapshot));
+    expect(
+      workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.unresolvedDamage.name)!.getRow(2).getCell(4)
+        .value,
+    ).toBe(1);
+    db.close();
+  });
+
   it('exports only unresolved damage and reconciles it with recovery events', async () => {
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);

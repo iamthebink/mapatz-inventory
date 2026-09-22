@@ -25,6 +25,50 @@ function fixture() {
 }
 
 describe('borrower workflow snapshot API', () => {
+  it('lets operators atomically mark held equipment lost and recover it in the same command', async () => {
+    const { db, inventory, agent } = fixture();
+    const borrower = inventory.createBorrower({
+      username: 'operator-loss',
+      name: 'Operator Loss',
+      type: 'individual',
+    });
+    const item = inventory.createItem({ name: 'Operator tent', kind: 'non_consumable' });
+    inventory.addStock(item.id, 3);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 3);
+
+    await agent
+      .post(`/api/borrowers/${borrower.id}/operations`)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000119')
+      .send({
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            lost: [{ quantity: 2, note: 'missing' }],
+            lostCredit: [{ quantity: 1, condition: 'usable', note: 'received' }],
+          },
+        ],
+      })
+      .expect(201)
+      .expect(({ body }) => expect(body).toMatchObject({ outcome: 'committed' }));
+
+    expect(
+      db
+        .prepare(
+          "SELECT kind,quantity,note FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','found_returned') ORDER BY id",
+        )
+        .all(checkoutId),
+    ).toEqual([
+      { kind: 'marked_lost', quantity: 2, note: 'missing' },
+      { kind: 'found_returned', quantity: 1, note: 'received' },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id)).toMatchObject({
+      holdings: [{ itemId: item.id, returnable: 1, lost: 1 }],
+      inventory: [expect.objectContaining({ id: item.id, available: 1 })],
+    });
+  });
+
   it('accepts an operator lost-credit part and rejects malformed lost-credit payloads', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -43,7 +87,9 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: item.id, lostCredit: [{ quantity: 1, note: 'found' }] }],
+        items: [
+          { itemId: item.id, lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }] },
+        ],
       })
       .expect(201)
       .expect(({ body }) => expect(body).toMatchObject({ outcome: 'committed' }));
@@ -69,10 +115,70 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: item.id, lostCredit: [{ quantity: 1, note: '', extra: true }] }],
+        items: [
+          {
+            itemId: item.id,
+            lostCredit: [{ quantity: 1, condition: 'usable', note: '', extra: true }],
+          },
+        ],
       })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('validation_error'));
+
+    for (const invalidPart of [
+      { quantity: 1, note: 'implicit usable' },
+      { quantity: 1, condition: 'broken', note: '' },
+    ])
+      await agent
+        .post(`/api/borrowers/${borrower.id}/operations`)
+        .set('Idempotency-Key', '00000000-0000-4000-8000-000000000122')
+        .send({
+          contractVersion: 1,
+          ledgerEpoch: 1,
+          items: [{ itemId: item.id, lostCredit: [invalidPart] }],
+        })
+        .expect(400)
+        .expect(({ body }) => expect(body.error).toBe('validation_error'));
+  });
+
+  it('accepts an operator damaged lost recovery without usable-stock credit', async () => {
+    const { db, inventory, agent } = fixture();
+    const borrower = inventory.createBorrower({
+      username: 'damaged-lost-credit',
+      name: 'Damaged Lost Credit',
+      type: 'individual',
+    });
+    const item = inventory.createItem({ name: 'Damaged found tent', kind: 'non_consumable' });
+    inventory.addStock(item.id, 1);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
+    inventory.markLost(checkoutId, 1, true);
+
+    await agent
+      .post(`/api/borrowers/${borrower.id}/operations`)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000123')
+      .send({
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'returned broken' }],
+          },
+        ],
+      })
+      .expect(201);
+    expect(
+      db
+        .prepare(
+          "SELECT kind,quantity,related_event_id checkoutId FROM inventory_events WHERE kind='found_returned_damaged'",
+        )
+        .all(),
+    ).toEqual([{ kind: 'found_returned_damaged', quantity: 1, checkoutId }]);
+    expect(inventory.listItems().find((entry) => entry.id === item.id)).toMatchObject({
+      available: 0,
+      damaged: 1,
+    });
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([]);
   });
 
   it('returns the exact search and desk snapshot transports', async () => {
@@ -293,6 +399,10 @@ describe('borrower workflow snapshot API', () => {
               { usable: Number.MAX_SAFE_INTEGER, damaged: 1, note: '' },
               { usable: 1, damaged: 0, note: '' },
             ],
+            lost: [
+              { quantity: Number.MAX_SAFE_INTEGER, note: '' },
+              { quantity: 1, note: '' },
+            ],
           },
         ],
       })
@@ -305,9 +415,45 @@ describe('borrower workflow snapshot API', () => {
             'Per-item borrow total must be a safe integer',
             'Per-item return total must be a safe integer',
             'Per-item usable-return total must be a safe integer',
+            'Per-item lost total must be a safe integer',
             'Command borrow total must be a safe integer',
             'Command return total must be a safe integer',
             'Command usable-return total must be a safe integer',
+            'Command lost total must be a safe integer',
+          ]),
+        );
+      });
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
+      count: 0,
+    });
+  });
+
+  it('rejects unsafe combined return and loss consumption before domain conflict handling', async () => {
+    const { db, agent } = fixture();
+    await agent
+      .post('/api/borrowers/1/operations')
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000124')
+      .send({
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: 1,
+            return: [{ usable: Number.MAX_SAFE_INTEGER, damaged: 0, note: '' }],
+            lost: [{ quantity: 1, note: '' }],
+          },
+        ],
+      })
+      .expect(400)
+      .expect(({ body }) => {
+        expect(body.error).toBe('validation_error');
+        expect(body.fieldErrors).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              field: 'items[0]',
+              message: 'Per-item held-consumption total must be a safe integer',
+            }),
           ]),
         );
       });
@@ -399,7 +545,7 @@ describe('borrower workflow snapshot API', () => {
         {
           field: 'items[0]',
           code: 'custom',
-          message: 'An item group must include borrow, return, or lost-credit parts',
+          message: 'An item group must include borrow, return, lost, or lost-credit parts',
         },
       ],
     },
@@ -422,6 +568,32 @@ describe('borrower workflow snapshot API', () => {
           field: 'items[0].return',
           code: 'too_small',
           message: 'Too small: expected array to have >=1 items',
+        },
+      ],
+    },
+    {
+      name: 'empty lost parts',
+      body: { contractVersion: 1, ledgerEpoch: 1, items: [{ itemId: 1, lost: [] }] },
+      fieldErrors: [
+        {
+          field: 'items[0].lost',
+          code: 'too_small',
+          message: 'Too small: expected array to have >=1 items',
+        },
+      ],
+    },
+    {
+      name: 'zero lost quantity',
+      body: {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: 1, lost: [{ quantity: 0, note: '' }] }],
+      },
+      fieldErrors: [
+        {
+          field: 'items[0].lost[0].quantity',
+          code: 'too_small',
+          message: 'Too small: expected number to be >0',
         },
       ],
     },

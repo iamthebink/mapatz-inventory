@@ -331,3 +331,51 @@ it('round-trips mixed ordinary and found returns and rejects malformed recoverie
   source.db.close();
   destination.close();
 });
+
+it('round-trips damaged lost recovery and rejects an over-recovery workbook', async () => {
+  const source = sourceFixture();
+  const loan = source.inventory.listLoans()[0]!;
+  expect(
+    source.inventory.commitBorrowerOperations(
+      loan.borrowerId,
+      '00000000-0000-4000-8000-000000000026',
+      {
+        contractVersion: 1,
+        ledgerEpoch: 2,
+        items: [
+          {
+            itemId: loan.itemId,
+            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken' }],
+          },
+        ],
+      },
+    ),
+  ).toMatchObject({ outcome: 'committed' });
+  const snapshot = source.transfers.snapshot();
+  const bytes = await exportWorkbook(snapshot);
+  const payload = await parseRecoveryWorkbook(bytes);
+  const destination = database('damaged-found-returned');
+  const transfers = new InventoryTransferService(destination);
+  transfers.replaceWithRecovery(payload);
+  expect(transfers.snapshot()).toEqual(snapshot);
+  expect(new InventoryService(destination).listLoans()[0]).toMatchObject({
+    outstanding: 2,
+    lost: 0,
+  });
+
+  const malformed = structuredClone(payload);
+  malformed.events.find((event) => event.kind === 'found_returned_damaged')!.quantity = 2;
+  expect(() => transfers.replaceWithRecovery(malformed)).toThrow(/recovers more lost stock/);
+  expect(transfers.snapshot()).toEqual(snapshot);
+
+  const editedWorkbook = await workbook(bytes);
+  const events = editedWorkbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
+  events.eachRow((row) => {
+    if (row.getCell(2).value === 'found_returned_damaged') row.getCell(5).value = 2;
+  });
+  await expect(parseRecoveryWorkbook(await save(editedWorkbook))).rejects.toThrow(
+    /recovers more lost stock/,
+  );
+  source.db.close();
+  destination.close();
+});

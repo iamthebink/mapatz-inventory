@@ -301,10 +301,25 @@ describe('inventory domain', () => {
     inventory.returnCheckout(checkout, 2, 0);
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 0, lost: 1 });
     expectArchivalBlocked();
-    foundReturned(inventory, checkout, 1);
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, '00000000-0000-4000-8000-000000000028', {
+        contractVersion: 1,
+        ledgerEpoch: inventory.getBorrowerDeskSnapshot(borrower.id).ledgerEpoch,
+        items: [
+          {
+            itemId: item.id,
+            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'final damaged recovery' }],
+          },
+        ],
+      }),
+    ).toMatchObject({ outcome: 'committed' });
     expect(inventory.listLoans()).toEqual([]);
-    inventory.archiveItem(item.id, true);
+    expect(() => inventory.archiveItem(item.id, true)).toThrow(
+      expect.objectContaining({ code: 'damaged_stock' }),
+    );
     inventory.archiveBorrower(borrower.id, true);
+    inventory.resolveDamage(item.id, 1, true);
+    inventory.archiveItem(item.id, true);
     expect(db.prepare('SELECT archived FROM items WHERE id=?').get(item.id)).toEqual({
       archived: 1,
     });

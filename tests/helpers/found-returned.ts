@@ -12,7 +12,7 @@ export function foundReturned(
   const result = service.commitBorrowerOperations(loan.borrowerId, randomUUID(), {
     contractVersion: 1,
     ledgerEpoch: service.getBorrowerDeskSnapshot(loan.borrowerId).ledgerEpoch,
-    items: [{ itemId: loan.itemId, lostCredit: [{ quantity, note }] }],
+    items: [{ itemId: loan.itemId, lostCredit: [{ quantity, condition: 'usable', note }] }],
   });
   if (!('outcome' in result) || result.outcome !== 'committed')
     throw new Error(JSON.stringify(result));

@@ -4,7 +4,7 @@ CREATE TABLE inventory_events_new (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN (
     'stock_added','stock_removed','issued','checked_out','returned_usable',
-    'returned_damaged','marked_lost','found_returned','repaired','written_off'
+    'returned_damaged','marked_lost','found_returned','found_returned_damaged','repaired','written_off'
   )),
   item_id INTEGER NOT NULL REFERENCES items(id),
   borrower_id INTEGER REFERENCES borrowers(id),

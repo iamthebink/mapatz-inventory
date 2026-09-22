@@ -10,6 +10,7 @@ export type EventKind =
   | 'returned_damaged'
   | 'marked_lost'
   | 'found_returned'
+  | 'found_returned_damaged'
   | 'repaired'
   | 'written_off';
 

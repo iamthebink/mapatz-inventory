@@ -34,7 +34,7 @@ type Row = Record<string, any>;
 const eventEffect = `CASE kind
   WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity WHEN 'repaired' THEN quantity
   WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
-const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
+const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'found_returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
 const maxAliases = 20;
 
 type CommandKind = 'borrower_operation' | 'borrower_create';
@@ -416,6 +416,8 @@ export class InventoryService {
             part.note,
           );
         }
+        for (const part of group.lost ?? [])
+          this.allocateLosses(checkouts, group.itemId, borrowerId, part.quantity, part.note);
         const lostCheckouts = this.lostCheckouts(borrowerId, group.itemId);
         for (const part of group.lostCredit ?? [])
           this.allocateLostCredits(
@@ -423,6 +425,7 @@ export class InventoryService {
             group.itemId,
             borrowerId,
             part.quantity,
+            part.condition,
             part.note,
           );
       }
@@ -738,7 +741,7 @@ export class InventoryService {
         `SELECT e.id checkoutId,e.item_id itemId,i.code,i.name itemName,
       e.borrower_id borrowerId,b.name borrowerName,e.quantity,
       e.quantity-COALESCE(SUM(CASE WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity ELSE 0 END),0) outstanding,
-      COALESCE(SUM(CASE WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind='found_returned' THEN -x.quantity ELSE 0 END),0) lost,
+      COALESCE(SUM(CASE WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind IN ('found_returned','found_returned_damaged') THEN -x.quantity ELSE 0 END),0) lost,
       e.created_at createdAt
       FROM inventory_events e JOIN items i ON i.id=e.item_id JOIN borrowers b ON b.id=e.borrower_id
       LEFT JOIN inventory_events x ON x.related_event_id=e.id WHERE e.kind='checked_out'
@@ -871,18 +874,29 @@ export class InventoryService {
         (total, part) => total + part.usable + part.damaged,
         0,
       );
+      const requestedLost = (group.lost ?? []).reduce((total, part) => total + part.quantity, 0);
       const returnable = this.returnableCheckouts(borrowerId, group.itemId).reduce(
         (total, checkout) => total + checkout.remaining,
         0,
       );
-      if (requestedReturn > returnable) {
-        conflicts.push({
-          scope: 'return',
-          code: 'returnable_balance_changed',
-          itemId: group.itemId,
-          requested: requestedReturn,
-          returnable,
-        });
+      if (requestedReturn + requestedLost > returnable) {
+        conflicts.push(
+          requestedLost > 0
+            ? {
+                scope: 'held',
+                code: 'held_balance_changed',
+                itemId: group.itemId,
+                requested: requestedReturn + requestedLost,
+                returnable,
+              }
+            : {
+                scope: 'return',
+                code: 'returnable_balance_changed',
+                itemId: group.itemId,
+                requested: requestedReturn,
+                returnable,
+              },
+        );
         continue;
       }
       const requestedLostCredit = (group.lostCredit ?? []).reduce(
@@ -893,13 +907,13 @@ export class InventoryService {
         (total, checkout) => total + checkout.remaining,
         0,
       );
-      if (requestedLostCredit > lost) {
+      if (requestedLostCredit > lost + requestedLost) {
         conflicts.push({
           scope: 'lost-credit',
           code: 'lost_balance_changed',
           itemId: group.itemId,
           requested: requestedLostCredit,
-          lost,
+          lost: lost + requestedLost,
         });
         continue;
       }
@@ -908,7 +922,11 @@ export class InventoryService {
         0,
       );
       const usableReturns = (group.return ?? []).reduce((total, part) => total + part.usable, 0);
-      const availableAfterUsableReturns = item.available + usableReturns + requestedLostCredit;
+      const usableLostCredit = (group.lostCredit ?? []).reduce(
+        (total, part) => total + (part.condition === 'usable' ? part.quantity : 0),
+        0,
+      );
+      const availableAfterUsableReturns = item.available + usableReturns + usableLostCredit;
       if (requestedBorrow > availableAfterUsableReturns)
         conflicts.push({
           scope: 'borrow',
@@ -1027,7 +1045,7 @@ export class InventoryService {
       this.db
         .prepare(
           `SELECT e.id,COALESCE(SUM(CASE
-            WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind='found_returned' THEN -x.quantity ELSE 0 END),0) remaining
+            WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind IN ('found_returned','found_returned_damaged') THEN -x.quantity ELSE 0 END),0) remaining
           FROM inventory_events e LEFT JOIN inventory_events x ON x.related_event_id=e.id
           WHERE e.kind='checked_out' AND e.borrower_id=? AND e.item_id=?
           GROUP BY e.id HAVING remaining > 0 ORDER BY e.created_at,e.id`,
@@ -1061,6 +1079,7 @@ export class InventoryService {
     itemId: number,
     borrowerId: number,
     quantity: number,
+    condition: 'usable' | 'damaged',
     note: string,
   ): void {
     let remaining = quantity;
@@ -1068,12 +1087,38 @@ export class InventoryService {
       if (remaining === 0) break;
       const allocated = Math.min(remaining, checkout.remaining);
       if (allocated === 0) continue;
-      this.append('found_returned', itemId, allocated, borrowerId, checkout.id, note);
+      this.append(
+        condition === 'usable' ? 'found_returned' : 'found_returned_damaged',
+        itemId,
+        allocated,
+        borrowerId,
+        checkout.id,
+        note,
+      );
       checkout.remaining -= allocated;
       remaining -= allocated;
     }
     if (remaining !== 0)
       throw new DomainError('internal_error', 'Lost-credit allocation failed', 500);
+  }
+
+  private allocateLosses(
+    checkouts: Array<{ id: number; remaining: number }>,
+    itemId: number,
+    borrowerId: number,
+    quantity: number,
+    note: string,
+  ): void {
+    let remaining = quantity;
+    for (const checkout of checkouts) {
+      if (remaining === 0) break;
+      const allocated = Math.min(remaining, checkout.remaining);
+      if (allocated === 0) continue;
+      this.append('marked_lost', itemId, allocated, borrowerId, checkout.id, note);
+      checkout.remaining -= allocated;
+      remaining -= allocated;
+    }
+    if (remaining !== 0) throw new DomainError('internal_error', 'Lost allocation failed', 500);
   }
 
   private setAliases(itemId: number, aliases: string[]): void {
@@ -1164,7 +1209,7 @@ export class InventoryService {
             WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity ELSE 0 END)
           FROM inventory_events x WHERE x.related_event_id=e.id),0)) returnable,
           SUM(COALESCE((SELECT SUM(CASE
-            WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind='found_returned' THEN -x.quantity ELSE 0 END)
+            WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind IN ('found_returned','found_returned_damaged') THEN -x.quantity ELSE 0 END)
           FROM inventory_events x WHERE x.related_event_id=e.id),0)) lost
           FROM inventory_events e JOIN items i ON i.id=e.item_id
           WHERE e.kind='checked_out' AND e.borrower_id=?
@@ -1220,7 +1265,7 @@ export class InventoryService {
     const row = this.db
       .prepare(
         `SELECT COALESCE(SUM(e.quantity-COALESCE((SELECT SUM(x.quantity) FROM inventory_events x
-      WHERE x.related_event_id=e.id AND x.kind IN ('returned_usable','returned_damaged','found_returned')),0)),0) value
+      WHERE x.related_event_id=e.id AND x.kind IN ('returned_usable','returned_damaged','found_returned','found_returned_damaged')),0)),0) value
       FROM inventory_events e WHERE e.kind='checked_out' AND e.item_id=?`,
       )
       .get(id) as Row;
@@ -1231,7 +1276,7 @@ export class InventoryService {
     const row = this.db
       .prepare(
         `SELECT COALESCE(SUM(e.quantity-COALESCE((SELECT SUM(x.quantity) FROM inventory_events x
-      WHERE x.related_event_id=e.id AND x.kind IN ('returned_usable','returned_damaged','found_returned')),0)),0) value
+      WHERE x.related_event_id=e.id AND x.kind IN ('returned_usable','returned_damaged','found_returned','found_returned_damaged')),0)),0) value
       FROM inventory_events e WHERE e.kind='checked_out' AND e.borrower_id=?`,
       )
       .get(id) as Row;

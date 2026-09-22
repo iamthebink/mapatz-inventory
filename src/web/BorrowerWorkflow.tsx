@@ -9,6 +9,7 @@ import {
   useState,
   type FormEvent,
 } from 'react';
+import { Check, ClipboardCheck, TriangleAlert, Undo2 } from 'lucide-react';
 import type { Borrower, Item } from '../domain/types';
 import { fetchBorrowerDeskSnapshot, fetchBorrowerSearch, sendFrozenBorrowerAttempt } from './api';
 import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
@@ -54,6 +55,7 @@ type QuantityDialog = {
   quantity: string;
   note: string;
   error: string;
+  damaged: boolean;
 };
 
 const titleForFeedback: Record<WorkflowFeedback['kind'], string> = {
@@ -73,6 +75,7 @@ const translatedFeedback: Record<string, string> = {
   card_load_failed: 'כרטיס השואל לא נטען. ניתן לנסות שוב ללא יצירה נוספת.',
   storage_persist_failed: 'לא ניתן לשמור את הפעולה לשחזור.',
   storage_clear_failed: 'לא ניתן לנקות את הפעולה השמורה.',
+  dependent_recovery: 'יש לבטל תחילה את הפעולה התלויה בסימון כאבוד.',
 };
 
 const borrowerTypeNames: Record<Borrower['type'], string> = {
@@ -93,6 +96,45 @@ function focusWithFallback(
   else fallback?.focus();
 }
 
+function OperationReview({ state }: { state: OperationState }) {
+  const inventory = new Map(state.snapshot.inventory.map((item) => [item.id, item.name]));
+  return (
+    <div className="borrower-review-list">
+      {state.staged.flatMap((group) => {
+        const rows: Array<{ label: string; quantity: number; note: string }> = [];
+        for (const part of group.borrow)
+          rows.push({ label: 'השאלה', quantity: part.quantity, note: part.note });
+        for (const part of group.return) {
+          if (part.usable > 0)
+            rows.push({ label: 'החזרת ציוד', quantity: part.usable, note: part.note });
+          if (part.damaged > 0)
+            rows.push({ label: 'החזרת ציוד · פגום', quantity: part.damaged, note: part.note });
+        }
+        for (const part of group.lost ?? [])
+          rows.push({ label: 'סמן כאבוד', quantity: part.quantity, note: part.note });
+        for (const part of group.lostCredit ?? [])
+          rows.push({
+            label: part.condition === 'damaged' ? 'נמצא והוחזר · פגום' : 'נמצא והוחזר',
+            quantity: part.quantity,
+            note: part.note,
+          });
+        return rows.map((row, index) => (
+          <div className="borrower-review-row" key={`${group.itemId}-${index}`}>
+            <strong>{inventory.get(group.itemId) ?? `#${group.itemId}`}</strong>
+            <span>
+              {row.label.includes('פגום') && (
+                <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
+              )}{' '}
+              {row.label} · {row.quantity}
+            </span>
+            {row.note && <small>{row.note}</small>}
+          </div>
+        ));
+      })}
+    </div>
+  );
+}
+
 export const BorrowerWorkflow = forwardRef<
   BorrowerWorkflowHandle,
   {
@@ -110,6 +152,7 @@ export const BorrowerWorkflow = forwardRef<
   const [operation, setOperation] = useState<OperationState | null>(null);
   const [itemSearch, setItemSearch] = useState('');
   const [quantity, setQuantity] = useState<QuantityDialog | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [creation, setCreation] = useState<CreationState | null>(null);
@@ -118,6 +161,7 @@ export const BorrowerWorkflow = forwardRef<
   const itemSearchRef = useRef<HTMLInputElement>(null);
   const cardOverviewRef = useRef<HTMLParagraphElement>(null);
   const quantityErrorRef = useRef<HTMLInputElement>(null);
+  const reviewConfirmRef = useRef<HTMLButtonElement>(null);
   const createFirstRef = useRef<HTMLInputElement>(null);
   const retryCardRef = useRef<HTMLButtonElement>(null);
   const retryRefreshRef = useRef<HTMLButtonElement>(null);
@@ -285,6 +329,8 @@ export const BorrowerWorkflow = forwardRef<
     setOperation(null);
     setCardLoadFailed(false);
     setItemSearch('');
+    setQuantity(null);
+    setReviewOpen(false);
     setCreation(null);
   }, []);
 
@@ -522,7 +568,10 @@ export const BorrowerWorkflow = forwardRef<
   const submitQuantity = (event: FormEvent) => {
     event.preventDefault();
     if (!operation || !quantity) return;
-    const returnKey = `${quantity.itemId}-${quantity.condition ?? 'usable'}`;
+    const returnKey =
+      quantity.condition === 'mark-lost'
+        ? `${quantity.itemId}-more`
+        : `${quantity.itemId}-${quantity.condition ?? 'usable'}`;
     const returnIndex = [...returnButtonRefs.current.keys()].indexOf(returnKey);
     if (quantity.direction === 'borrow') {
       const amount = Number(quantity.quantity);
@@ -542,33 +591,53 @@ export const BorrowerWorkflow = forwardRef<
       const amount = Number(quantity.quantity);
       const projection = projectItem(operation, quantity.itemId);
       const max =
-        quantity.condition === 'lost'
+        quantity.condition === 'found'
           ? (projection?.lostNow ?? 0)
           : (projection?.returnableNow ?? 0);
       if (!Number.isSafeInteger(amount) || amount < 1 || amount > max) {
-        setQuantity({ ...quantity, error: `ניתן להחזיר בין 1 ל־${max} יחידות` });
+        setQuantity({
+          ...quantity,
+          error: `ניתן ${quantity.condition === 'mark-lost' ? 'לסמן כאבוד' : 'להחזיר'} בין 1 ל־${max} יחידות`,
+        });
         queueMicrotask(() => quantityErrorRef.current?.focus());
         return;
       }
       setOperation(
         operationReducer(
           operation,
-          quantity.condition === 'lost'
+          quantity.condition === 'found'
             ? {
                 type: 'stage-lost-credit',
                 itemId: quantity.itemId,
-                part: { quantity: amount, note: quantity.note },
-              }
-            : {
-                type: 'stage-return',
-                itemId: quantity.itemId,
                 part: {
-                  usable: quantity.condition === 'usable' ? amount : 0,
-                  damaged: quantity.condition === 'damaged' ? amount : 0,
+                  quantity: amount,
+                  condition: quantity.damaged ? 'damaged' : 'usable',
                   note: quantity.note,
                 },
-              },
+              }
+            : quantity.condition === 'mark-lost'
+              ? {
+                  type: 'stage-lost',
+                  itemId: quantity.itemId,
+                  part: { quantity: amount, note: quantity.note },
+                }
+              : {
+                  type: 'stage-return',
+                  itemId: quantity.itemId,
+                  part: {
+                    usable: quantity.damaged ? 0 : amount,
+                    damaged: quantity.damaged ? amount : 0,
+                    note: quantity.note,
+                  },
+                },
         ),
+      );
+      showToast(
+        'הפעולה נוספה',
+        quantity.condition === 'mark-lost'
+          ? 'הכמות הועברה לציוד האבוד וממתינה לשמירה.'
+          : 'הפעולה נוספה לרשימת הפעולות הממתינות.',
+        'success',
       );
     }
     setQuantity(null);
@@ -601,7 +670,11 @@ export const BorrowerWorkflow = forwardRef<
     queueMicrotask(() => {
       if (current?.direction === 'return')
         focusWithFallback(
-          returnButtonRefs.current.get(`${current.itemId}-${current.condition ?? 'usable'}`),
+          returnButtonRefs.current.get(
+            current.condition === 'mark-lost'
+              ? `${current.itemId}-more`
+              : `${current.itemId}-${current.condition ?? 'usable'}`,
+          ),
           itemSearchRef.current,
         );
       else itemSearchRef.current?.focus();
@@ -1202,19 +1275,12 @@ export const BorrowerWorkflow = forwardRef<
                 </button>
                 <button
                   type="button"
-                  className="secondary-button"
-                  disabled={!canSave(operation)}
-                  onClick={() => void save('save')}
-                >
-                  שמירה
-                </button>
-                <button
-                  type="button"
                   className="primary-button"
                   disabled={!canSave(operation)}
-                  onClick={() => void save('save-and-close')}
+                  onClick={() => setReviewOpen(true)}
                 >
-                  שמירה וסגירה
+                  <ClipboardCheck className="size-4" aria-hidden="true" />
+                  בדיקה ושמירה
                 </button>
               </>
             ) : undefined
@@ -1256,6 +1322,7 @@ export const BorrowerWorkflow = forwardRef<
                       quantity: '1',
                       note: '',
                       error: '',
+                      damaged: false,
                     });
                     setItemSearch('');
                   }}
@@ -1317,9 +1384,9 @@ export const BorrowerWorkflow = forwardRef<
                 onReturn={(itemId, condition) => {
                   const projection = projectItem(operation, itemId);
                   const defaultQuantity =
-                    condition === 'damaged'
+                    condition === 'mark-lost'
                       ? 1
-                      : condition === 'lost'
+                      : condition === 'found'
                         ? projection?.lostNow
                         : projection?.returnableNow;
                   setQuantity({
@@ -1329,13 +1396,14 @@ export const BorrowerWorkflow = forwardRef<
                     quantity: String(defaultQuantity ?? 1),
                     note: '',
                     error: '',
+                    damaged: false,
                   });
                 }}
-                onRollback={(itemId, direction) => {
+                onRollback={(itemId, direction, condition) => {
                   const keys = [...rollbackButtonRefs.current.keys()];
-                  const currentIndex = keys.indexOf(`${itemId}-${direction}`);
+                  const currentIndex = keys.indexOf(`${itemId}-${direction}-${condition ?? ''}`);
                   setOperation(
-                    operationReducer(operation, { type: 'rollback', itemId, direction }),
+                    operationReducer(operation, { type: 'rollback', itemId, direction, condition }),
                   );
                   window.setTimeout(() => {
                     const remaining = [...rollbackButtonRefs.current.values()];
@@ -1365,11 +1433,11 @@ export const BorrowerWorkflow = forwardRef<
           title={
             quantity.direction === 'borrow'
               ? 'הוספת השאלה'
-              : quantity.condition === 'usable'
-                ? 'החזרה תקינה'
-                : quantity.condition === 'lost'
-                  ? 'החזרת ציוד אבוד'
-                  : 'החזרה פגומה'
+              : quantity.condition === 'mark-lost'
+                ? 'סמן כאבוד'
+                : quantity.condition === 'found'
+                  ? 'נמצא והוחזר'
+                  : 'החזרת ציוד'
           }
           description={
             <span className="quantity-dialog-item">
@@ -1417,17 +1485,29 @@ export const BorrowerWorkflow = forwardRef<
                 min="1"
                 max={
                   quantity.direction === 'return'
-                    ? quantity.condition === 'lost'
+                    ? quantity.condition === 'found'
                       ? projectItem(operation, quantity.itemId)?.lostNow
                       : projectItem(operation, quantity.itemId)?.returnableNow
                     : undefined
                 }
+                aria-invalid={Boolean(quantity.error)}
                 value={quantity.quantity}
                 onChange={(event) =>
                   setQuantity({ ...quantity, quantity: event.target.value, error: '' })
                 }
               />
             </label>
+            {quantity.direction === 'return' && quantity.condition !== 'mark-lost' && (
+              <label className="quantity-condition-checkbox">
+                <input
+                  type="checkbox"
+                  checked={quantity.damaged}
+                  onChange={(event) => setQuantity({ ...quantity, damaged: event.target.checked })}
+                />
+                <TriangleAlert className="size-4" aria-hidden="true" />
+                הציוד הוחזר פגום
+              </label>
+            )}
             <label className="field-label">
               הערה (רשות)
               <input
@@ -1443,6 +1523,48 @@ export const BorrowerWorkflow = forwardRef<
               </p>
             )}
           </form>
+        </Dialog>
+      )}
+
+      {reviewOpen && operation && (
+        <Dialog
+          title="אישור פעולות"
+          description="יש לבדוק את כל הפעולות לפני השמירה הסופית."
+          level="subordinate"
+          role="dialog"
+          variant="standard"
+          busy={operation.phase.kind === 'saving'}
+          dismissible={!operationLocks(operation).exit}
+          onClose={() => setReviewOpen(false)}
+          initialFocusRef={reviewConfirmRef}
+          actions={
+            <>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={operationLocks(operation).exit}
+                onClick={() => setReviewOpen(false)}
+              >
+                <Undo2 className="size-4" aria-hidden="true" />
+                חזרה לעריכה
+              </button>
+              <button
+                ref={reviewConfirmRef}
+                type="button"
+                className="primary-button"
+                disabled={!canSave(operation)}
+                onClick={() => {
+                  setReviewOpen(false);
+                  void save('save');
+                }}
+              >
+                <Check className="size-4" aria-hidden="true" />
+                אישור ושמירה
+              </button>
+            </>
+          }
+        >
+          <OperationReview state={operation} />
         </Dialog>
       )}
 

@@ -87,9 +87,42 @@ beforeEach(() => {
 });
 
 describe('frozen attempt validation and storage', () => {
+  it('requires explicit recovery condition in frozen operation bodies', () => {
+    const borrowOnly = operation();
+    expect(parseFrozenAttempt(borrowOnly)).toEqual(borrowOnly);
+
+    const mixed = operation();
+    mixed.body.items = [
+      {
+        itemId: 11,
+        return: [{ usable: 1, damaged: 0, note: 'desk' }],
+        lost: [{ quantity: 2, note: 'missing' }],
+        lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }],
+      },
+    ];
+    expect(parseFrozenAttempt(mixed)).toEqual(mixed);
+    expect(
+      parseFrozenAttempt({
+        ...mixed,
+        body: { ...mixed.body, items: [{ itemId: 11, lostCredit: [{ quantity: 1, note: '' }] }] },
+      }),
+    ).toBeNull();
+    expect(
+      parseFrozenAttempt({
+        ...mixed,
+        body: {
+          ...mixed.body,
+          items: [{ itemId: 11, lost: [{ quantity: 0, note: '' }] }],
+        },
+      }),
+    ).toBeNull();
+  });
+
   it('validates and mirrors a frozen lost-credit conflict exactly', () => {
     const attempt = operation();
-    attempt.body.items = [{ itemId: 11, lostCredit: [{ quantity: 2, note: 'recover' }] }];
+    attempt.body.items = [
+      { itemId: 11, lostCredit: [{ quantity: 2, condition: 'usable', note: 'recover' }] },
+    ];
     expect(parseFrozenAttempt(attempt)).toEqual(attempt);
     const snapshot = {
       borrower: {
@@ -135,6 +168,71 @@ describe('frozen attempt validation and storage', () => {
         snapshot,
       ),
     ).toBe(true);
+  });
+
+  it('classifies a damaged recovery with insufficient usable stock as a definitive 409', async () => {
+    const attempt = operation();
+    attempt.body.items = [
+      {
+        itemId: 11,
+        borrow: [{ quantity: 1, note: 'replacement' }],
+        lostCredit: [{ quantity: 1, condition: 'damaged', note: 'broken' }],
+      },
+    ];
+    const snapshot = {
+      borrower: {
+        id: 7,
+        username: 'or',
+        name: 'Or',
+        contact: '',
+        type: 'individual' as const,
+        archived: false,
+      },
+      inventory: [
+        {
+          id: 11,
+          code: 101,
+          name: 'Tent',
+          kind: 'non_consumable' as const,
+          lotSize: null,
+          locationId: null,
+          archived: false,
+          aliases: [],
+          available: 0,
+          damaged: 0,
+          selectable: true,
+        },
+      ],
+      holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
+      asOfEventId: 4,
+      ledgerEpoch: 3,
+    };
+    const conflicts = [
+      {
+        scope: 'borrow' as const,
+        code: 'insufficient_stock' as const,
+        itemId: 11,
+        requested: 1,
+        availableAfterUsableReturns: 0,
+      },
+    ];
+    expect(isExactBorrowerOperationConflictSet(conflicts, 7, attempt.body, snapshot)).toBe(true);
+    persistFrozenAttempt(storage(), attempt);
+    const resolved = await resolveFrozenAttempt(storage(), attempt, async () => ({
+      kind: 'definitive',
+      status: 409,
+      result: {
+        error: 'borrower_operation_conflict',
+        message: 'insufficient stock',
+        outcome: 'rejected',
+        idempotencyKey: key1,
+        replayed: false,
+        conflicts,
+        snapshot,
+      },
+    }));
+    expect(resolved).toMatchObject({ kind: 'definitive', cleared: true });
+    expect(storage().getItem(frozenAttemptStorageKey(attempt))).toBeNull();
   });
 
   it('validates complete self-routing envelopes and rejects inconsistent bodies', () => {

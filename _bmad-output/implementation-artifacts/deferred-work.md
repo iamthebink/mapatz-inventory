@@ -55,3 +55,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-tag-derived-release-version.md`
   summary: Suppress setup navigation errors caused by an intentional quit during early desktop startup.
   evidence: A version-only probe requested app.quit before setup.html completed loading; its isolated desktop.log records quit then ERR_FAILED and a blocking failure dialog. Normal setup/relaunch tests pass. The precise early-quit sequence should become a regression test before adjusting lifecycle handling.
+- source_spec: none
+  summary: Add an operator-facing inventory action to restore damaged stock to usable stock outside the borrower card.
+  evidence: Split from borrower-card returns for separate review; the updated contract resolves placement as ניהול → מלאי ופגומים → טיפול בפגום, with operator repair and admin-only write-off. Tracked in spec-operator-damage-restoration-in-management.md.

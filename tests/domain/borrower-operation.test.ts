@@ -40,6 +40,131 @@ function transactionCountingDatabase(db: InventoryDatabase) {
 }
 
 describe('atomic borrower commands', () => {
+  it('allocates returns, staged loss, dependent recovery, and borrow atomically in ledger order', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Mixed equipment', kind: 'non_consumable' });
+    inventory.addStock(item.id, 5);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 4);
+
+    const request: BorrowerOperationRequest = {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [
+        {
+          itemId: item.id,
+          return: [{ usable: 1, damaged: 0, note: 'returned' }],
+          lost: [{ quantity: 2, note: 'missing' }],
+          lostCredit: [{ quantity: 2, condition: 'usable', note: 'found again' }],
+          borrow: [{ quantity: 2, note: 'replacement' }],
+        },
+      ],
+    };
+
+    expect(inventory.commitBorrowerOperations(borrower.id, key(17), request)).toEqual({
+      outcome: 'committed',
+      idempotencyKey: key(17),
+      replayed: false,
+    });
+    expect(
+      db
+        .prepare(
+          'SELECT kind,quantity,related_event_id relatedId,note FROM inventory_events WHERE id>? ORDER BY id',
+        )
+        .all(checkoutId),
+    ).toEqual([
+      { kind: 'returned_usable', quantity: 1, relatedId: checkoutId, note: 'returned' },
+      { kind: 'marked_lost', quantity: 2, relatedId: checkoutId, note: 'missing' },
+      { kind: 'found_returned', quantity: 2, relatedId: checkoutId, note: 'found again' },
+      { kind: 'checked_out', quantity: 2, relatedId: null, note: 'replacement' },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id)).toMatchObject({
+      inventory: [expect.objectContaining({ id: item.id, available: 2, damaged: 0 })],
+      holdings: [{ itemId: item.id, returnable: 3, lost: 0 }],
+    });
+    expect(inventory.commitBorrowerOperations(borrower.id, key(17), request)).toEqual({
+      outcome: 'committed',
+      idempotencyKey: key(17),
+      replayed: true,
+    });
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({ count: 6 });
+  });
+
+  it('rejects combined return and loss beyond held balance without a partial write', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Shared held balance', kind: 'non_consumable' });
+    inventory.addStock(item.id, 4);
+    inventory.checkout(item.id, borrower.id, 4);
+    const before = Number(
+      (db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as { count: number }).count,
+    );
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(16), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            return: [{ usable: 3, damaged: 0, note: '' }],
+            lost: [{ quantity: 2, note: '' }],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      outcome: 'rejected',
+      conflicts: [
+        {
+          scope: 'held',
+          code: 'held_balance_changed',
+          itemId: item.id,
+          requested: 5,
+          returnable: 4,
+        },
+      ],
+    });
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({
+      count: before,
+    });
+  });
+
+  it('allocates staged loss FIFO across checkouts while preserving each part note', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'FIFO losses', kind: 'non_consumable' });
+    inventory.addStock(item.id, 4);
+    const first = inventory.checkout(item.id, borrower.id, 2);
+    const second = inventory.checkout(item.id, borrower.id, 2);
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(27), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            lost: [
+              { quantity: 3, note: 'north trail' },
+              { quantity: 1, note: 'south trail' },
+            ],
+          },
+        ],
+      }),
+    ).toMatchObject({ outcome: 'committed' });
+    expect(
+      db
+        .prepare(
+          "SELECT kind,quantity,related_event_id checkoutId,note FROM inventory_events WHERE kind='marked_lost' ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { kind: 'marked_lost', quantity: 2, checkoutId: first, note: 'north trail' },
+      { kind: 'marked_lost', quantity: 1, checkoutId: second, note: 'north trail' },
+      { kind: 'marked_lost', quantity: 1, checkoutId: second, note: 'south trail' },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([
+      { itemId: item.id, returnable: 0, lost: 4 },
+    ]);
+  });
+
   it('credits checkout-linked lost equipment back to usable stock without marking more lost', () => {
     const { db, inventory, borrower } = fixture();
     const item = inventory.createItem({ name: 'Recovered', kind: 'non_consumable' });
@@ -51,7 +176,9 @@ describe('atomic borrower commands', () => {
       inventory.commitBorrowerOperations(borrower.id, key(18), {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: item.id, lostCredit: [{ quantity: 1, note: 'found' }] }],
+        items: [
+          { itemId: item.id, lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }] },
+        ],
       }),
     ).toEqual({ outcome: 'committed', idempotencyKey: key(18), replayed: false });
     expect(
@@ -69,6 +196,75 @@ describe('atomic borrower commands', () => {
     expect(
       db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='marked_lost'").get(),
     ).toEqual({ count: 1 });
+  });
+
+  it('receives lost equipment as damaged without funding a borrow or changing held stock', () => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({ name: 'Damaged recovery', kind: 'non_consumable' });
+    inventory.addStock(item.id, 4);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 4);
+    inventory.markLost(checkoutId, 2, true);
+    const request: BorrowerOperationRequest = {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [
+        {
+          itemId: item.id,
+          lostCredit: [{ quantity: 1, condition: 'damaged', note: 'broken on return' }],
+        },
+      ],
+    };
+
+    expect(inventory.commitBorrowerOperations(borrower.id, key(23), request)).toMatchObject({
+      outcome: 'committed',
+      replayed: false,
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT kind,quantity,related_event_id checkoutId,note FROM inventory_events WHERE kind='found_returned_damaged'",
+        )
+        .all(),
+    ).toEqual([
+      {
+        kind: 'found_returned_damaged',
+        quantity: 1,
+        checkoutId,
+        note: 'broken on return',
+      },
+    ]);
+    const snapshot = inventory.getBorrowerDeskSnapshot(borrower.id);
+    expect(snapshot.inventory).toEqual([
+      expect.objectContaining({ id: item.id, available: 0, damaged: 1 }),
+    ]);
+    expect(snapshot.holdings).toEqual([{ itemId: item.id, returnable: 2, lost: 1 }]);
+    expect(inventory.listLoans()).toMatchObject([{ checkoutId, outstanding: 2, lost: 1 }]);
+    expect(inventory.commitBorrowerOperations(borrower.id, key(23), request)).toMatchObject({
+      outcome: 'committed',
+      replayed: true,
+    });
+    expect(
+      db
+        .prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='found_returned_damaged'")
+        .get(),
+    ).toEqual({ count: 1 });
+
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(24), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: item.id,
+            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'another broken return' }],
+            borrow: [{ quantity: 1, note: 'cannot use damaged stock' }],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      outcome: 'rejected',
+      conflicts: [{ scope: 'borrow', code: 'insufficient_stock', availableAfterUsableReturns: 0 }],
+    });
   });
 
   it('allocates noted recovery parts across tied lost checkouts and replays without new writes', () => {
@@ -89,8 +285,8 @@ describe('atomic borrower commands', () => {
         {
           itemId: item.id,
           lostCredit: [
-            { quantity: 3, note: 'found near stage' },
-            { quantity: 1, note: 'found in van' },
+            { quantity: 3, condition: 'usable', note: 'found near stage' },
+            { quantity: 1, condition: 'damaged', note: 'found in van' },
           ],
         },
       ],
@@ -121,7 +317,7 @@ describe('atomic borrower commands', () => {
         note: 'found near stage',
       },
       {
-        kind: 'found_returned',
+        kind: 'found_returned_damaged',
         quantity: 1,
         checkoutId: second,
         borrowerId: borrower.id,
@@ -131,7 +327,7 @@ describe('atomic borrower commands', () => {
     const ledger = inventory.listLedger();
     const snapshot = inventory.getBorrowerDeskSnapshot(borrower.id);
     expect(snapshot).toMatchObject({
-      inventory: [expect.objectContaining({ id: item.id, available: 4 })],
+      inventory: [expect.objectContaining({ id: item.id, available: 3, damaged: 1 })],
       holdings: [{ itemId: item.id, returnable: 0, lost: 1 }],
     });
     expect(inventory.commitBorrowerOperations(borrower.id, key(21), request)).toMatchObject({
@@ -168,7 +364,7 @@ describe('atomic borrower commands', () => {
         items: [
           {
             itemId: item.id,
-            lostCredit: [{ quantity: 2, note: 'recovered before failure' }],
+            lostCredit: [{ quantity: 2, condition: 'usable', note: 'recovered before failure' }],
             borrow: [{ quantity: 1, note: 'funded by recovery' }],
           },
         ],
@@ -189,7 +385,9 @@ describe('atomic borrower commands', () => {
     const request: BorrowerOperationRequest = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      items: [{ itemId: item.id, lostCredit: [{ quantity: 2, note: 'stale' }] }],
+      items: [
+        { itemId: item.id, lostCredit: [{ quantity: 2, condition: 'usable', note: 'stale' }] },
+      ],
     };
     foundReturned(inventory, checkoutId, 1);
     const before = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
@@ -228,7 +426,7 @@ describe('atomic borrower commands', () => {
               { usable: 1, damaged: 0, note: 'usable' },
               { usable: 0, damaged: 1, note: 'damaged' },
             ],
-            lostCredit: [{ quantity: 1, note: 'found' }],
+            lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }],
             borrow: [{ quantity: 2, note: 'again' }],
           },
         ],

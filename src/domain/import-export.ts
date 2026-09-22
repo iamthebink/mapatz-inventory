@@ -99,7 +99,7 @@ export function unresolvedDamageReport(
   const quantities = new Map<number, number>();
   for (const event of snapshot.events) {
     const change =
-      event.kind === 'returned_damaged'
+      event.kind === 'returned_damaged' || event.kind === 'found_returned_damaged'
         ? event.quantity
         : event.kind === 'repaired' || event.kind === 'written_off'
           ? -event.quantity
@@ -275,7 +275,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       event.kind === 'returned_usable' ||
       event.kind === 'returned_damaged' ||
       event.kind === 'marked_lost' ||
-      event.kind === 'found_returned'
+      event.kind === 'found_returned' ||
+      event.kind === 'found_returned_damaged'
     ) {
       if (event.relatedEventId == null)
         invalidWorkbook(`Recovery event ${event.id} requires a related checkout`);
@@ -290,12 +291,13 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       )
         invalidWorkbook(`Recovery event ${event.id} does not match its checkout item and borrower`);
       const outstanding = checkout.quantity - checkout.returned - checkout.lost;
-      if (event.kind === 'found_returned') {
+      if (event.kind === 'found_returned' || event.kind === 'found_returned_damaged') {
         if (event.quantity > checkout.lost)
           invalidWorkbook(`Recovery event ${event.id} recovers more lost stock than exists`);
         checkout.lost -= event.quantity;
         checkout.returned += event.quantity;
-        state.available += event.quantity;
+        if (event.kind === 'found_returned') state.available += event.quantity;
+        else state.damaged += event.quantity;
       } else if (event.kind === 'marked_lost') {
         if (event.quantity > outstanding)
           invalidWorkbook(`Recovery event ${event.id} marks more stock lost than is outstanding`);
@@ -358,7 +360,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
 const availableEffect = `CASE kind
   WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity WHEN 'repaired' THEN quantity
   WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
-const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
+const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'found_returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
 
 export class InventoryTransferService {
   constructor(private readonly db: InventoryDatabase) {}
@@ -388,7 +390,7 @@ export class InventoryTransferService {
             WHEN 'marked_lost' THEN x.quantity ELSE 0 END)
           FROM inventory_events x WHERE x.related_event_id=e.id),0))
           FROM inventory_events e WHERE e.item_id=i.id AND e.kind='checked_out'),0) outstanding,
-          COALESCE((SELECT SUM(CASE e.kind WHEN 'marked_lost' THEN e.quantity WHEN 'found_returned' THEN -e.quantity ELSE 0 END)
+          COALESCE((SELECT SUM(CASE e.kind WHEN 'marked_lost' THEN e.quantity WHEN 'found_returned' THEN -e.quantity WHEN 'found_returned_damaged' THEN -e.quantity ELSE 0 END)
           FROM inventory_events e WHERE e.item_id=i.id),0) lost
           FROM items i LEFT JOIN locations l ON l.id=i.location_id
           LEFT JOIN inventory_baselines b ON b.item_id=i.id ORDER BY i.code`,

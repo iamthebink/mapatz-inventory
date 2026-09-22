@@ -55,6 +55,11 @@ async function activateBorrowerAction(key: 'Enter' | ' ' = 'Enter') {
   await userEvent.keyboard(key === 'Enter' ? '{Enter}' : ' ');
 }
 
+async function confirmSave() {
+  await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'אישור ושמירה' }));
+}
+
 function expectDialogItem(dialog: HTMLElement, itemName: string) {
   const descriptionId = dialog.getAttribute('aria-describedby');
   expect(descriptionId).toBeTruthy();
@@ -214,39 +219,32 @@ describe('borrower desk workflow', () => {
     await userEvent.type(search, 'א');
     await activateBorrowerAction();
 
-    expect(
-      ((await screen.findByRole('button', { name: 'תקין' })) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect((screen.getByRole('button', { name: 'פגום' }) as HTMLButtonElement).disabled).toBe(true);
-    const lost = screen.getByRole('button', { name: 'אבוד' });
-    expect((lost as HTMLButtonElement).disabled).toBe(false);
-    await userEvent.click(lost);
-    const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד אבוד' });
-    expectDialogItem(dialog, item.name);
-    const quantityInput = screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement;
+    expect(screen.queryByRole('button', { name: 'החזרת ציוד' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'אפשרויות נוספות' })).toBeNull();
+    await userEvent.click(screen.getByText('ציוד אבוד של השואל'));
+    const found = screen.getByRole('button', { name: 'נמצא והוחזר' });
+    expect((found as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(found);
+    const quantityInput = screen.getByRole('spinbutton', { name: /כמות/ }) as HTMLInputElement;
     expect(quantityInput.value).toBe('2');
     await waitFor(() => expect(document.activeElement).toBe(quantityInput));
     await userEvent.clear(quantityInput);
     await userEvent.type(quantityInput, '0');
     await userEvent.keyboard('{Enter}');
     expect(screen.getByRole('alert').textContent).toContain('בין 1 ל־2');
-    expectDialogItem(dialog, item.name);
     await userEvent.clear(quantityInput);
     await userEvent.type(quantityInput, '2');
     await userEvent.keyboard('{Enter}');
 
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText('החזרת אבוד')).toBeTruthy();
-    expect(within(pending).getByText('2')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'אבוד' })).toBeNull();
+    expect(within(pending).getByText(/נמצא והוחזר · 2/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'נמצא והוחזר' })).toBeNull();
     await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByRole('heading', { name: 'ציוד באחריות השואל' }),
-      ),
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'ציוד אצל השואל' })),
     );
   });
 
-  it('defaults usable returns to the full returnable balance and damaged returns to one', async () => {
+  it('uses the existing quantity modal and resets damaged condition on each return', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
@@ -265,18 +263,198 @@ describe('borrower desk workflow', () => {
     await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
     await activateBorrowerAction();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'תקין' }));
-    expectDialogItem(screen.getByRole('dialog', { name: 'החזרה תקינה' }), item.name);
-    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
-    await userEvent.click(screen.getByRole('button', { name: 'ביטול' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'החזרת ציוד' }));
+    let dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+    expectDialogItem(dialog, item.name);
+    let quantityInput = screen.getByRole('spinbutton', { name: /כמות/ }) as HTMLInputElement;
+    expect(quantityInput.value).toBe('2');
+    const damaged = within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+    expect((damaged as HTMLInputElement).checked).toBe(false);
+    await userEvent.click(damaged);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'ביטול' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'החזרת ציוד' })),
+    );
 
-    await userEvent.click(screen.getByRole('button', { name: 'פגום' }));
-    expectDialogItem(screen.getByRole('dialog', { name: 'החזרה פגומה' }), item.name);
-    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('1');
-    await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
+    await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+    dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+    quantityInput = screen.getByRole('spinbutton', { name: /כמות/ }) as HTMLInputElement;
+    expect(quantityInput.value).toBe('2');
+    expect(
+      (within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }) as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+    await userEvent.clear(quantityInput);
+    await userEvent.type(quantityInput, '1');
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText('החזרה פגומה')).toBeTruthy();
-    expect(within(pending).getByText('1')).toBeTruthy();
+    expect(within(pending).getByText(/החזרת ציוד · פגום · 1/)).toBeTruthy();
+  });
+
+  it('stages damaged lost recovery separately from usable returns and shows both in review', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot') return json(desk());
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+    let dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+    await userEvent.click(screen.getByText('ציוד אבוד של השואל'));
+    await userEvent.click(screen.getByRole('button', { name: 'נמצא והוחזר' }));
+    dialog = screen.getByRole('dialog', { name: 'נמצא והוחזר' });
+    expectDialogItem(dialog, item.name);
+    const damaged = within(dialog).getByRole('checkbox', {
+      name: 'הציוד הוחזר פגום',
+    }) as HTMLInputElement;
+    expect(damaged.checked).toBe(false);
+    await userEvent.click(damaged);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+    const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
+    expect(within(pending).getByText(/החזרת ציוד · 2/)).toBeTruthy();
+    expect(within(pending).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
+    expect(within(review).getByText(/החזרת ציוד · 2/)).toBeTruthy();
+    expect(within(review).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
+  });
+
+  it('keeps each staged quantity next to its own note in review', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot')
+          return json({ ...desk(), holdings: [{ itemId: 11, returnable: 4, lost: 1 }] });
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    for (const [quantity, note] of [
+      ['1', 'first returned unit'],
+      ['2', 'next returned units'],
+    ] as const) {
+      await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+      const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+      await userEvent.clear(within(dialog).getByRole('spinbutton', { name: /כמות/ }));
+      await userEvent.type(within(dialog).getByRole('spinbutton', { name: /כמות/ }), quantity);
+      await userEvent.type(within(dialog).getByRole('textbox', { name: 'הערה (רשות)' }), note);
+      await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+    }
+    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
+    const rows = within(review)
+      .getAllByText(/החזרת ציוד · [12]/)
+      .map((label) => label.closest('.borrower-review-row'));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain('החזרת ציוד · 1');
+    expect(rows[0]?.textContent).toContain('first returned unit');
+    expect(rows[0]?.textContent).not.toContain('next returned units');
+    expect(rows[1]?.textContent).toContain('החזרת ציוד · 2');
+    expect(rows[1]?.textContent).toContain('next returned units');
+    expect(rows[1]?.textContent).not.toContain('first returned unit');
+  });
+
+  it('stages loss through the deliberate menu and protects a dependent recovery cancellation', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot') return json(desk());
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    const toast = vi.fn();
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={toast} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+
+    const more = await screen.findByRole('button', { name: 'אפשרויות נוספות' });
+    fireEvent.keyDown(more, { key: 'ArrowDown' });
+    const markLost = await screen.findByRole('menuitem', { name: 'סמן כאבוד' });
+    expect(document.activeElement).toBe(markLost);
+    await userEvent.click(markLost);
+    expect(screen.queryByRole('menu')).toBeNull();
+    let lossDialog = screen.getByRole('dialog', { name: 'סמן כאבוד' });
+    expectDialogItem(lossDialog, item.name);
+    expect(within(lossDialog).queryByRole('checkbox')).toBeNull();
+    const lossQuantity = within(lossDialog).getByRole('spinbutton', { name: /כמות/ });
+    await userEvent.clear(lossQuantity);
+    await userEvent.type(lossQuantity, '9');
+    await userEvent.click(within(lossDialog).getByRole('button', { name: 'אישור' }));
+    expect(within(lossDialog).getByRole('alert').textContent).toContain('ניתן לסמן כאבוד');
+    await userEvent.click(within(lossDialog).getByRole('button', { name: 'ביטול' }));
+    await waitFor(() => expect(document.activeElement).toBe(more));
+    await userEvent.click(more);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'סמן כאבוד' }));
+    lossDialog = screen.getByRole('dialog', { name: 'סמן כאבוד' });
+    let quantity = screen.getByRole('spinbutton', { name: /כמות/ });
+    await userEvent.clear(quantity);
+    await userEvent.type(quantity, '2');
+    await userEvent.click(within(lossDialog).getByRole('button', { name: 'אישור' }));
+    expect(screen.getByText('3 יחידות')).toBeTruthy();
+    expect(screen.getByText('אין ציוד אצל השואל')).toBeTruthy();
+
+    await userEvent.click(screen.getByText('ציוד אבוד של השואל'));
+    await userEvent.click(screen.getByRole('button', { name: 'נמצא והוחזר' }));
+    quantity = screen.getByRole('spinbutton', { name: /כמות/ });
+    await userEvent.clear(quantity);
+    await userEvent.type(quantity, '2');
+    await userEvent.click(
+      within(screen.getByRole('dialog', { name: 'נמצא והוחזר' })).getByRole('button', {
+        name: 'אישור',
+      }),
+    );
+
+    const lossRow = screen.getByText(/סמן כאבוד · 2/).closest('.borrower-pending-row')!;
+    await userEvent.click(
+      within(lossRow as HTMLElement).getByRole('button', { name: 'ביטול פעולה' }),
+    );
+    expect(toast).toHaveBeenCalledWith(
+      'נדרשת תשומת לב',
+      'יש לבטל תחילה את הפעולה התלויה בסימון כאבוד.',
+      'warning',
+    );
+    expect(screen.getByText(/סמן כאבוד · 2/)).toBeTruthy();
+
+    const foundRow = screen.getByText(/נמצא והוחזר · 2/).closest('.borrower-pending-row')!;
+    await userEvent.click(
+      within(foundRow as HTMLElement).getByRole('button', { name: 'ביטול פעולה' }),
+    );
+    await userEvent.click(
+      within(
+        screen.getByText(/סמן כאבוד · 2/).closest('.borrower-pending-row') as HTMLElement,
+      ).getByRole('button', { name: 'ביטול פעולה' }),
+    );
+    expect(screen.getByText(/אצל השואל 2/)).toBeTruthy();
+    expect(screen.getByText('1 יחידה')).toBeTruthy();
   });
 
   it('fails closed on malformed startup truth and exposes one focused explicit retry', async () => {
@@ -413,22 +591,25 @@ describe('borrower desk workflow', () => {
     expect(within(catalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
     expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
     expect(within(catalog).queryByRole('option', { name: /פריט ישן/ })).toBeNull();
-    expect(screen.getByRole('columnheader', { name: 'פעולות החזרה' })).toBeTruthy();
-    for (const [label, iconClass] of [
-      ['תקין', 'lucide-circle-check'],
-      ['אבוד', 'lucide-search-check'],
-      ['פגום', 'lucide-triangle-alert'],
-    ] as const) {
-      const action = screen.getByRole('button', { name: label });
-      expect(action.querySelector(`svg[aria-hidden="true"].${iconClass}`)).toBeTruthy();
-    }
+    const usableAction = screen.getByRole('button', { name: 'החזרת ציוד' });
+    expect(usableAction.querySelector('svg[aria-hidden="true"].lucide-circle-check')).toBeTruthy();
+    const moreAction = screen.getByRole('button', { name: 'אפשרויות נוספות' });
+    expect(moreAction.textContent).not.toMatch(/…|\.\.\./);
+    await userEvent.click(moreAction);
+    expect(
+      screen.getByRole('menuitem', { name: 'סמן כאבוד' }).querySelector('svg[aria-hidden="true"]'),
+    ).toBeTruthy();
+    expect(within(screen.getByRole('menu')).getAllByRole('menuitem')).toHaveLength(1);
+    await userEvent.keyboard('{Escape}');
 
+    await userEvent.click(itemSearch);
     await userEvent.type(itemSearch, 'canopy');
-    expect(within(catalog).queryByRole('option', { name: /אוהל/ })).toBeNull();
-    expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    const filteredCatalog = await screen.findByRole('listbox');
+    expect(within(filteredCatalog).queryByRole('option', { name: /אוהל/ })).toBeNull();
+    expect(within(filteredCatalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
     await userEvent.clear(itemSearch);
-    expect(within(catalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
-    expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    expect(within(filteredCatalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
+    expect(within(filteredCatalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     let dialog = await screen.findByRole('dialog', { name: 'הוספת השאלה' });
     expectDialogItem(dialog, item.name);
@@ -501,22 +682,24 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
     const pendingTransactions = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(await within(pendingTransactions).findByText('1')).toBeTruthy();
+    expect(await within(pendingTransactions).findByText(/השאלה · 1/)).toBeTruthy();
     expect(
       screen.getAllByRole('status').some((node) => /השאלה, כמות 1/.test(node.textContent ?? '')),
     ).toBe(true);
 
-    await userEvent.click(screen.getByRole('button', { name: 'תקין' }));
-    expect((screen.getByRole('spinbutton', { name: 'כמות' }) as HTMLInputElement).value).toBe('2');
-    await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    expect(within(pendingTransactions).getByText('2')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+    const returnDialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+    const returnQuantity = within(returnDialog).getByRole('spinbutton', {
+      name: /כמות/,
+    }) as HTMLInputElement;
+    expect(returnQuantity.value).toBe('2');
+    await userEvent.click(within(returnDialog).getByRole('button', { name: 'אישור' }));
+    expect(within(pendingTransactions).getByText(/החזרת ציוד · 2/)).toBeTruthy();
     expect(within(pendingTransactions).queryByText(/[+−-]\d/)).toBeNull();
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'אבוד' })),
-    );
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('BUTTON'));
     expect(screen.getAllByRole('button', { name: 'ביטול פעולה' })).toHaveLength(2);
 
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await confirmSave();
     await waitFor(() => expect(operationPosted).toBe(true));
     await waitFor(() =>
       expect(within(pendingTransactions).queryByRole('button', { name: 'ביטול פעולה' })).toBeNull(),
@@ -524,7 +707,7 @@ describe('borrower desk workflow', () => {
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השמירה הושלמה.', 'success');
   });
 
-  it('closes after one confirmed Save-and-Close toast and restores Borrower Search focus', async () => {
+  it('requires explicit review confirmation and returns to the refreshed borrower card', async () => {
     let posted = false;
     vi.stubGlobal(
       'fetch',
@@ -555,9 +738,20 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה וסגירה' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
-    await waitFor(() => expect(document.activeElement).toBe(borrowerSearch));
+    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    expect(screen.getByRole('dialog', { name: 'אישור פעולות' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'חזרה לעריכה' }));
+    expect(posted).toBe(false);
+    expect(screen.getByRole('region', { name: 'פעולות ממתינות' }).textContent).toContain(
+      'השאלה · 1',
+    );
+    expect(screen.getByText(/אצל השואל 3/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    await userEvent.click(screen.getByRole('button', { name: 'אישור ושמירה' }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /כרטיס שואל/ })).toBeTruthy());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('combobox', { name: 'חיפוש פריט' })),
+    );
     expect(toast).toHaveBeenCalledTimes(1);
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השמירה הושלמה.', 'success');
   });
@@ -596,12 +790,12 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await confirmSave();
     const retry = await screen.findByRole('button', { name: 'אימות נתוני האמת מחדש' });
     await waitFor(() => expect(document.activeElement).toBe(retry));
     const holdings = document.getElementById('holdings-heading')!.parentElement!;
     expect(within(holdings).getByText(/טרם אומת/)).toBeTruthy();
-    expect(within(holdings).getByText('3')).toBeTruthy();
+    expect(within(holdings).getByText(/אצל השואל 3/)).toBeTruthy();
     expect(toast).toHaveBeenCalledTimes(1);
   });
 
@@ -656,14 +850,108 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await confirmSave();
     const conflict = await screen.findByText('אין די מלאי זמין');
-    const row = conflict.closest('tr')!;
-    expect(within(row).getByText('1')).toBeTruthy();
+    const row = conflict.closest('[data-compatible="false"]')! as HTMLElement;
+    expect(within(row).getByText(/השאלה · 1/)).toBeTruthy();
     expect(within(row).queryByText(/[+−-]1/)).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(row));
     expect(toast).toHaveBeenCalledTimes(1);
     expect(toast).toHaveBeenCalledWith('נדרשת תשומת לב', 'Inventory changed', 'warning');
+  });
+
+  it('retains staged return and loss after a held conflict until an explicit reconciled retry', async () => {
+    const postedBodies: Array<{ items: Array<Record<string, unknown>> }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot')
+          return json(
+            postedBodies.length < 2
+              ? desk()
+              : {
+                  ...desk(3),
+                  holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
+                  inventory: [{ ...item, available: 5 }],
+                },
+          );
+        if (path === '/api/borrowers/7/operations') {
+          postedBodies.push(JSON.parse(String(init.body)));
+          const key = new Headers(init.headers).get('idempotency-key');
+          if (postedBodies.length === 1)
+            return json(
+              {
+                error: 'borrower_operation_conflict',
+                message: 'Held balance changed',
+                outcome: 'rejected',
+                idempotencyKey: key,
+                replayed: false,
+                conflicts: [
+                  {
+                    scope: 'held',
+                    code: 'held_balance_changed',
+                    itemId: 11,
+                    requested: 2,
+                    returnable: 1,
+                  },
+                ],
+                snapshot: {
+                  ...desk(2),
+                  holdings: [{ itemId: 11, returnable: 1, lost: 1 }],
+                },
+              },
+              409,
+            );
+          return json({ outcome: 'committed', idempotencyKey: key, replayed: false }, 201);
+        }
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+    const returnDialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+    await userEvent.clear(within(returnDialog).getByRole('spinbutton', { name: /כמות/ }));
+    await userEvent.type(within(returnDialog).getByRole('spinbutton', { name: /כמות/ }), '1');
+    await userEvent.click(within(returnDialog).getByRole('button', { name: 'אישור' }));
+    await userEvent.click(screen.getByRole('button', { name: 'אפשרויות נוספות' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'סמן כאבוד' }));
+    await userEvent.click(
+      within(screen.getByRole('dialog', { name: 'סמן כאבוד' })).getByRole('button', {
+        name: 'אישור',
+      }),
+    );
+    await confirmSave();
+    expect(await screen.findAllByText('יתרת הציוד אצל השואל השתנתה')).not.toHaveLength(0);
+    const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
+    expect(within(pending).getByText(/החזרת ציוד · 1/)).toBeTruthy();
+    const lossRow = within(pending)
+      .getByText(/סמן כאבוד · 1/)
+      .closest('.borrower-pending-row')!;
+    expect(postedBodies).toHaveLength(1);
+    await userEvent.click(
+      within(lossRow as HTMLElement).getByRole('button', { name: 'ביטול פעולה' }),
+    );
+    expect(within(pending).queryByText(/סמן כאבוד · 1/)).toBeNull();
+    expect(within(pending).getByText(/החזרת ציוד · 1/)).toBeTruthy();
+    await confirmSave();
+    await waitFor(() => expect(postedBodies).toHaveLength(2));
+    expect(postedBodies[0]?.items[0]).toMatchObject({
+      return: [{ usable: 1, damaged: 0, note: '' }],
+      lost: [{ quantity: 1, note: '' }],
+    });
+    expect(postedBodies[1]?.items[0]).toMatchObject({
+      return: [{ usable: 1, damaged: 0, note: '' }],
+    });
+    expect(postedBodies[1]?.items[0]).not.toHaveProperty('lost');
   });
 
   it('keeps an invalid return dialog open, focuses its first error control, and protects dirty exit with one alertdialog', async () => {
@@ -685,16 +973,24 @@ describe('borrower desk workflow', () => {
     const search = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
     await userEvent.type(search, 'א');
     await activateBorrowerAction();
-    await userEvent.click(await screen.findByRole('button', { name: 'תקין' }));
-    const usable = screen.getByRole('spinbutton', { name: 'כמות' });
+    await userEvent.click(await screen.findByRole('button', { name: 'החזרת ציוד' }));
+    const usable = screen.getByRole('spinbutton', { name: /כמות/ });
     await userEvent.clear(usable);
     await userEvent.type(usable, '9');
-    await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
+    await userEvent.click(
+      within(screen.getByRole('dialog', { name: 'החזרת ציוד' })).getByRole('button', {
+        name: 'אישור',
+      }),
+    );
     expect(screen.getByRole('alert').textContent).toContain('1 ל־2');
     expect(document.activeElement).toBe(usable);
     await userEvent.clear(usable);
     await userEvent.type(usable, '1');
-    await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
+    await userEvent.click(
+      within(screen.getByRole('dialog', { name: 'החזרת ציוד' })).getByRole('button', {
+        name: 'אישור',
+      }),
+    );
     await userEvent.click(
       screen
         .getAllByRole('button', { name: 'סגירה' })
@@ -741,9 +1037,11 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await confirmSave();
     const retry = await screen.findByRole('button', { name: 'בדיקת תוצאת השמירה' });
-    expect(screen.getByRole('button', { name: 'שמירה' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'בדיקה ושמירה' }).hasAttribute('disabled')).toBe(
+      true,
+    );
     expect(
       screen
         .getAllByRole('button', { name: 'סגירה' })
@@ -973,7 +1271,7 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await confirmSave();
     expect(posts).toBe(0);
     await userEvent.click(
       await screen.findByRole('button', { name: 'בדיקה חוזרת של הפעולה השמורה' }),
@@ -1013,7 +1311,7 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await confirmSave();
     await userEvent.click(
       await screen.findByRole('button', { name: 'בדיקה חוזרת של הפעולה השמורה' }),
     );

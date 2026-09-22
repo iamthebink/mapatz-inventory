@@ -15,6 +15,12 @@ export type ReturnPart = {
 
 export type LostCreditPart = {
   quantity: number;
+  condition: 'usable' | 'damaged';
+  note: string;
+};
+
+export type LostPart = {
+  quantity: number;
   note: string;
 };
 
@@ -25,6 +31,7 @@ export type BorrowerOperationRequest = {
     itemId: number;
     borrow?: BorrowPart[];
     return?: ReturnPart[];
+    lost?: LostPart[];
     lostCredit?: LostCreditPart[];
   }>;
 };
@@ -78,6 +85,13 @@ export type BorrowerOperationConflict =
   | {
       scope: 'return';
       code: 'returnable_balance_changed';
+      itemId: number;
+      requested: number;
+      returnable: number;
+    }
+  | {
+      scope: 'held';
+      code: 'held_balance_changed';
       itemId: number;
       requested: number;
       returnable: number;

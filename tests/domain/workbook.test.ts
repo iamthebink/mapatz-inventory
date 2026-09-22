@@ -158,9 +158,21 @@ describe('inventory XLSX workbook', () => {
       type: 'camp_organization',
     });
     const checkout = inventory.checkout(tent.id, borrower.id, 5, 'loan');
-    inventory.markLost(checkout, 1, true, 'lost');
+    inventory.markLost(checkout, 2, true, 'lost');
     inventory.returnCheckout(checkout, 0, 1, 'damaged');
     foundReturned(inventory, checkout, 1);
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, '00000000-0000-4000-8000-000000000027', {
+        contractVersion: 1,
+        ledgerEpoch: 2,
+        items: [
+          {
+            itemId: tent.id,
+            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken' }],
+          },
+        ],
+      }),
+    ).toMatchObject({ outcome: 'committed' });
     db.prepare(
       `INSERT INTO idempotency_receipts(
         key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
@@ -194,6 +206,7 @@ describe('inventory XLSX workbook', () => {
       'marked_lost',
       'returned_damaged',
       'found_returned',
+      'found_returned_damaged',
     ]);
 
     const workbook = await load(await exportWorkbook(snapshot));

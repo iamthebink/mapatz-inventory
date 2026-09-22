@@ -74,27 +74,31 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
 }
 
 async function stageReturn(page: Page, itemName: string, usable = '1', damaged = '0') {
-  const holdings = page.getByRole('heading', { name: /ציוד באחריות השואל/ }).locator('..');
-  if (Number(usable) > 0) {
-    await holdings
-      .locator('button.small-button:not([disabled])')
-      .filter({ hasText: /^תקין$/ })
-      .click();
-    const dialog = page.getByRole('dialog', { name: 'החזרה תקינה' });
+  const holdings = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
+  const itemRow = holdings.locator('.borrower-equipment-row').filter({ hasText: itemName });
+  // Keyboard activation avoids the open item-search list overlapping this row after a borrow.
+  for (const [quantity, isDamaged] of [
+    [usable, false],
+    [damaged, true],
+  ] as const) {
+    if (Number(quantity) <= 0) continue;
+    await itemRow.getByRole('button', { name: 'החזרת ציוד' }).press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
     await expectQuantityDialogItem(dialog, itemName);
-    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(usable);
+    const checkbox = dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+    await expect(checkbox).not.toBeChecked();
+    if (isDamaged) await checkbox.check();
+    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(quantity);
     await dialog.getByRole('button', { name: 'אישור' }).click();
+    await expect(dialog).toBeHidden();
   }
-  if (Number(damaged) > 0) {
-    await holdings
-      .locator('button.small-button:not([disabled])')
-      .filter({ hasText: /^פגום$/ })
-      .click();
-    const dialog = page.getByRole('dialog', { name: 'החזרה פגומה' });
-    await expectQuantityDialogItem(dialog, itemName);
-    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(damaged);
-    await dialog.getByRole('button', { name: 'אישור' }).click();
-  }
+}
+
+async function confirmSave(page: Page) {
+  await page.getByRole('button', { name: 'בדיקה ושמירה' }).click();
+  const review = page.getByRole('dialog', { name: 'אישור פעולות' });
+  await expect(review).toBeVisible();
+  await review.getByRole('button', { name: 'אישור ושמירה' }).click();
 }
 
 function rows<T extends Record<string, unknown>>(
@@ -204,7 +208,7 @@ test('keeps an emphasized maximum-length item identity legible at minimum width'
   expect(calloutBox!.width / dialogBox!.width).toBeGreaterThan(0.8);
 });
 
-test('commits a mixed Save-and-Close exactly once with deterministic ledger order', async ({
+test('commits a mixed reviewed save exactly once with deterministic ledger order', async ({
   page,
   seed,
   openLedger,
@@ -215,14 +219,18 @@ test('commits a mixed Save-and-Close exactly once with deterministic ledger orde
 
   const staged = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   await expect(staged.getByText('השאלה')).toBeVisible();
-  await expect(staged.getByText('החזרה תקינה')).toBeVisible();
-  await expect(staged.getByText('החזרה פגומה')).toBeVisible();
-  await expect(staged.locator('.operational-quantity')).toHaveCount(3);
-  await page.getByRole('button', { name: 'שמירה וסגירה' }).click();
+  await expect(staged.getByText(/החזרת ציוד · 1/)).toBeVisible();
+  await expect(staged.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
+  await confirmSave(page);
+  await page
+    .getByRole('dialog', { name: /כרטיס שואל/ })
+    .getByRole('button', { name: 'סגירה' })
+    .last()
+    .click();
 
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   await expect(borrowerSearch).toBeFocused();
-  await expect(borrowerSearch).toHaveValue('');
+  await expect(borrowerSearch).toHaveValue(seed.borrower.username);
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast[role="status"]')).toContainText('השמירה הושלמה');
 
@@ -250,6 +258,166 @@ test('commits a mixed Save-and-Close exactly once with deterministic ledger orde
   ).toBe(1);
 });
 
+test('stages loss and dependent found return from the borrower card with keyboard review', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  await openSeededCard(page, seed.borrower.username);
+  const more = page.getByRole('button', { name: 'אפשרויות נוספות' });
+  await expect(more).not.toContainText('…');
+  await expect(page.getByRole('menuitem', { name: 'סמן כאבוד' })).toHaveCount(0);
+  await more.press('ArrowDown');
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem')).toHaveCount(1);
+  const markLost = menu.getByRole('menuitem', { name: 'סמן כאבוד' });
+  await expect(markLost).toBeFocused();
+  await markLost.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(more).toBeFocused();
+  await more.press('Enter');
+  await markLost.press('Enter');
+  const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
+  await expectQuantityDialogItem(lossDialog, seed.item.name);
+  await expect(lossDialog.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  await expect(lossDialog.getByRole('spinbutton', { name: 'כמות' })).toHaveValue('1');
+  await expect(lossDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).toHaveCount(0);
+  await expect(page.locator('.borrower-inline-editor')).toHaveCount(0);
+  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await lossDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await lossDialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(page.locator('.lost-equipment-section summary')).toContainText('2 יחידות');
+
+  await page.locator('.lost-equipment-section summary').click();
+  await page.getByRole('button', { name: 'נמצא והוחזר' }).click();
+  const foundDialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
+  await expectQuantityDialogItem(foundDialog, seed.item.name);
+  await expect(foundDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
+  await foundDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await foundDialog.getByRole('button', { name: 'אישור' }).click();
+
+  const pending = page.locator('.staged-section');
+  const lossRow = pending.locator('.borrower-pending-row').filter({ hasText: 'סמן כאבוד' });
+  await lossRow.getByRole('button', { name: 'ביטול פעולה' }).click();
+  await expect(page.locator('.toast')).toContainText('יש לבטל תחילה');
+  await expect(lossRow).toBeVisible();
+
+  await page.getByRole('button', { name: 'בדיקה ושמירה' }).press('Enter');
+  const review = page.getByRole('dialog', { name: 'אישור פעולות' });
+  await expect(review.getByText(/סמן כאבוד · 2/)).toBeVisible();
+  await expect(review.getByText(/נמצא והוחזר · 2/)).toBeVisible();
+  await review.getByRole('button', { name: 'אישור ושמירה' }).press('Enter');
+  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+
+  const database = openLedger();
+  expect(
+    rows<{ kind: string; quantity: number }>(
+      database,
+      "SELECT kind,quantity FROM inventory_events WHERE borrower_id=? AND item_id=? AND kind IN ('marked_lost','found_returned') ORDER BY id DESC LIMIT 2",
+      seed.borrower.id,
+      seed.item.id,
+    ).reverse(),
+  ).toEqual([
+    { kind: 'marked_lost', quantity: 2 },
+    { kind: 'found_returned', quantity: 2 },
+  ]);
+});
+
+test('uses resettable damaged condition for held and lost returns at 320px', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  await page.setViewportSize({ width: 320, height: 720 });
+  await openSeededCard(page, seed.borrower.username);
+  const more = page.getByRole('button', { name: 'אפשרויות נוספות' });
+  await more.press('ArrowDown');
+  const menuItem = page.getByRole('menuitem', { name: 'סמן כאבוד' });
+  await expect(menuItem).toBeFocused();
+  const menuBox = await page.getByRole('menu').boundingBox();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(320);
+  await page.getByRole('heading', { name: 'פעולות ממתינות' }).click();
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+
+  const returnButton = page.getByRole('button', { name: 'החזרת ציוד' });
+  await returnButton.click();
+  const heldDialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
+  await expectEmphasizedQuantityDialogItem(heldDialog, seed.item.name);
+  await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
+  await expect(heldDialog.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  const heldCheckbox = heldDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+  await expect(heldCheckbox).not.toBeChecked();
+  await heldDialog.getByRole('spinbutton', { name: 'כמות' }).fill('0');
+  await heldDialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(heldDialog.getByRole('alert')).toBeVisible();
+  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await heldDialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await heldCheckbox.check();
+  await heldDialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(heldDialog).toBeHidden();
+  await expect(page.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
+  await returnButton.click();
+  await expect(heldCheckbox).not.toBeChecked();
+  await heldDialog.getByRole('button', { name: 'ביטול' }).click();
+  await expect(returnButton).toBeFocused();
+
+  await more.press('ArrowDown');
+  await menuItem.press('Enter');
+  const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
+  await expect(lossDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).toHaveCount(0);
+  await lossDialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(page.locator('.lost-equipment-section summary')).toContainText('1 יחידה');
+  await page.locator('.lost-equipment-section summary').press('Enter');
+  const found = page.getByRole('button', { name: 'נמצא והוחזר' });
+  await found.press('Enter');
+  const foundDialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
+  await expectQuantityDialogItem(foundDialog, seed.item.name);
+  const foundCheckbox = foundDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+  await expect(foundCheckbox).not.toBeChecked();
+  await foundCheckbox.check();
+  await foundDialog.getByRole('button', { name: 'ביטול' }).click();
+  await expect(found).toBeFocused();
+  await found.press('Enter');
+  await expect(foundCheckbox).not.toBeChecked();
+  await foundCheckbox.check();
+  await foundDialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(page.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page.getByRole('button', { name: 'בדיקה ושמירה' }).press('Enter');
+  const review = page.getByRole('dialog', { name: 'אישור פעולות' });
+  await expect(review.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
+  await expect(review.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await review.getByRole('button', { name: 'אישור ושמירה' }).press('Enter');
+
+  const database = openLedger();
+  expect(
+    rows<{ kind: string; quantity: number }>(
+      database,
+      'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
+      seed.checkoutId,
+    ),
+  ).toEqual([
+    { kind: 'returned_damaged', quantity: 1 },
+    { kind: 'marked_lost', quantity: 1 },
+    { kind: 'found_returned_damaged', quantity: 1 },
+  ]);
+  expect(
+    rows<{ available: number; damaged: number }>(
+      database,
+      `SELECT SUM(CASE kind WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity
+        WHEN 'found_returned' THEN quantity WHEN 'checked_out' THEN -quantity ELSE 0 END) available,
+        SUM(CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'found_returned_damaged' THEN quantity
+        WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END) damaged
+       FROM inventory_events WHERE item_id=?`,
+      seed.item.id,
+    )[0],
+  ).toEqual({ available: 4, damaged: 2 });
+});
+
 test('keeps an incremental save open and supports another operation after authoritative refresh', async ({
   page,
   seed,
@@ -257,14 +425,14 @@ test('keeps an incremental save open and supports another operation after author
 }) => {
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.item.name);
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
 
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeVisible();
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await expect(itemSearch).toBeFocused();
   await stageReturn(page, seed.item.name);
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
 
   const database = openLedger();
@@ -298,12 +466,12 @@ test('keeps a committed incremental save in retry-only state until truth refresh
 
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.item.name);
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
 
   const retry = page.getByRole('button', { name: 'אימות נתוני האמת מחדש' });
   await expect(retry).toBeFocused();
   await expect(page.getByRole('combobox', { name: 'חיפוש פריט' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'שמירה', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toBeDisabled();
   expect(operationPosts).toBe(1);
 
   await retry.click();
@@ -333,7 +501,7 @@ test('resolves an ambiguous committed response after reload without duplicating 
     await route.fetch();
     await route.abort('connectionfailed');
   });
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
   await expect(page.getByRole('button', { name: 'בדיקת תוצאת השמירה' })).toBeVisible();
   const envelope = await page.evaluate(() =>
     Object.entries(localStorage).find(([key]) => key.startsWith('mapatz:frozen-attempt:v1:')),
@@ -367,22 +535,22 @@ test('resolves an ambiguous committed response after reload without duplicating 
   ).toBe(1);
 });
 
-test('keeps a new item search focused when deferred return focus runs', async ({ page, seed }) => {
+test('restores focus to the return trigger after dismissing its quantity modal', async ({
+  page,
+  seed,
+}) => {
   await openSeededCard(page, seed.borrower.username);
-  await page.getByRole('button', { name: 'תקין', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'החזרה תקינה' });
-  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
-  // Hold the return-focus timer until the operator has started their next action.
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await dialog.getByRole('button', { name: 'אישור' }).click();
-  await expect(dialog).toHaveCount(0);
-  const search = page.getByRole('combobox', { name: 'חיפוש פריט' });
-  await search.fill(seed.archiveItem.name);
-  await expect(search).toBeFocused();
-  await page.clock.runFor(1);
-  await expect(search).toBeFocused();
-  await expect(page.getByRole('option', { name: new RegExp(seed.archiveItem.name) })).toBeVisible();
+  const returnButton = page.getByRole('button', { name: 'החזרת ציוד' });
+  await returnButton.click();
+  const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
+  await expect(dialog.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  await dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' }).check();
+  await dialog.getByRole('button', { name: 'ביטול' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(returnButton).toBeFocused();
+  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await returnButton.click();
+  await expect(dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
 });
 
 test('renders a fresh conflict, keeps staging, and requires a new deliberate save key', async ({
@@ -420,7 +588,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
     database,
     'SELECT COUNT(*) count FROM inventory_events',
   )[0]!.count;
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
 
   const conflicts = page.locator('.staged-section .field-error span');
   await expect(conflicts).toHaveText([
@@ -428,9 +596,13 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
     'יתרת ההחזרה השתנתה',
     'הפריט הועבר לארכיון',
   ]);
-  await expect(page.getByText('אין די מלאי זמין').locator('xpath=ancestor::tr')).toBeFocused();
-  await expect(page.getByText('החזרה תקינה')).toBeVisible();
-  await expect(page.locator('.staged-section').getByRole('cell', { name: 'השאלה' })).toHaveCount(2);
+  await expect(
+    page.getByText('אין די מלאי זמין').locator('xpath=ancestor::*[@data-compatible="false"]'),
+  ).toBeFocused();
+  await expect(page.getByText(/החזרת ציוד ·/)).toBeVisible();
+  await expect(
+    page.locator('.staged-section .borrower-pending-row').filter({ hasText: 'השאלה' }),
+  ).toHaveCount(2);
   await expect(page.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast')).toHaveCSS('animation-name', 'none');
@@ -485,7 +657,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await page.waitForFunction(() => !history.state?.mapatzBorrowerWorkflow);
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.stockItem.name);
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
   const receipts = rows<{ key: string; outcome: string }>(
     database,
@@ -494,6 +666,146 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   );
   expect(receipts).toHaveLength(2);
   expect(receipts.find(({ outcome }) => outcome === 'committed')?.key).not.toBe(rejected[0]?.key);
+});
+
+test('reconciles a stale combined held balance before a deliberate retry', async ({
+  page,
+  request,
+  seed,
+  openLedger,
+}) => {
+  await openSeededCard(page, seed.borrower.username);
+  await stageReturn(page, seed.item.name);
+  const more = page.getByRole('button', { name: 'אפשרויות נוספות' });
+  await more.press('ArrowDown');
+  await page.getByRole('menuitem', { name: 'סמן כאבוד' }).press('Enter');
+  const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
+  await lossDialog.getByRole('button', { name: 'אישור' }).click();
+  await stageBorrow(page, seed.stockItem.name);
+
+  const attempts: Array<{ key: string; body: unknown }> = [];
+  page.on('request', (outgoing) => {
+    if (
+      outgoing.method() === 'POST' &&
+      outgoing.url().endsWith(`/api/borrowers/${seed.borrower.id}/operations`)
+    ) {
+      attempts.push({
+        key: outgoing.headers()['idempotency-key']!,
+        body: outgoing.postDataJSON(),
+      });
+    }
+  });
+  const externalReturn = await request.post('/api/return', {
+    data: { checkoutId: seed.checkoutId, usable: 1, damaged: 0, note: 'e2e held conflict' },
+  });
+  expect(externalReturn.status()).toBe(201);
+  const database = openLedger();
+  const beforeAttempt = rows<{ count: number }>(
+    database,
+    'SELECT COUNT(*) count FROM inventory_events',
+  )[0]!.count;
+
+  const firstResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith(`/api/borrowers/${seed.borrower.id}/operations`),
+  );
+  await confirmSave(page);
+  const conflictResponse = await firstResponse;
+  expect(conflictResponse.status()).toBe(409);
+  expect(await conflictResponse.json()).toMatchObject({
+    error: 'borrower_operation_conflict',
+    outcome: 'rejected',
+    conflicts: [
+      {
+        scope: 'held',
+        code: 'held_balance_changed',
+        itemId: seed.item.id,
+        requested: 2,
+        returnable: 1,
+      },
+    ],
+  });
+  const pending = page.locator('.staged-section');
+  await expect(pending.getByText('יתרת הציוד אצל השואל השתנתה')).toHaveCount(2);
+  await expect(pending.getByText(/החזרת ציוד · 1/)).toBeVisible();
+  await expect(pending.getByText(/סמן כאבוד · 1/)).toBeVisible();
+  await expect(pending.getByText(/השאלה · 1/)).toBeVisible();
+  await expect(pending.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toBeDisabled();
+  expect(
+    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+  ).toBe(beforeAttempt);
+  expect(
+    rows<{ kind: string; quantity: number }>(
+      database,
+      'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
+      seed.checkoutId,
+    ),
+  ).toEqual([{ kind: 'returned_usable', quantity: 1 }]);
+  expect(attempts).toHaveLength(1);
+  expect(attempts[0]!.body).toMatchObject({
+    items: [
+      {
+        itemId: seed.item.id,
+        return: [{ usable: 1, damaged: 0, note: '' }],
+        lost: [{ quantity: 1, note: '' }],
+      },
+      { itemId: seed.stockItem.id, borrow: [{ quantity: 1, note: '' }] },
+    ],
+  });
+  const rejected = rows<{ key: string; outcome: string }>(
+    database,
+    'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?',
+    seed.borrower.id,
+  );
+  expect(rejected).toEqual([{ key: attempts[0]!.key, outcome: 'rejected' }]);
+
+  const lossRow = pending.locator('.borrower-pending-row').filter({ hasText: 'סמן כאבוד' });
+  await lossRow.getByRole('button', { name: 'ביטול פעולה' }).click();
+  await expect(lossRow).toHaveCount(0);
+  await expect(pending.getByText('יתרת הציוד אצל השואל השתנתה')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toBeEnabled();
+  await confirmSave(page);
+  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]!.key).not.toBe(attempts[0]!.key);
+  expect(attempts[1]!.body).toMatchObject({
+    items: [
+      { itemId: seed.item.id, return: [{ usable: 1, damaged: 0, note: '' }] },
+      { itemId: seed.stockItem.id, borrow: [{ quantity: 1, note: '' }] },
+    ],
+  });
+  expect(
+    rows<{ kind: string; quantity: number }>(
+      database,
+      'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
+      seed.checkoutId,
+    ),
+  ).toEqual([
+    { kind: 'returned_usable', quantity: 1 },
+    { kind: 'returned_usable', quantity: 1 },
+  ]);
+  expect(
+    rows<{ count: number }>(
+      database,
+      "SELECT COUNT(*) count FROM inventory_events WHERE borrower_id=? AND item_id=? AND kind='marked_lost'",
+      seed.borrower.id,
+      seed.item.id,
+    )[0]!.count,
+  ).toBe(0);
+  expect(
+    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+  ).toBe(beforeAttempt + 2);
+  const receipts = rows<{ key: string; outcome: string }>(
+    database,
+    'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?',
+    seed.borrower.id,
+  );
+  expect(receipts).toHaveLength(2);
+  expect(receipts).toContainEqual({ key: attempts[0]!.key, outcome: 'rejected' });
+  expect(receipts).toContainEqual({ key: attempts[1]!.key, outcome: 'committed' });
 });
 
 test('rejects an operation without writes when the borrower becomes archived', async ({
@@ -510,12 +822,12 @@ test('rejects an operation without writes when the borrower becomes archived', a
     database,
     'SELECT COUNT(*) count FROM inventory_events',
   )[0]!.count;
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
 
   const conflict = page.getByText('השואל אינו פעיל');
   await expect(conflict).toBeVisible();
-  await expect(conflict.locator('xpath=ancestor::tr')).toBeFocused();
-  await expect(page.locator('.staged-section').getByRole('cell', { name: 'השאלה' })).toBeVisible();
+  await expect(conflict.locator('xpath=ancestor::*[@data-compatible="false"]')).toBeFocused();
+  await expect(page.locator('.staged-section .borrower-pending-row')).toContainText('השאלה');
   await expect(page.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(1);
   expect(
     rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
@@ -532,7 +844,7 @@ test('retains an unknown envelope through authorization loss and clears it after
   await stageBorrow(page, seed.item.name);
   const endpoint = `**/api/borrowers/${seed.borrower.id}/operations`;
   await page.route(endpoint, (route) => route.abort('connectionfailed'));
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await confirmSave(page);
   const retry = page.getByRole('button', { name: 'בדיקת תוצאת השמירה' });
   await expect(retry).toBeVisible();
 
@@ -724,10 +1036,10 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await stageBorrow(page, seed.stockItem.name);
   const root = page.getByRole('dialog', { name: /כרטיס שואל/ });
   const rootClose = root.locator('.dialog-close');
-  const saveAndClose = root.getByRole('button', { name: 'שמירה וסגירה' });
+  const reviewAndSave = root.getByRole('button', { name: 'בדיקה ושמירה' });
   await rootClose.focus();
   await page.keyboard.press('Shift+Tab');
-  await expect(saveAndClose).toBeFocused();
+  await expect(reviewAndSave).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(rootClose).toBeFocused();
   await page.keyboard.press('Escape');
@@ -828,18 +1140,18 @@ test('operator credits a previously lost unit back to usable inventory', async (
   });
 
   await openSeededCard(page, seed.borrower.username);
-  const usable = page.getByRole('button', { name: 'תקין' });
-  const lost = page.getByRole('button', { name: 'אבוד' });
-  const damaged = page.getByRole('button', { name: 'פגום' });
-  await expect(usable).toBeDisabled();
-  await expect(damaged).toBeDisabled();
-  await expect(lost).toBeEnabled();
-  await lost.click();
-  const creditDialog = page.getByRole('dialog', { name: 'החזרת ציוד אבוד' });
-  await expectQuantityDialogItem(creditDialog, seed.item.name);
-  await creditDialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
-  await creditDialog.getByRole('button', { name: 'אישור' }).click();
-  await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'החזרת ציוד' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'אפשרויות נוספות' })).toHaveCount(0);
+  await page.getByText('ציוד אבוד של השואל').click();
+  const found = page.getByRole('button', { name: 'נמצא והוחזר' });
+  await expect(found).toBeEnabled();
+  await found.click();
+  const dialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
+  await expectQuantityDialogItem(dialog, seed.item.name);
+  await expect(dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
+  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await confirmSave(page);
   await expect(page.locator('.toast')).toContainText('השמירה הושלמה');
 
   const database = openLedger();
@@ -882,14 +1194,14 @@ test('retires legacy presentation while preserving gated lost controls and respo
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.item.name);
   const staged: Locator = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
-  const holdings: Locator = page.getByRole('heading', { name: /ציוד באחריות השואל/ }).locator('..');
+  const holdings: Locator = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
   const wide = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
-  expect(wide[0]!.x).toBeGreaterThan(wide[1]!.x);
+  expect(wide[0]!.y).toBeGreaterThan(wide[1]!.y);
   const holdingsElement = await holdings.elementHandle();
   expect(
     await staged.evaluate(
       (node, other) =>
-        Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING),
+        Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_PRECEDING),
       holdingsElement,
     ),
   ).toBe(true);
@@ -907,7 +1219,7 @@ test('retires legacy presentation while preserving gated lost controls and respo
     }
   }
   await expect(page.locator('.app-nav')).toHaveCSS('transition-duration', '0s');
-  await expect(page.getByRole('button', { name: 'שמירה', exact: true })).toHaveCSS(
+  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toHaveCSS(
     'transition-duration',
     '0s',
   );
@@ -918,12 +1230,12 @@ test('retires legacy presentation while preserving gated lost controls and respo
 
   await page.setViewportSize({ width: 640, height: 720 });
   const zoomed = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
-  expect(zoomed[0]!.y).toBeLessThan(zoomed[1]!.y);
+  expect(zoomed[0]!.y).toBeGreaterThan(zoomed[1]!.y);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
   await page.setViewportSize({ width: 320, height: 720 });
   const narrow = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
-  expect(narrow[0]!.y).toBeLessThan(narrow[1]!.y);
+  expect(narrow[0]!.y).toBeGreaterThan(narrow[1]!.y);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
