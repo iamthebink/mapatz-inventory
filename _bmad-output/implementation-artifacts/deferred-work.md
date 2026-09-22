@@ -64,6 +64,3 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-restore-borrower-card-side-by-side-work-area.md`
   summary: Add the older UX visual spine's separator between item search and the borrower work segment.
   evidence: The existing search/work segment has no explicit horizontal divider and this orientation change does not alter that boundary.
-- source_spec: none
-  summary: Close the borrower card after a confirmed successful בדיקה ושמירה, returning to borrower search.
-  evidence: Split from the held/lost equipment table layout at the user's request so the save-and-close behavior can be implemented and verified independently in this chat.

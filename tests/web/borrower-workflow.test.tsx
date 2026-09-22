@@ -64,7 +64,7 @@ async function activateBorrowerAction(key: 'Enter' | ' ' = 'Enter') {
 }
 
 async function confirmSave() {
-  await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+  await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
   await userEvent.click(await screen.findByRole('button', { name: 'אישור ושמירה' }));
 }
 
@@ -388,7 +388,7 @@ describe('borrower desk workflow', () => {
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
     expect(within(pending).getByText(/החזרת ציוד · 2/)).toBeTruthy();
     expect(within(pending).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
     expect(within(review).getByText(/החזרת ציוד · 2/)).toBeTruthy();
     expect(within(review).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
@@ -424,7 +424,7 @@ describe('borrower desk workflow', () => {
       await userEvent.type(within(dialog).getByRole('textbox', { name: 'הערה (רשות)' }), note);
       await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
     }
-    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
     const rows = within(review)
       .getAllByText(/החזרת ציוד · [12]/)
@@ -763,13 +763,11 @@ describe('borrower desk workflow', () => {
 
     await confirmSave();
     await waitFor(() => expect(operationPosted).toBe(true));
-    await waitFor(() =>
-      expect(within(pendingTransactions).queryByRole('button', { name: 'ביטול פעולה' })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השמירה הושלמה.', 'success');
   });
 
-  it('requires explicit review confirmation and returns to the refreshed borrower card', async () => {
+  it('requires explicit review confirmation and returns to borrower search after saving', async () => {
     let posted = false;
     vi.stubGlobal(
       'fetch',
@@ -800,7 +798,7 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'ArrowDown' });
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
-    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     expect(screen.getByRole('dialog', { name: 'אישור פעולות' })).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'חזרה לעריכה' }));
     expect(posted).toBe(false);
@@ -808,17 +806,16 @@ describe('borrower desk workflow', () => {
       'השאלה · 1',
     );
     expectHeldQuantity(3);
-    await userEvent.click(screen.getByRole('button', { name: 'בדיקה ושמירה' }));
+    await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     await userEvent.click(screen.getByRole('button', { name: 'אישור ושמירה' }));
-    await waitFor(() => expect(screen.getByRole('dialog', { name: /כרטיס שואל/ })).toBeTruthy());
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('combobox', { name: 'חיפוש פריט' })),
-    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(borrowerSearch));
+    expect((borrowerSearch as HTMLInputElement).value).toBe('');
     expect(toast).toHaveBeenCalledTimes(1);
     expect(toast).toHaveBeenCalledWith('הפעולה הושלמה', 'השמירה הושלמה.', 'success');
   });
 
-  it('keeps the committed projection explicitly unverified and focuses refresh retry', async () => {
+  it('closes the card but blocks borrower search until committed truth can be refreshed', async () => {
     let posted = false;
     vi.stubGlobal(
       'fetch',
@@ -853,12 +850,16 @@ describe('borrower desk workflow', () => {
     fireEvent.keyDown(itemSearch, { key: 'Enter' });
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
     await confirmSave();
-    const retry = await screen.findByRole('button', { name: 'אימות נתוני האמת מחדש' });
+    const retry = await screen.findByRole('button', { name: 'אימות נתוני האמת לפני המשך' });
     await waitFor(() => expect(document.activeElement).toBe(retry));
-    const holdings = document.getElementById('holdings-heading')!.parentElement!;
-    expect(within(holdings).getByText(/טרם אומת/)).toBeTruthy();
-    expectHeldQuantity(3);
-    expect(toast).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull();
+    expect((borrowerSearch as HTMLInputElement).disabled).toBe(true);
+    expect((borrowerSearch as HTMLInputElement).value).toBe('');
+    expect(toast).toHaveBeenCalledWith(
+      'נדרשת תשומת לב',
+      'הפעולה אושרה, אך התצוגה טרם אומתה.',
+      'warning',
+    );
   });
 
   it('replaces truth after a conflict, retains staging, annotates it, and focuses the first conflict', async () => {
@@ -1101,7 +1102,7 @@ describe('borrower desk workflow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
     await confirmSave();
     const retry = await screen.findByRole('button', { name: 'בדיקת תוצאת השמירה' });
-    expect(screen.getByRole('button', { name: 'בדיקה ושמירה' }).hasAttribute('disabled')).toBe(
+    expect(screen.getByRole('button', { name: 'אישור פעולות' }).hasAttribute('disabled')).toBe(
       true,
     );
     expect(
@@ -1112,7 +1113,9 @@ describe('borrower desk workflow', () => {
     await userEvent.click(retry);
     await waitFor(() => expect(posts).toHaveLength(2));
     expect(posts[1]).toEqual(posts[0]);
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryAllByRole('button', { name: 'ביטול פעולה' })).toHaveLength(0),
+    );
   });
 
   it('creates through one durable command and preserves the selected new borrower when card loading fails', async () => {
@@ -1342,20 +1345,23 @@ describe('borrower desk workflow', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
   });
 
-  it('clears a confirmed operation recovery record without replaying the command', async () => {
+  it('resolves the exact frozen operation after a failed clear before closing the card', async () => {
     vi.stubGlobal('localStorage', failFirstRemoveStorage());
-    let posts = 0;
+    const posts: string[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
         const path = String(input);
         if (path.startsWith('/api/borrowers/search'))
           return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
-        if (path === '/api/borrowers/7/desk-snapshot') return json(desk(posts ? 2 : 1));
+        if (path === '/api/borrowers/7/desk-snapshot') return json(desk(posts.length ? 2 : 1));
         if (path === '/api/borrowers/7/operations') {
-          posts += 1;
           const key = new Headers(init.headers).get('idempotency-key');
-          return json({ outcome: 'committed', idempotencyKey: key, replayed: false }, 201);
+          posts.push(key!);
+          return json(
+            { outcome: 'committed', idempotencyKey: key, replayed: posts.length > 1 },
+            201,
+          );
         }
         throw new Error(`Unexpected ${path}`);
       }),
@@ -1377,8 +1383,9 @@ describe('borrower desk workflow', () => {
     await userEvent.click(
       await screen.findByRole('button', { name: 'בדיקה חוזרת של הפעולה השמורה' }),
     );
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
-    expect(posts).toBe(1);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toBe(posts[0]);
   });
 
   it('reloads the creation epoch without losing entered values', async () => {

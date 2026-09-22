@@ -95,7 +95,7 @@ async function stageReturn(page: Page, itemName: string, usable = '1', damaged =
 }
 
 async function confirmSave(page: Page) {
-  await page.getByRole('button', { name: 'בדיקה ושמירה' }).click();
+  await page.getByRole('button', { name: 'אישור פעולות' }).click();
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
   await expect(review).toBeVisible();
   await review.getByRole('button', { name: 'אישור ושמירה' }).click();
@@ -222,15 +222,9 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
   await expect(staged.getByText(/החזרת ציוד · 1/)).toBeVisible();
   await expect(staged.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
   await confirmSave(page);
-  await page
-    .getByRole('dialog', { name: /כרטיס שואל/ })
-    .getByRole('button', { name: 'סגירה' })
-    .last()
-    .click();
-
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   await expect(borrowerSearch).toBeFocused();
-  await expect(borrowerSearch).toHaveValue(seed.borrower.username);
+  await expect(borrowerSearch).toHaveValue('');
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast[role="status"]')).toContainText('השמירה הושלמה');
 
@@ -322,12 +316,12 @@ test('stages loss and dependent found return from the borrower card with keyboar
   await expect(page.locator('.toast')).toContainText('יש לבטל תחילה');
   await expect(lossRow).toBeVisible();
 
-  await page.getByRole('button', { name: 'בדיקה ושמירה' }).press('Enter');
+  await page.getByRole('button', { name: 'אישור פעולות' }).press('Enter');
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
   await expect(review.getByText(/סמן כאבוד · 2/)).toBeVisible();
   await expect(review.getByText(/נמצא והוחזר · 2/)).toBeVisible();
   await review.getByRole('button', { name: 'אישור ושמירה' }).press('Enter');
-  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
 
   const database = openLedger();
   expect(
@@ -430,7 +424,7 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   await expect(page.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
-  await page.getByRole('button', { name: 'בדיקה ושמירה' }).press('Enter');
+  await page.getByRole('button', { name: 'אישור פעולות' }).press('Enter');
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
   await expect(review.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
   await expect(review.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
@@ -462,7 +456,7 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   ).toEqual({ available: 4, damaged: 2 });
 });
 
-test('keeps an incremental save open and supports another operation after authoritative refresh', async ({
+test('reopens the card for another operation after a reviewed save', async ({
   page,
   seed,
   openLedger,
@@ -470,14 +464,11 @@ test('keeps an incremental save open and supports another operation after author
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
-
-  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeVisible();
-  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
-  const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
-  await expect(itemSearch).toBeFocused();
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
+  await openSeededCard(page, seed.borrower.username);
   await stageReturn(page, seed.item.name);
   await confirmSave(page);
-  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
 
   const database = openLedger();
   expect(
@@ -489,7 +480,7 @@ test('keeps an incremental save open and supports another operation after author
   ).toBe(2);
 });
 
-test('keeps a committed incremental save in retry-only state until truth refresh succeeds', async ({
+test('keeps search blocked after a stale committed-save snapshot until truth refresh succeeds', async ({
   page,
   seed,
   openLedger,
@@ -500,8 +491,10 @@ test('keeps a committed incremental save in retry-only state until truth refresh
   let operationPosts = 0;
   await page.route(snapshotEndpoint, async (route) => {
     snapshotRequests += 1;
-    if (snapshotRequests === 2) await route.abort('connectionfailed');
-    else await route.continue();
+    if (snapshotRequests === 2) {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), asOfEventId: 0 } });
+    } else await route.continue();
   });
   await page.route(operationEndpoint, async (route) => {
     if (route.request().method() === 'POST') operationPosts += 1;
@@ -512,15 +505,15 @@ test('keeps a committed incremental save in retry-only state until truth refresh
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
 
-  const retry = page.getByRole('button', { name: 'אימות נתוני האמת מחדש' });
+  const retry = page.getByRole('button', { name: 'אימות נתוני האמת לפני המשך' });
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   await expect(retry).toBeFocused();
-  await expect(page.getByRole('combobox', { name: 'חיפוש פריט' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toBeDisabled();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
   expect(operationPosts).toBe(1);
 
   await retry.click();
-  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
-  await expect(page.getByRole('combobox', { name: 'חיפוש פריט' })).toBeFocused();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeFocused();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveValue('');
   expect(operationPosts).toBe(1);
   expect(snapshotRequests).toBe(3);
 
@@ -532,6 +525,41 @@ test('keeps a committed incremental save in retry-only state until truth refresh
       seed.borrower.id,
     )[0]?.count,
   ).toBe(1);
+});
+
+test('keeps a confirmed close in recovery until a newer ledger epoch is loaded', async ({
+  page,
+  seed,
+}) => {
+  let snapshots = 0;
+  await page.route(`**/api/borrowers/${seed.borrower.id}/desk-snapshot`, async (route) => {
+    snapshots += 1;
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    await route.fulfill({
+      response,
+      json:
+        snapshots === 2 || snapshots === 4
+          ? { ...snapshot, ledgerEpoch: snapshot.ledgerEpoch + 1 }
+          : snapshot,
+    });
+  });
+
+  await openSeededCard(page, seed.borrower.username);
+  await stageBorrow(page, seed.item.name);
+  await confirmSave(page);
+
+  const retry = page.getByRole('button', { name: 'טעינת אמת עדכנית' });
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
+  await expect(retry).toBeFocused();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
+  await retry.click();
+  await expect(retry).toBeFocused();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
+  await retry.click();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeFocused();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
+  expect(snapshots).toBe(4);
 });
 
 test('resolves an ambiguous committed response after reload without duplicating the command', async ({
@@ -702,7 +730,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.stockItem.name);
   await confirmSave(page);
-  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   const receipts = rows<{ key: string; outcome: string }>(
     database,
     'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?',
@@ -776,7 +804,7 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   await expect(pending.getByText(/סמן כאבוד · 1/)).toBeVisible();
   await expect(pending.getByText(/השאלה · 1/)).toBeVisible();
   await expect(pending.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
-  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'אישור פעולות' })).toBeDisabled();
   expect(
     rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(beforeAttempt);
@@ -809,9 +837,9 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   await lossRow.getByRole('button', { name: 'ביטול פעולה' }).click();
   await expect(lossRow).toHaveCount(0);
   await expect(pending.getByText('יתרת הציוד אצל השואל השתנתה')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'אישור פעולות' })).toBeEnabled();
   await confirmSave(page);
-  await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
 
   expect(attempts).toHaveLength(2);
   expect(attempts[1]!.key).not.toBe(attempts[0]!.key);
@@ -1080,7 +1108,7 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await stageBorrow(page, seed.stockItem.name);
   const root = page.getByRole('dialog', { name: /כרטיס שואל/ });
   const rootClose = root.locator('.dialog-close');
-  const reviewAndSave = root.getByRole('button', { name: 'בדיקה ושמירה' });
+  const reviewAndSave = root.getByRole('button', { name: 'אישור פעולות' });
   await rootClose.focus();
   await page.keyboard.press('Shift+Tab');
   await expect(reviewAndSave).toBeFocused();
@@ -1289,7 +1317,7 @@ test('retires legacy presentation while preserving gated lost controls and respo
     }
   }
   await expect(page.locator('.app-nav')).toHaveCSS('transition-duration', '0s');
-  await expect(page.getByRole('button', { name: 'בדיקה ושמירה' })).toHaveCSS(
+  await expect(page.getByRole('button', { name: 'אישור פעולות' })).toHaveCSS(
     'transition-duration',
     '0s',
   );

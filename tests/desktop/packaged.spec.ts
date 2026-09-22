@@ -550,7 +550,7 @@ test('dirty staged quit requires discard and saving quit keeps backend alive', a
       await held;
       await route.continue();
     });
-    await page.getByRole('button', { name: 'בדיקה ושמירה' }).click();
+    await page.getByRole('button', { name: 'אישור פעולות' }).click();
     await page.getByRole('button', { name: 'אישור ושמירה' }).click();
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
     await expect(page.getByText('לא ניתן לצאת בזמן שמצב השמירה אינו ודאי.')).toBeVisible();
