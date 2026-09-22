@@ -75,7 +75,7 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
 
 async function stageReturn(page: Page, itemName: string, usable = '1', damaged = '0') {
   const holdings = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
-  const itemRow = holdings.locator('.borrower-equipment-row').filter({ hasText: itemName });
+  const itemRow = holdings.getByRole('rowheader', { name: itemName, exact: true }).locator('..');
   // Keyboard activation avoids the open item-search list overlapping this row after a borrow.
   for (const [quantity, isDamaged] of [
     [usable, false],
@@ -289,6 +289,10 @@ test('stages loss and dependent found return from the borrower card with keyboar
   await expect(page.locator('.lost-equipment-section summary')).toContainText('2 יחידות');
 
   await page.locator('.lost-equipment-section summary').click();
+  const lostTable = page.locator('.lost-equipment-section').getByRole('table');
+  await expect(lostTable.getByRole('columnheader', { name: 'אבוד' })).toBeVisible();
+  const lostRow = lostTable.getByRole('rowheader', { name: seed.item.name }).locator('..');
+  await expect(lostRow.getByRole('cell').first()).toHaveText('2');
   await page.getByRole('button', { name: 'נמצא והוחזר' }).click();
   const foundDialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
   await expectQuantityDialogItem(foundDialog, seed.item.name);
@@ -330,6 +334,13 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
 }) => {
   await page.setViewportSize({ width: 320, height: 720 });
   await openSeededCard(page, seed.borrower.username);
+  const heldTable = page.locator('.holdings-section').getByRole('table');
+  await expect(heldTable).toHaveAccessibleName('ציוד אצל השואל');
+  expect(
+    await heldTable
+      .locator('th, td')
+      .evaluateAll((cells) => cells.every((cell) => cell.scrollWidth <= cell.clientWidth)),
+  ).toBe(true);
   const more = page.getByRole('button', { name: 'אפשרויות נוספות' });
   await more.press('ArrowDown');
   const menuItem = page.getByRole('menuitem', { name: 'סמן כאבוד' });
@@ -370,6 +381,13 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   await lossDialog.getByRole('button', { name: 'אישור' }).click();
   await expect(page.locator('.lost-equipment-section summary')).toContainText('1 יחידה');
   await page.locator('.lost-equipment-section summary').press('Enter');
+  const lostTable = page.locator('.lost-equipment-section').getByRole('table');
+  await expect(lostTable).toHaveAccessibleName(/ציוד אבוד של השואל/);
+  expect(
+    await lostTable
+      .locator('th, td')
+      .evaluateAll((cells) => cells.every((cell) => cell.scrollWidth <= cell.clientWidth)),
+  ).toBe(true);
   const found = page.getByRole('button', { name: 'נמצא והוחזר' });
   await found.press('Enter');
   const foundDialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
@@ -1196,6 +1214,10 @@ test('retires legacy presentation while preserving gated lost controls and respo
   const staged: Locator = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   const holdings: Locator = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
   const lost: Locator = page.locator('.lost-equipment-section');
+  const holdingsTable = holdings.getByRole('table');
+  await expect(holdingsTable.getByRole('columnheader', { name: 'אצל השואל' })).toBeVisible();
+  const heldRow = holdingsTable.getByRole('rowheader', { name: seed.item.name }).locator('..');
+  await expect(heldRow.getByRole('cell').first()).toHaveText('3');
   const wide = await Promise.all([
     staged.boundingBox(),
     holdings.boundingBox(),

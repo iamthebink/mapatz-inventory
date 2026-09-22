@@ -570,33 +570,51 @@
   .operational-table tbody tr:last-child td {
     border-bottom: 0;
   }
+  .operational-table tbody tr:last-child th {
+    border-bottom: 0;
+  }
   .operational-quantity {
     font-variant-numeric: tabular-nums;
     unicode-bidi: isolate;
+  }
+  .borrower-equipment-table thead th:first-child {
+    width: 31%;
+  }
+  .borrower-equipment-table thead th:nth-child(2) {
+    width: 24%;
+  }
+  .borrower-equipment-table thead th:last-child {
+    width: 45%;
+  }
+  .borrower-held-header-compact {
+    display: none;
+  }
+  .borrower-equipment-table .small-button {
+    max-width: 100%;
+    white-space: normal;
+  }
+  .borrower-equipment-table .small-button svg {
+    flex: none;
   }
   .holding-return-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
-  .borrower-equipment-list,
   .borrower-pending-list,
   .borrower-review-list {
     min-width: 0;
   }
-  .borrower-equipment-row,
   .borrower-pending-row,
   .borrower-review-row {
     min-width: 0;
     padding: 14px 16px;
     border-bottom: 1px solid var(--color-ctp-surface);
   }
-  .borrower-equipment-row:last-child,
   .borrower-pending-row:last-child,
   .borrower-review-row:last-child {
     border-bottom: 0;
   }
-  .borrower-equipment-summary,
   .borrower-pending-row {
     display: flex;
     align-items: flex-start;
@@ -604,7 +622,6 @@
     gap: 12px;
     min-width: 0;
   }
-  .borrower-equipment-summary > div:first-child,
   .borrower-pending-row > div:first-child {
     min-width: 0;
     overflow-wrap: anywhere;
@@ -745,14 +762,30 @@
     align-items: stretch;
     flex-direction: column;
   }
-  .borrower-equipment-summary,
   .borrower-pending-row {
     align-items: stretch;
     flex-direction: column;
   }
+  .borrower-equipment-table .holding-return-actions .small-button,
+  .borrower-equipment-table td > .small-button {
+    width: 100%;
+  }
+  .borrower-equipment-table .borrower-action-menu {
+    inset-inline-start: auto;
+    inset-inline-end: 0;
+  }
   .borrower-action-menu {
     inset-inline-start: 0;
     inset-inline-end: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .borrower-held-header-full {
+    display: none;
+  }
+  .borrower-held-header-compact {
+    display: inline;
   }
 }
 
