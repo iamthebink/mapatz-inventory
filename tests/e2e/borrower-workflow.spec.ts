@@ -286,9 +286,23 @@ test('stages loss and dependent found return from the borrower card with keyboar
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
   await lossDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
   await lossDialog.getByRole('button', { name: 'אישור' }).click();
-  await expect(page.locator('.lost-equipment-section summary')).toContainText('2 יחידות');
+  const lostSummary = page.locator('.lost-equipment-section summary');
+  await expect(lostSummary).toContainText('(2)');
+  await expect(lostSummary).toHaveAccessibleName('ציוד אבוד של השואל, 2 יחידות');
+  await expect(page.locator('.lost-equipment-section')).not.toHaveAttribute('open');
+  const markerWidth = await lostSummary.evaluate((summary) =>
+    parseFloat(getComputedStyle(summary, '::before').borderInlineStartWidth),
+  );
+  expect(markerWidth).toBeGreaterThan(0);
+  const markerDirection = () =>
+    lostSummary.evaluate((summary) => {
+      const transform = getComputedStyle(summary, '::before').transform;
+      return transform === 'none' ? 0 : Math.round(new DOMMatrixReadOnly(transform).b);
+    });
+  expect(await markerDirection()).toBe(0);
 
-  await page.locator('.lost-equipment-section summary').click();
+  await lostSummary.click();
+  await expect.poll(markerDirection).toBe(-1);
   const lostTable = page.locator('.lost-equipment-section').getByRole('table');
   await expect(lostTable.getByRole('columnheader', { name: 'אבוד' })).toBeVisible();
   const lostRow = lostTable.getByRole('rowheader', { name: seed.item.name }).locator('..');
@@ -336,6 +350,15 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   await openSeededCard(page, seed.borrower.username);
   const heldTable = page.locator('.holdings-section').getByRole('table');
   await expect(heldTable).toHaveAccessibleName('ציוד אצל השואל');
+  const quantityHasRightBreathingRoom = (table: Locator) =>
+    table
+      .locator('tbody td:nth-child(2)')
+      .first()
+      .evaluate((cell) => {
+        const style = getComputedStyle(cell);
+        return parseFloat(style.paddingInlineStart) > parseFloat(style.paddingInlineEnd);
+      });
+  expect(await quantityHasRightBreathingRoom(heldTable)).toBe(true);
   expect(
     await heldTable
       .locator('th, td')
@@ -379,10 +402,11 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
   await expect(lossDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).toHaveCount(0);
   await lossDialog.getByRole('button', { name: 'אישור' }).click();
-  await expect(page.locator('.lost-equipment-section summary')).toContainText('1 יחידה');
+  await expect(page.locator('.lost-equipment-section summary')).toContainText('(1)');
   await page.locator('.lost-equipment-section summary').press('Enter');
   const lostTable = page.locator('.lost-equipment-section').getByRole('table');
   await expect(lostTable).toHaveAccessibleName(/ציוד אבוד של השואל/);
+  expect(await quantityHasRightBreathingRoom(lostTable)).toBe(true);
   expect(
     await lostTable
       .locator('th, td')
@@ -1218,6 +1242,17 @@ test('retires legacy presentation while preserving gated lost controls and respo
   await expect(holdingsTable.getByRole('columnheader', { name: 'אצל השואל' })).toBeVisible();
   const heldRow = holdingsTable.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await expect(heldRow.getByRole('cell').first()).toHaveText('3');
+  const quantityPadding = await heldRow
+    .getByRole('cell')
+    .first()
+    .evaluate((cell) => {
+      const style = getComputedStyle(cell);
+      return {
+        start: parseFloat(style.paddingInlineStart),
+        end: parseFloat(style.paddingInlineEnd),
+      };
+    });
+  expect(quantityPadding.start).toBeGreaterThan(quantityPadding.end);
   const wide = await Promise.all([
     staged.boundingBox(),
     holdings.boundingBox(),

@@ -481,7 +481,7 @@ describe('borrower desk workflow', () => {
     await userEvent.clear(quantity);
     await userEvent.type(quantity, '2');
     await userEvent.click(within(lossDialog).getByRole('button', { name: 'אישור' }));
-    expect(screen.getByText('3 יחידות')).toBeTruthy();
+    expect(screen.getByText('(3)')).toBeTruthy();
     expect(screen.getByText('אין ציוד אצל השואל')).toBeTruthy();
 
     await userEvent.click(screen.getByText('ציוד אבוד של השואל'));
@@ -516,7 +516,7 @@ describe('borrower desk workflow', () => {
       ).getByRole('button', { name: 'ביטול פעולה' }),
     );
     expectHeldQuantity(2);
-    expect(screen.getByText('1 יחידה')).toBeTruthy();
+    expect(screen.getByText('(1)')).toBeTruthy();
   });
 
   it('fails closed on malformed startup truth and exposes one focused explicit retry', async () => {

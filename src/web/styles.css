@@ -586,6 +586,10 @@
   .borrower-equipment-table thead th:last-child {
     width: 45%;
   }
+  .borrower-equipment-table thead th:nth-child(2),
+  .borrower-equipment-table tbody td:nth-child(2) {
+    padding-inline-start: 18px;
+  }
   .borrower-held-header-compact {
     display: none;
   }
@@ -626,11 +630,29 @@
     min-width: 0;
     overflow-wrap: anywhere;
   }
-  .borrower-balance {
-    @apply mt-1 inline-flex rounded-lg bg-ctp-base px-2 py-1 text-xs text-ctp-subtext;
+  .lost-equipment-section {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
   .lost-equipment-section > summary {
-    @apply flex min-h-12 cursor-pointer items-center justify-between gap-3 px-4 py-3 font-semibold;
+    @apply flex min-h-10 cursor-pointer items-center gap-2 px-1 py-2 font-semibold;
+    list-style: none;
+  }
+  .lost-equipment-section > summary::-webkit-details-marker {
+    display: none;
+  }
+  .lost-equipment-section > summary::before {
+    content: '';
+    display: block;
+    width: 0;
+    height: 0;
+    border-block: 5px solid transparent;
+    border-inline-start: 7px solid currentColor;
+    transition: transform 150ms ease;
+  }
+  .lost-equipment-section[open] > summary::before {
+    transform: rotate(-90deg);
   }
   .borrower-more-actions {
     position: relative;
@@ -758,6 +780,10 @@
   .operational-table td {
     padding-inline: 8px;
   }
+  .borrower-equipment-table thead th:nth-child(2),
+  .borrower-equipment-table tbody td:nth-child(2) {
+    padding-inline-start: 11px;
+  }
   .holding-return-actions {
     align-items: stretch;
     flex-direction: column;
@@ -821,7 +847,8 @@
   .borrower-workflow-entry select,
   .dialog-workspace button,
   .dialog-workspace input,
-  .dialog-workspace select {
+  .dialog-workspace select,
+  .lost-equipment-section > summary::before {
     animation: none;
     transition: none;
   }

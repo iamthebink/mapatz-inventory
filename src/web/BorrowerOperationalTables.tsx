@@ -354,11 +354,12 @@ export function BorrowerOperationalTables({
         </section>
 
         <details className="operational-section lost-equipment-section">
-          <summary id="lost-equipment-heading">
+          <summary
+            id="lost-equipment-heading"
+            aria-label={`ציוד אבוד של השואל, ${lostTotal} ${lostTotal === 1 ? 'יחידה' : 'יחידות'}`}
+          >
             <span>ציוד אבוד של השואל</span>
-            <span className="borrower-balance">
-              {lostTotal} {lostTotal === 1 ? 'יחידה' : 'יחידות'}
-            </span>
+            <bdi dir="ltr">({lostTotal})</bdi>
           </summary>
           {lost.length === 0 ? (
             <p className="operational-empty">אין ציוד אבוד לשואל</p>
