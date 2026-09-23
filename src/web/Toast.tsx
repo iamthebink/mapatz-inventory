@@ -84,7 +84,7 @@ export function Toast({
         </div>
         <button
           type="button"
-          className="icon-button -m-1 shrink-0"
+          className="toast-dismiss icon-button -m-1 shrink-0"
           aria-label="סגירת הודעה"
           disabled={exiting || modalOpen}
           tabIndex={modalOpen ? -1 : undefined}

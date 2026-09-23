@@ -41,8 +41,15 @@ describe('Toast', () => {
       expect(markup).toContain('הודעת בדיקה');
       expect(markup).toContain('aria-label="סגירת הודעה"');
       expect(markup).toContain('type="button"');
+      expect(markup).toContain('toast-dismiss');
     },
   );
+
+  it('lets pointer input pass through the toast body while keeping dismissal interactive', () => {
+    expect(styles).toMatch(/\.toast\s*{[^}]*\bpointer-events-none\b/);
+    expect(styles).toMatch(/\.toast-dismiss:not\(:disabled\)\s*{[^}]*pointer-events:\s*auto/);
+    expect(styles).toMatch(/\.toast-modal-open \.toast-dismiss\s*{[^}]*pointer-events:\s*none/);
+  });
 
   it('anchors the viewport at the bottom and uses symmetric vertical motion', () => {
     expect(styles).toMatch(/\.toast-viewport\s*{[^}]*\bbottom-4\b/);

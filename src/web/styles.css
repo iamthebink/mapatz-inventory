@@ -193,13 +193,19 @@
     @apply pointer-events-none fixed inset-x-0 bottom-4 z-90 flex justify-center px-4 sm:right-4 sm:left-auto sm:w-full sm:max-w-md sm:px-0;
   }
   .toast {
-    @apply pointer-events-auto flex w-full items-start gap-3 rounded-2xl border bg-white px-4 py-3 shadow-xl;
+    @apply pointer-events-none flex w-full items-start gap-3 rounded-2xl border bg-white px-4 py-3 shadow-xl;
     animation: toast-enter 160ms ease-out;
+  }
+  .toast-dismiss:not(:disabled) {
+    pointer-events: auto;
   }
   .toast-exiting {
     animation: toast-exit 160ms ease-in forwards;
   }
   .toast-modal-open {
+    pointer-events: none;
+  }
+  .toast-modal-open .toast-dismiss {
     pointer-events: none;
   }
   .toast-icon {

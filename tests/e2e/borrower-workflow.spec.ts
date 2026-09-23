@@ -516,6 +516,8 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveValue('');
   expect(operationPosts).toBe(1);
   expect(snapshotRequests).toBe(3);
+  await page.getByRole('button', { name: 'סגירת הודעה' }).click();
+  await expect(page.locator('.toast')).toBeHidden();
 
   const database = openLedger();
   expect(
