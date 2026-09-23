@@ -254,12 +254,16 @@ it('keeps consumable issue and the borrower desk while retiring legacy borrowing
   expect(issueItem).toHaveProperty('value', 'כפפות');
 
   await user.type(within(issue).getByLabelText('כמות'), '2');
+  await user.type(within(issue).getByLabelText('הערה (רשות)'), 'לשימוש מיידי');
   await user.click(within(issue).getByRole('button', { name: 'בצע פעולה' }));
   await waitFor(() => expect(issue.querySelector('fieldset')?.disabled).toBe(false));
   const issueRequest = api.requests.find((request) => request.path === '/api/issue')!;
-  expect(bodyOf(issueRequest)).toEqual({ itemId: 13, quantity: 2, note: '' });
+  expect(bodyOf(issueRequest)).toEqual({ itemId: 13, quantity: 2, note: 'לשימוש מיידי' });
   await waitFor(() => expect(issueItem).toHaveProperty('value', ''));
+  expect(within(issue).getByLabelText('כמות')).toHaveProperty('value', '');
+  expect(within(issue).getByLabelText('הערה (רשות)')).toHaveProperty('value', '');
 
+  await user.type(within(issue).getByLabelText('כמות'), '1');
   await user.click(within(issue).getByRole('button', { name: 'בצע פעולה' }));
   expect(await screen.findByText('יש לבחור פריט מהרשימה')).toBeTruthy();
   expect(document.activeElement).toBe(issueItem);
@@ -373,11 +377,34 @@ describe('App dialog workflows', () => {
 
     const form = screen.getByText('פריט חדש').closest('form')!;
     await user.type(within(form).getByLabelText('שם'), 'אוהל חדש');
+    await user.selectOptions(within(form).getByLabelText('סוג'), 'camp_equipment');
+    await user.type(within(form).getByLabelText('גודל מארז (רשות)'), '12');
+    await user.type(within(form).getByLabelText('כינויים, מופרדים בפסיק'), 'אוהל, מחסה');
+    await user.selectOptions(within(form).getByLabelText('מיקום'), String(location.id));
     await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
 
     const successToast = await screen.findByText('הוספת פריט חדש');
     expect(successToast.closest('.toast')?.textContent).toContain('הפעולה הושלמה בהצלחה');
     expect(api.requests.some((request) => request.path === '/api/items')).toBe(true);
+    expect(within(form).getByLabelText('שם')).toHaveProperty('value', '');
+    expect(within(form).getByLabelText('סוג')).toHaveProperty('value', 'consumable');
+    expect(within(form).getByLabelText('גודל מארז (רשות)')).toHaveProperty('value', '');
+    expect(within(form).getByLabelText('כינויים, מופרדים בפסיק')).toHaveProperty('value', '');
+    expect(within(form).getByLabelText('מיקום')).toHaveProperty('value', '');
+  });
+
+  it('clears a committed form when refresh fails but retains a rejected mutation', async () => {
+    installApiMock({ failRefreshAfterPath: '/api/items' });
+    const user = await renderReadyApp();
+    await openManagement(user, 'פריטים ומיקומים');
+
+    const form = screen.getByText('פריט חדש').closest('form')!;
+    await user.type(within(form).getByLabelText('שם'), 'אוהל שנשמר');
+    await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+
+    const warning = await screen.findByRole('alert', { name: /הוספת פריט חדש/ });
+    expect(warning.textContent).toContain('הפעולה הושלמה, אך התצוגה לא התרעננה');
+    expect(within(form).getByLabelText('שם')).toHaveProperty('value', '');
   });
 
   it('reports duplicate item creation through the error Toast without success feedback', async () => {
@@ -394,6 +421,25 @@ describe('App dialog workflows', () => {
     expect(toast.className).toContain('toast-error');
     expect(toast.textContent).not.toContain('הפעולה הושלמה בהצלחה');
     expect(api.requests.filter((request) => request.path === '/api/items')).toHaveLength(1);
+    expect(within(form).getByLabelText('שם')).toHaveProperty('value', 'פטיש');
+  });
+
+  it('conceals the password field again after a successful password change', async () => {
+    installApiMock();
+    const user = await renderReadyApp();
+    await openManagement(user, 'הרשאות');
+
+    const form = screen.getByText('החלפת סיסמה').closest('form')!;
+    const password = within(form).getByLabelText('סיסמה חדשה') as HTMLInputElement;
+    await user.type(password, 'replacement-password');
+    await user.click(within(form).getByRole('button', { name: 'הצגת סיסמה' }));
+    expect(password.type).toBe('text');
+    await user.click(within(form).getByRole('button', { name: 'בצע פעולה' }));
+
+    await screen.findByRole('status', { name: /החלפת סיסמה/ });
+    await waitFor(() => expect(password.value).toBe(''));
+    expect(password.type).toBe('password');
+    expect(within(form).getByRole('button', { name: 'הצגת סיסמה' })).toBeTruthy();
   });
 
   it('keeps item editing open when a duplicate-name conflict is Toasted', async () => {
@@ -534,6 +580,9 @@ describe('App dialog workflows', () => {
       expect(bodyOf(api.requests.find((request) => request.path === '/api/damage')!)).toMatchObject(
         { resolution },
       );
+      expect(within(form).getByLabelText('פריט')).toHaveProperty('value', '');
+      expect(within(form).getByLabelText('כמות')).toHaveProperty('value', '');
+      expect(within(form).getByLabelText('פתרון')).toHaveProperty('value', 'repair');
     },
   );
 

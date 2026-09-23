@@ -1007,9 +1007,9 @@ export function App() {
                     setIssueItemInvalid(true);
                     showToast('ניפוק מתכלה', 'יש לבחור פריט מהרשימה', 'warning');
                     queueMicrotask(() => issueItemRef.current?.focus());
-                    return;
+                    return false;
                   }
-                  void action('ניפוק מתכלה', () =>
+                  return action('ניפוק מתכלה', () =>
                     api('/issue', {
                       method: 'POST',
                       body: JSON.stringify({
@@ -1019,10 +1019,11 @@ export function App() {
                       }),
                     }),
                   ).then((completed) => {
-                    if (!completed) return;
+                    if (!completed) return false;
                     setIssueQuery('');
                     setSelectedIssueItemId(null);
                     setIssueItemInvalid(false);
+                    return true;
                   });
                 }}
               >
@@ -1087,7 +1088,7 @@ export function App() {
                       icon={PackagePlus}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action('הוספת מלאי', () =>
+                        action('הוספת מלאי', () =>
                           api('/stock/add', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1118,8 +1119,8 @@ export function App() {
                       }
                       onSubmit={(form) => {
                         const resolution = damageResolution;
-                        if (resolution === 'write_off' && !isAdmin) return;
-                        void action(
+                        if (resolution === 'write_off' && !isAdmin) return false;
+                        return action(
                           resolution === 'repair'
                             ? 'תיקון פריט פגום'
                             : resolution === 'write_off'
@@ -1135,7 +1136,10 @@ export function App() {
                                 note: form.get('note'),
                               }),
                             }),
-                        );
+                        ).then((completed) => {
+                          if (completed) setDamageResolution('repair');
+                          return completed;
+                        });
                       }}
                     >
                       <Select
@@ -1216,7 +1220,7 @@ export function App() {
                       icon={Plus}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action('הוספת פריט חדש', () =>
+                        action('הוספת פריט חדש', () =>
                           api('/items', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1267,7 +1271,7 @@ export function App() {
                       icon={MapPin}
                       disabled={!adminActionsEnabled || pending}
                       onSubmit={(form) =>
-                        void action('הוספת מיקום חדש', () =>
+                        action('הוספת מיקום חדש', () =>
                           api('/locations', {
                             method: 'POST',
                             body: JSON.stringify({
@@ -1321,7 +1325,7 @@ export function App() {
                       icon={UserPlus}
                       disabled={pending}
                       onSubmit={(form) =>
-                        void action('הוספת שואל חדש', async () => {
+                        action('הוספת שואל חדש', async () => {
                           const { ledgerEpoch } = await api<{ ledgerEpoch: number }>(
                             '/borrowers/search?q=',
                           );
@@ -1380,7 +1384,7 @@ export function App() {
                     icon={KeyRound}
                     disabled={!adminActionsEnabled || pending}
                     onSubmit={(form) =>
-                      void action('החלפת סיסמה', () =>
+                      action('החלפת סיסמה', () =>
                         api('/password', {
                           method: 'POST',
                           body: JSON.stringify({
@@ -1402,7 +1406,7 @@ export function App() {
                     description="קובץ XLSX לאיפוס, שחזור ודוחות — ללא סיסמאות או הגדרות"
                     icon={Download}
                     disabled={!adminActionsEnabled || pending}
-                    onSubmit={() => void action('ייצוא מלאי', downloadInventoryWorkbook)}
+                    onSubmit={() => action('ייצוא מלאי', downloadInventoryWorkbook)}
                   >
                     <p className="text-sm text-ctp-subtext">
                       הקובץ כולל אזורי איפוס ושחזור נפרדים. שמרו אותו במקום מאובטח.
@@ -1617,16 +1621,17 @@ function ActionCard({
   description: string;
   icon: LucideIcon;
   disabled: boolean;
-  onSubmit: (form: FormData) => void;
+  onSubmit: (form: FormData) => boolean | Promise<boolean>;
   children: ReactNode;
 }) {
   return (
     <form
       className="action-card"
-      onSubmit={(event: FormEvent<HTMLFormElement>) => {
+      onSubmit={async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         if (disabled) return;
-        onSubmit(new FormData(event.currentTarget));
+        const form = event.currentTarget;
+        if (await onSubmit(new FormData(form))) form.reset();
       }}
     >
       <fieldset disabled={disabled}>
@@ -1685,11 +1690,20 @@ function PasswordField({
   autoFocus?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const form = inputRef.current?.form;
+    if (!form) return;
+    const conceal = () => setVisible(false);
+    form.addEventListener('reset', conceal);
+    return () => form.removeEventListener('reset', conceal);
+  }, []);
   return (
     <label className="field-label">
       {label}
       <span className="relative">
         <input
+          ref={inputRef}
           className="input-field ps-11"
           required
           name={name}
