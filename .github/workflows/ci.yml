@@ -14,13 +14,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: regression-diagnostics
-          path: |
-            test-results
-            playwright-report
   desktop:
     strategy:
       fail-fast: false
@@ -58,14 +51,6 @@ jobs:
           artifact="$(find desktop-stage/out/make -name '*.zip' -type f | head -n 1)"
           ditto -x -k "$artifact" "$RUNNER_TEMP/mapatz-installed"
           MAPATZ_EXECUTABLE="$RUNNER_TEMP/mapatz-installed/Mapatz Inventory.app/Contents/MacOS/mapatz-inventory" pnpm test:desktop
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: desktop-${{ matrix.os }}
-          path: |
-            desktop-stage/out/make
-            test-results-desktop
-            playwright-report
   upgrade:
     needs: desktop
     permissions:
@@ -73,5 +58,4 @@ jobs:
       actions: read
     uses: ./.github/workflows/windows-upgrade.yml
     with:
-      artifact: desktop-windows-latest
       ref: ${{ github.sha }}

@@ -52,6 +52,7 @@ jobs:
         if: failure()
         with:
           name: regression-diagnostics
+          retention-days: 7
           path: |
             test-results
             playwright-report
@@ -102,11 +103,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.os }}
+          retention-days: 3
           path: desktop-stage/out/make
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: diagnostics-${{ matrix.os }}
+          retention-days: 7
           path: test-results-desktop
   upgrade:
     needs: [prepare, verify]
@@ -118,6 +121,7 @@ jobs:
       version: ${{ needs.prepare.outputs.version }}
       artifact: packages-windows-latest
       ref: ${{ needs.prepare.outputs.commit }}
+      retain_evidence: true
   publish:
     needs: [prepare, regression, verify, upgrade]
     runs-on: ubuntu-latest

@@ -2,19 +2,15 @@ name: Windows installer upgrade
 on:
   workflow_dispatch:
     inputs:
-      run_id:
-        description: Completed CI run containing the candidate installer
+      ref:
+        description: Candidate commit, branch, or tag to build
         type: string
-        required: true
+        required: false
+        default: ''
       version:
         description: Candidate version; leave empty for the checkout development version
         type: string
         required: false
-      artifact:
-        description: Candidate artifact name
-        type: string
-        default: desktop-windows-latest
-        required: true
   workflow_call:
     inputs:
       version:
@@ -23,17 +19,22 @@ on:
         default: ''
       artifact:
         type: string
-        required: true
+        required: false
+        default: ''
       ref:
         type: string
         required: true
+      retain_evidence:
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
   actions: read
 jobs:
   upgrade:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,31 +49,43 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: node scripts/desktop-version.mjs stamp "$RELEASE_VERSION"
+      - name: Build and verify candidate installer
+        if: inputs.artifact == ''
+        run: |
+          pnpm desktop:package
+          pnpm test:desktop
+          pnpm desktop:make
       - uses: actions/download-artifact@v4
+        if: inputs.artifact != ''
         with:
           name: ${{ inputs.artifact }}
           path: upgrade-candidate
-          run-id: ${{ inputs.run_id || github.run_id }}
+          run-id: ${{ github.run_id }}
           github-token: ${{ github.token }}
       - name: Download published baseline and verify upgrade
         shell: pwsh
         env:
+          CANDIDATE_ROOT: ${{ inputs.artifact == '' && 'desktop-stage/out/make' || 'upgrade-candidate' }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           gh release download 0.1.0 --pattern '*Setup.exe' --dir "$env:RUNNER_TEMP/upgrade-baseline"
           if ($LASTEXITCODE -ne 0) { throw 'Baseline installer download failed' }
           $baseline = @(Get-ChildItem "$env:RUNNER_TEMP/upgrade-baseline" -Filter '*Setup.exe' -Recurse)
-          $candidate = @(Get-ChildItem upgrade-candidate -Filter '*Setup.exe' -Recurse)
+          if (!(Test-Path $env:CANDIDATE_ROOT -PathType Container)) {
+            throw "Candidate installer directory missing: $env:CANDIDATE_ROOT"
+          }
+          $candidate = @(Get-ChildItem $env:CANDIDATE_ROOT -Filter '*Setup.exe' -Recurse)
           if ($baseline.Count -ne 1 -or $candidate.Count -ne 1) { throw 'Expected exactly one installer per version' }
           $env:MAPATZ_BASELINE_INSTALLER = $baseline[0].FullName
           $env:MAPATZ_CANDIDATE_INSTALLER = $candidate[0].FullName
           pnpm exec playwright test -c playwright.upgrade.config.ts
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer upgrade verification failed' }
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: failure() && inputs.retain_evidence
         with:
           name: windows-upgrade-evidence
+          retention-days: 7
           path: |
             test-results-upgrade
             ~/AppData/Local/SquirrelTemp/SquirrelSetup.log
