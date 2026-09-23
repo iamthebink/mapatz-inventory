@@ -16,10 +16,14 @@ export interface AppOptions {
   serveWeb?: boolean;
   accessToken?: string;
   desktopRecovery?: boolean;
+  developmentRecovery?: boolean;
 }
 
 export function createApp(options: AppOptions): Express {
   const app = express();
+  const recoveryEnabled =
+    (options.desktopRecovery === true && Boolean(options.accessToken)) ||
+    options.developmentRecovery === true;
   if (options.accessToken)
     app.use((req, res, next) => {
       if (req.headers['x-mapatz-desktop-token'] !== options.accessToken) {
@@ -35,7 +39,7 @@ export function createApp(options: AppOptions): Express {
     options.now,
     options.adminIdleMs,
     undefined,
-    options.desktopRecovery === true && Boolean(options.accessToken),
+    recoveryEnabled,
   );
   const service = new InventoryService(options.database);
   const transfers = new InventoryTransferService(options.database);
@@ -60,12 +64,7 @@ export function createApp(options: AppOptions): Express {
       res.locals.session = session;
       next();
     },
-    apiRouter(
-      service,
-      transfers,
-      sessions,
-      options.desktopRecovery === true && Boolean(options.accessToken),
-    ),
+    apiRouter(service, transfers, sessions, recoveryEnabled),
     (_req, res) => {
       res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
     },

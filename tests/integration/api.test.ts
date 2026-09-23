@@ -89,6 +89,22 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 
+  it('exposes the exact password in the local development recovery preview', async () => {
+    const db = openDatabase(':memory:');
+    const app = createApp({
+      database: db,
+      adminPassword: 'preview-password',
+      developmentRecovery: true,
+      serveWeb: false,
+    });
+    const response = await request(app)
+      .post('/api/password/recovery')
+      .expect('Cache-Control', 'no-store')
+      .expect(200);
+    expect(response.body).toEqual({ password: 'preview-password' });
+    db.close();
+  });
+
   it('reveals the changed desktop password after reopening the same database', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-desktop-credential-'));
     cleanup.push(directory);

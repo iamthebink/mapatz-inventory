@@ -155,6 +155,8 @@ function join(...values: (string | number | null | undefined)[]) {
 }
 
 export function App() {
+  const recoveryAvailable =
+    Boolean(desktop) || (import.meta.env.DEV && import.meta.env.MODE === 'recovery-preview');
   const [session, setSession] = useState<Session>({ role: 'operator', deadline: null });
   const [items, setItems] = useState<Item[]>([]);
   const [catalogItems, setCatalogItems] = useState<Item[]>([]);
@@ -1529,10 +1531,10 @@ export function App() {
           returnFocusRef={adminControlRef}
           onClose={closeAdminDialog}
           onSubmit={(password) => void authenticateAdmin(password)}
-          onRecovery={desktop ? openAdminRecovery : undefined}
+          onRecovery={recoveryAvailable ? openAdminRecovery : undefined}
         />
       )}
-      {adminRecoveryOpen && desktop && (
+      {adminRecoveryOpen && recoveryAvailable && (
         <AdminRecoveryDialog
           returnFocusRef={adminControlRef}
           onClose={() => setAdminRecoveryOpen(false)}

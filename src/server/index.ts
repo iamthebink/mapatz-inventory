@@ -10,7 +10,18 @@ if (
   process.env.NODE_ENV !== 'test'
 ) {
   const db = openDatabase(resolve(process.env.DATA_DIR ?? './data', 'inventory.sqlite'));
-  const app = createApp({ database: db, adminPassword: process.env.ADMIN_PASSWORD });
+  const developmentRecovery = process.argv.includes('--recovery-preview');
+  const app = createApp({
+    database: db,
+    adminPassword: process.env.ADMIN_PASSWORD,
+    developmentRecovery,
+  });
   const port = Number(process.env.PORT ?? 3000);
-  app.listen(port, () => console.log(`Mapatz inventory listening on http://localhost:${port}`));
+  if (developmentRecovery) {
+    app.listen(port, '127.0.0.1', () =>
+      console.log(`Mapatz inventory recovery preview listening on http://localhost:${port}`),
+    );
+  } else {
+    app.listen(port, () => console.log(`Mapatz inventory listening on http://localhost:${port}`));
+  }
 }

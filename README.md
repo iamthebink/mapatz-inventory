@@ -30,7 +30,7 @@ pnpm test:e2e
 pnpm build
 ```
 
-Run `pnpm dev` separately when you want the local development server and Vite watcher.
+Run `pnpm dev` separately when you want the local development server and Vite watcher. This local-only preview also shows `שכחתי את סיסמת המנהל` in the admin sign-in dialog so the recovery ritual can be inspected and tuned without packaging a desktop app. The preview API reveals the password and binds to loopback; do not expose the Vite dev server to other machines. Ordinary browser/Docker builds do not enable recovery.
 
 Development data defaults to `./data/inventory.sqlite`. A fresh database requires an explicit, non-empty `ADMIN_PASSWORD`; startup fails with a clear error if it is absent. Once its credential exists, later restarts use the persisted credential and ignore a changed or absent bootstrap environment value. Set `DATA_DIR` and `PORT` as needed; `.env.example` lists all environment keys without shipping a known password.
 
