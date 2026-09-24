@@ -35,6 +35,98 @@ const emptySnapshot: InventoryTransferSnapshot = {
 };
 
 describe('inventory XLSX workbook', () => {
+  it('normalizes accepted offset timestamps before storing a recovery ledger and summarizing Israel days', async () => {
+    const exported = await exportWorkbook({
+      locations: [],
+      items: [
+        {
+          code: 100,
+          name: 'Boundary chairs',
+          kind: 'non_consumable',
+          location: null,
+          aliases: [],
+          lotSize: null,
+          archived: false,
+          createdAt: '2026-09-20T17:00:00+03:00',
+          startingStock: 0,
+          baselineThroughEventId: 0,
+          resetTotal: 0,
+        },
+      ],
+      borrowers: [
+        {
+          username: 'boundary',
+          name: 'Boundary borrower',
+          contact: '',
+          type: 'individual',
+          archived: false,
+          createdAt: '2026-09-20T17:00:00+03:00',
+        },
+      ],
+      events: [
+        {
+          id: 1,
+          kind: 'stock_added',
+          itemCode: 100,
+          borrowerUsername: null,
+          quantity: 3,
+          relatedEventId: null,
+          note: '',
+          createdAt: '2026-09-20T18:00:00+03:00',
+        },
+        {
+          id: 2,
+          kind: 'checked_out',
+          itemCode: 100,
+          borrowerUsername: 'boundary',
+          quantity: 1,
+          relatedEventId: null,
+          note: '',
+          createdAt: '2026-09-20T23:59:59.999+03:00',
+        },
+        {
+          id: 3,
+          kind: 'checked_out',
+          itemCode: 100,
+          borrowerUsername: 'boundary',
+          quantity: 2,
+          relatedEventId: null,
+          note: '',
+          createdAt: '2026-09-21T00:00:00+03:00',
+        },
+      ],
+    });
+    const recovery = await parseRecoveryWorkbook(exported);
+    const db = openDatabase(':memory:');
+    try {
+      new InventoryTransferService(db).replaceWithRecovery(recovery);
+      expect(db.prepare('SELECT created_at FROM items WHERE code=100').get()).toEqual({
+        created_at: '2026-09-20 14:00:00',
+      });
+      expect(
+        db.prepare("SELECT created_at FROM borrowers WHERE username='boundary'").get(),
+      ).toEqual({ created_at: '2026-09-20 14:00:00' });
+      expect(db.prepare('SELECT created_at FROM inventory_events ORDER BY id').all()).toEqual([
+        { created_at: '2026-09-20 15:00:00' },
+        { created_at: '2026-09-20 20:59:59.999' },
+        { created_at: '2026-09-20 21:00:00' },
+      ]);
+      expect(
+        db
+          .prepare(
+            'SELECT established_at FROM inventory_baselines WHERE item_id=(SELECT id FROM items WHERE code=100)',
+          )
+          .get(),
+      ).toEqual({ established_at: '2026-09-20 14:00:00' });
+      const service = new InventoryService(db);
+      const now = new Date('2026-09-24T12:00:00Z');
+      expect(service.periodSummary('2026-09-20', '2026-09-20', now).borrowers[0]?.total).toBe(1);
+      expect(service.periodSummary('2026-09-21', '2026-09-21', now).borrowers[0]?.total).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
   it('round-trips camp equipment through reset and recovery workbooks', async () => {
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);

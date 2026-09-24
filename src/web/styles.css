@@ -189,6 +189,37 @@
   .nav-separator {
     @apply mx-2 h-6 w-px shrink-0 bg-ctp-surface;
   }
+  .period-summary {
+    @apply space-y-5 rounded-2xl bg-white p-5 shadow-sm;
+  }
+  .period-summary h2 {
+    @apply text-xl font-semibold;
+  }
+  .period-summary-controls {
+    @apply flex flex-wrap items-end gap-3;
+  }
+  .period-summary-controls label {
+    @apply flex min-w-40 flex-col gap-1 text-sm font-medium;
+  }
+  .period-summary-table,
+  .period-summary-items {
+    @apply w-full border-collapse text-right text-sm;
+  }
+  .period-summary-table-scroll {
+    overflow-x: auto;
+  }
+  .period-summary-table {
+    min-width: 40rem;
+  }
+  .period-summary-table th,
+  .period-summary-table td,
+  .period-summary-items th,
+  .period-summary-items td {
+    @apply border-b border-ctp-surface px-3 py-2;
+  }
+  .period-summary-actions {
+    @apply flex flex-wrap gap-2;
+  }
   .toast-viewport {
     @apply pointer-events-none fixed inset-x-0 bottom-4 z-90 flex justify-center px-4 sm:right-4 sm:left-auto sm:w-full sm:max-w-md sm:px-0;
   }

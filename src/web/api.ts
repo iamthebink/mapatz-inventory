@@ -14,6 +14,7 @@ import type {
   CommandProtocolError,
 } from '../contracts/borrower-workflow.js';
 import type { Borrower } from '../domain/types.js';
+import type { PeriodSummary } from '../contracts/period-summary.js';
 import {
   isCommandUuid,
   isExactBorrowerOperationConflictSet,
@@ -532,6 +533,12 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   await requireSuccess(response);
   return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>);
+}
+
+export function fetchPeriodSummary(start: string, end: string): Promise<PeriodSummary> {
+  return api<PeriodSummary>(
+    `/period-summary?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+  );
 }
 
 function commandHeaders(source?: HeadersInit): Headers {

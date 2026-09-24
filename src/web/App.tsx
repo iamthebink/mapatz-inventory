@@ -24,6 +24,7 @@ import {
   PackageCheck,
   PackageOpen,
   PackagePlus,
+  CalendarDays,
   Pencil,
   Plus,
   RotateCcw,
@@ -61,6 +62,7 @@ import {
 } from './InventoryDialogs';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
+import { PeriodSummary } from './PeriodSummary';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -74,11 +76,12 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'inventory' | 'desk' | 'issue' | 'catalogs' | 'ledger';
+type Tab = 'inventory' | 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   desk: { path: '/', aliases: ['/frontdesk'] },
+  summary: { path: '/summary' },
   issue: { path: '/consumables' },
   inventory: { path: '/inventory' },
   ledger: { path: '/ledger' },
@@ -119,6 +122,7 @@ const eventNames: Record<string, string> = {
 };
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
+  { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
@@ -165,6 +169,8 @@ export function App() {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [ledger, setLedger] = useState<LedgerEvent[]>([]);
   const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname) ?? 'desk');
+  const [workflowStartup, setWorkflowStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [summaryReturnRevision, setSummaryReturnRevision] = useState(0);
   const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
   const [issueQuery, setIssueQuery] = useState('');
   const [selectedIssueItemId, setSelectedIssueItemId] = useState<number | null>(null);
@@ -193,6 +199,8 @@ export function App() {
   const recoveryFileRef = useRef<HTMLInputElement>(null);
   const issueItemRef = useRef<HTMLInputElement>(null);
   const borrowerWorkflowRef = useRef<BorrowerWorkflowHandle>(null);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
   const [now, setNow] = useState(Date.now());
   const remaining =
     session.deadline == null ? null : Math.max(0, Math.ceil((session.deadline - now) / 1000));
@@ -201,6 +209,9 @@ export function App() {
   const inventoryDialogPending = pending || (sessionReconciling && activeDialog != null);
 
   const navigateToTab = useCallback((nextTab: Tab) => {
+    if (nextTab !== 'desk' && nextTab !== 'summary') setWorkflowStartup('loading');
+    if (nextTab === 'summary' && tabRef.current !== 'desk' && tabRef.current !== 'summary')
+      setWorkflowStartup('loading');
     window.history.pushState(
       { ...window.history.state, mapatzTab: nextTab },
       '',
@@ -280,6 +291,9 @@ export function App() {
     const syncTabToLocation = () => {
       const nextTab = tabFromPath(window.location.pathname);
       if (nextTab) {
+        if (nextTab !== 'desk' && nextTab !== 'summary') setWorkflowStartup('loading');
+        if (nextTab === 'summary' && tabRef.current !== 'desk' && tabRef.current !== 'summary')
+          setWorkflowStartup('loading');
         setTab(nextTab);
         return;
       }
@@ -927,7 +941,8 @@ export function App() {
                   event.preventDefault();
                   if (key === tab) return;
                   const complete = () => navigateToTab(key);
-                  if (tab === 'desk') borrowerWorkflowRef.current?.requestNavigation(complete);
+                  if (tab === 'desk' || tab === 'summary')
+                    borrowerWorkflowRef.current?.requestNavigation(complete);
                   else complete();
                 }}
               >
@@ -959,7 +974,42 @@ export function App() {
       )}
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        {tab === 'desk' && <BorrowerWorkflow ref={borrowerWorkflowRef} showToast={showToast} />}
+        {(tab === 'desk' || tab === 'summary') && (
+          <div hidden={tab !== 'desk'}>
+            <BorrowerWorkflow
+              ref={borrowerWorkflowRef}
+              showToast={showToast}
+              deskVisible={tab === 'desk'}
+              onStartupChange={setWorkflowStartup}
+            />
+          </div>
+        )}
+        {tab === 'summary' && workflowStartup !== 'ready' && (
+          <section className="period-summary" aria-label="סיכום">
+            <h2>סיכום</h2>
+            {workflowStartup === 'loading' ? (
+              <p role="status">בודק פעולות שמורות…</p>
+            ) : (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => borrowerWorkflowRef.current?.retryStartup()}
+              >
+                ניסיון טעינה מחדש
+              </button>
+            )}
+          </section>
+        )}
+        <PeriodSummary
+          active={tab === 'summary' && workflowStartup === 'ready'}
+          returnRevision={summaryReturnRevision}
+          showToast={showToast}
+          openCard={(borrower) =>
+            borrowerWorkflowRef.current?.openFromSummary(borrower, () =>
+              setSummaryReturnRevision((value) => value + 1),
+            )
+          }
+        />
         {tab === 'inventory' && (
           <PageSection
             title="מצב מלאי"

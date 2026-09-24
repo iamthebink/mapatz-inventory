@@ -8,6 +8,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
 import { normalizeItemName } from './item-name.js';
+import { periodBounds } from './period-summary.js';
+import type { PeriodSummary } from '../contracts/period-summary.js';
 import type {
   BorrowerDeskSnapshot,
   BorrowerCreateRequest,
@@ -748,6 +750,66 @@ export class InventoryService {
       GROUP BY e.id HAVING outstanding > 0 OR lost > 0 ORDER BY e.id DESC`,
       )
       .all();
+  }
+
+  periodSummary(start: string, end: string, now = new Date()): PeriodSummary {
+    const bounds = periodBounds(start, end, now);
+    return readTransaction(this.db, () => {
+      const rows = this.db
+        .prepare(
+          `
+        SELECT e.borrower_id borrowerId, e.item_id itemId,
+          b.username, b.name borrowerName, b.contact, b.type borrowerType,
+          b.archived borrowerArchived, i.code, i.name itemName,
+          SUM(CASE e.kind WHEN 'checked_out' THEN e.quantity
+            WHEN 'returned_usable' THEN -e.quantity
+            WHEN 'returned_damaged' THEN -e.quantity
+            WHEN 'marked_lost' THEN -e.quantity ELSE 0 END) balance
+        FROM inventory_events e
+        JOIN borrowers b ON b.id=e.borrower_id
+        JOIN items i ON i.id=e.item_id
+        WHERE e.created_at >= ? AND e.created_at < ?
+          AND e.kind IN ('checked_out','returned_usable','returned_damaged','marked_lost')
+        GROUP BY e.borrower_id,e.item_id
+        HAVING balance > 0
+        ORDER BY b.name COLLATE NOCASE, e.borrower_id, i.code
+      `,
+        )
+        .all(bounds.startUtc, bounds.endExclusiveUtc) as Row[];
+      const borrowers = new Map<number, PeriodSummary['borrowers'][number]>();
+      for (const row of rows) {
+        let entry = borrowers.get(row.borrowerId);
+        if (!entry) {
+          entry = {
+            borrower: {
+              id: row.borrowerId,
+              username: row.username,
+              name: row.borrowerName,
+              contact: row.contact,
+              type: row.borrowerType,
+              archived: Boolean(row.borrowerArchived),
+            },
+            total: 0,
+            items: [],
+          };
+          borrowers.set(row.borrowerId, entry);
+        }
+        entry.items.push({
+          itemId: row.itemId,
+          code: row.code,
+          name: row.itemName,
+          quantity: row.balance,
+        });
+        entry.total += row.balance;
+      }
+      return {
+        start,
+        end,
+        borrowers: [...borrowers.values()].sort((left, right) =>
+          left.borrower.name.localeCompare(right.borrower.name, 'he', { numeric: true }),
+        ),
+      };
+    });
   }
 
   listLedger(): Row[] {

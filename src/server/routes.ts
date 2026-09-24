@@ -473,6 +473,16 @@ export function apiRouter(
   }
 
   api.get('/loans', (req, res) => res.json(service.listLoans()));
+  api.get(
+    '/period-summary',
+    requireRole('operator', 'admin'),
+    route((req, res) => {
+      const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+      const start = parse(date, req.query.start);
+      const end = parse(date, req.query.end);
+      res.json(service.periodSummary(start, end));
+    }),
+  );
   api.get('/ledger', (req, res) => res.json(service.listLedger()));
   api.get(
     '/workbook',

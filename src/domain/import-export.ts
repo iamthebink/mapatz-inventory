@@ -161,6 +161,39 @@ function invalidWorkbook(message: string): never {
   throw new DomainError('invalid_workbook', message);
 }
 
+function canonicalUtcTimestamp(value: string): string {
+  // Existing exports use SQLite UTC text. Date.parse treats that form as device-local time.
+  const sqliteUtc = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value);
+  const instant = Date.parse(sqliteUtc ? `${value.replace(' ', 'T')}Z` : value);
+  if (!Number.isFinite(instant)) invalidWorkbook(`Invalid recovery timestamp "${value}"`);
+  const iso = new Date(instant).toISOString();
+  return iso.endsWith('.000Z')
+    ? iso.slice(0, 19).replace('T', ' ')
+    : iso.slice(0, 23).replace('T', ' ');
+}
+
+function normalizeRecoveryTimestamps(payload: RecoveryPayload): RecoveryPayload {
+  return {
+    ...payload,
+    items: payload.items.map((item) => ({
+      ...item,
+      createdAt: canonicalUtcTimestamp(item.createdAt),
+    })),
+    borrowers: payload.borrowers.map((borrower) => ({
+      ...borrower,
+      createdAt: canonicalUtcTimestamp(borrower.createdAt),
+    })),
+    events: payload.events.map((event) => ({
+      ...event,
+      createdAt: canonicalUtcTimestamp(event.createdAt),
+    })),
+  };
+}
+
+function utcTimestamp(value: string): number {
+  return Date.parse(`${value.replace(' ', 'T')}Z`);
+}
+
 function recoveryTotal(state: RecoveryItemState): number {
   let checkedOut = 0;
   for (const checkout of state.checkouts.values())
@@ -169,6 +202,7 @@ function recoveryTotal(state: RecoveryItemState): number {
 }
 
 export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPayload {
+  payload = normalizeRecoveryTimestamps(payload);
   const locations = new Map<string, TransferLocation>();
   for (const location of payload.locations) {
     const key = location.name.toLocaleLowerCase();
@@ -220,7 +254,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   for (const event of payload.events) {
     if (event.id <= previousId)
       invalidWorkbook(`Recovery Events must be ordered by strictly increasing Event ID`);
-    const timestamp = Date.parse(event.createdAt);
+    const timestamp = utcTimestamp(event.createdAt);
     if (timestamp < previousTimestamp)
       invalidWorkbook(`Recovery event ${event.id} occurs before the preceding event timestamp`);
     previousId = event.id;
@@ -228,7 +262,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     const item = items.get(event.itemCode);
     if (!item)
       invalidWorkbook(`Recovery event ${event.id} references unknown Item Code ${event.itemCode}`);
-    if (timestamp < Date.parse(item.createdAt))
+    if (timestamp < utcTimestamp(item.createdAt))
       invalidWorkbook(
         `Recovery event ${event.id} occurs before item ${event.itemCode} was created`,
       );
@@ -241,7 +275,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(
         `Recovery event ${event.id} references unknown Borrower Username "${event.borrowerUsername}"`,
       );
-    if (borrower && timestamp < Date.parse(borrower.createdAt))
+    if (borrower && timestamp < utcTimestamp(borrower.createdAt))
       invalidWorkbook(`Recovery event ${event.id} occurs before its borrower was created`);
 
     if (event.kind === 'stock_added') {
@@ -511,7 +545,7 @@ export class InventoryTransferService {
   }
 
   replaceWithRecovery(payload: RecoveryPayload): void {
-    validateRecoveryPayload(payload);
+    payload = validateRecoveryPayload(payload);
     transaction(this.db, () => {
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();

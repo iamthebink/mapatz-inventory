@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import { openDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
+import { periodBounds, todayInIsrael } from '../../src/domain/period-summary.js';
 import { createApp } from '../../src/server/index.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'mapatz-e2e-'));
@@ -54,6 +55,25 @@ app.post('/__e2e__/seed', (_request, response) => {
   });
   inventory.archiveBorrower(archivedBorrower.id, true);
   response.json({ borrower, item, stockItem, archiveItem, archivedBorrower, checkoutId });
+});
+app.post('/__e2e__/period-summary/history/:borrowerId/:itemId', (request, response) => {
+  const today = todayInIsrael();
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const { startUtc } = periodBounds(yesterday, yesterday);
+  database
+    .prepare(
+      "INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,created_at,note) VALUES ('checked_out',?,?,?,?,?)",
+    )
+    .run(
+      Number(request.params.itemId),
+      Number(request.params.borrowerId),
+      2,
+      startUtc,
+      'e2e historical summary',
+    );
+  response.json({ date: yesterday });
 });
 app.post(
   '/__e2e__/conflicts/operation/:stockItemId/:checkoutId/:archiveItemId',

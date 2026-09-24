@@ -46,6 +46,8 @@ import type { ToastTone } from './Toast';
 
 export type BorrowerWorkflowHandle = {
   requestNavigation: (complete: () => void) => void;
+  openFromSummary: (borrower: Borrower, onReturn: () => void) => void;
+  retryStartup: () => void;
 };
 
 type QuantityDialog = {
@@ -139,8 +141,10 @@ export const BorrowerWorkflow = forwardRef<
   BorrowerWorkflowHandle,
   {
     showToast: (title: string, message: string, tone: ToastTone) => void;
+    deskVisible?: boolean;
+    onStartupChange?: (status: 'loading' | 'ready' | 'failed') => void;
   }
->(function BorrowerWorkflow({ showToast }, ref) {
+>(function BorrowerWorkflow({ showToast, deskVisible = true, onStartupChange }, ref) {
   const [startup, setStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [search, setSearch] = useState('');
   const [searchSnapshot, setSearchSnapshot] = useState<Awaited<
@@ -157,6 +161,8 @@ export const BorrowerWorkflow = forwardRef<
   const [createOpen, setCreateOpen] = useState(false);
   const [creation, setCreation] = useState<CreationState | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const deskVisibleRef = useRef(deskVisible);
+  deskVisibleRef.current = deskVisible;
   const startupRetryRef = useRef<HTMLButtonElement>(null);
   const itemSearchRef = useRef<HTMLInputElement>(null);
   const cardOverviewRef = useRef<HTMLParagraphElement>(null);
@@ -173,6 +179,7 @@ export const BorrowerWorkflow = forwardRef<
   const initiallyFocusedBorrowerRef = useRef<number | null>(null);
   const frozenAttemptRef = useRef<FrozenAttempt | null>(null);
   const navigationRef = useRef<(() => void) | null>(null);
+  const summaryReturnRef = useRef<(() => void) | null>(null);
   const sentinelRef = useRef(false);
   const suppressPopRef = useRef(false);
   const feedbackRef = useRef<WorkflowFeedback | null>(null);
@@ -189,7 +196,7 @@ export const BorrowerWorkflow = forwardRef<
         setSearchSnapshot(result);
         setResolvedSearch(query);
         setStartup('ready');
-        if (focus) queueMicrotask(() => searchRef.current?.focus());
+        if (focus && deskVisibleRef.current) queueMicrotask(() => searchRef.current?.focus());
         return result;
       } catch (error) {
         if (requestId !== searchRequestRef.current) return null;
@@ -199,7 +206,7 @@ export const BorrowerWorkflow = forwardRef<
           error instanceof Error ? error.message : 'הטעינה נכשלה',
           'error',
         );
-        queueMicrotask(() => startupRetryRef.current?.focus());
+        if (deskVisibleRef.current) queueMicrotask(() => startupRetryRef.current?.focus());
         return null;
       }
     },
@@ -212,12 +219,12 @@ export const BorrowerWorkflow = forwardRef<
     if (!recovery.ready) {
       setStartup('failed');
       showToast('שחזור פעולה', 'לא ניתן לקבוע בוודאות את מצב הפעולה. נסו שוב.', 'error');
-      queueMicrotask(() => startupRetryRef.current?.focus());
+      if (deskVisibleRef.current) queueMicrotask(() => startupRetryRef.current?.focus());
       return;
     }
     if (recovery.results.length > 0)
       showToast('שחזור פעולה', 'הפעולה הממתינה נבדקה מול השרת.', 'warning');
-    await loadSearch('', true);
+    await loadSearch('', deskVisibleRef.current);
   }, [loadSearch, showToast]);
 
   const refreshDirectoryAfterCreation = async (query: string) => {
@@ -242,20 +249,23 @@ export const BorrowerWorkflow = forwardRef<
     void initialize();
   }, [initialize]);
 
+  useEffect(() => onStartupChange?.(startup), [onStartupChange, startup]);
+
   useEffect(() => {
-    if (startup !== 'ready' || selectedBorrower || createOpen || stack.depth > 0) return;
+    if (!deskVisible || startup !== 'ready' || selectedBorrower || createOpen || stack.depth > 0)
+      return;
     const timer = window.setTimeout(() => {
       if (operation?.phase.kind === 'refresh-required') directoryRecoveryRef.current?.focus();
       else searchRef.current?.focus();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [createOpen, operation, selectedBorrower, stack.depth, startup]);
+  }, [createOpen, deskVisible, operation, selectedBorrower, stack.depth, startup]);
 
   useEffect(() => {
-    if (startup !== 'failed') return;
+    if (!deskVisible || startup !== 'failed') return;
     const timer = window.setTimeout(() => startupRetryRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
-  }, [startup]);
+  }, [deskVisible, startup]);
 
   useEffect(() => {
     if (!selectedBorrower || !cardLoadFailed) return;
@@ -340,13 +350,16 @@ export const BorrowerWorkflow = forwardRef<
 
   const closeCard = useCallback(
     (after?: () => void) => {
+      const returnToSummary = after ? null : summaryReturnRef.current;
+      summaryReturnRef.current = null;
       resetCard();
       removeSentinel(() => {
-        searchRef.current?.focus();
+        if (deskVisible) searchRef.current?.focus();
         after?.();
+        returnToSummary?.();
       });
     },
-    [removeSentinel, resetCard],
+    [deskVisible, removeSentinel, resetCard],
   );
 
   const closeCreation = useCallback(
@@ -398,6 +411,14 @@ export const BorrowerWorkflow = forwardRef<
         showToast('הפעולה מוגנת', 'לא ניתן לצאת בזמן שמצב השמירה אינו ודאי.', 'warning');
         return;
       }
+      if (
+        summaryReturnRef.current &&
+        operation?.phase.kind === 'refresh-required' &&
+        operation.phase.intent === 'save-and-close'
+      ) {
+        showToast('הפעולה מוגנת', 'יש לאמת את נתוני האמת לפני היציאה.', 'warning');
+        return;
+      }
       closeInitiatorRef.current = initiator;
       navigationRef.current = complete ?? null;
       if (operation?.staged.length) {
@@ -430,26 +451,40 @@ export const BorrowerWorkflow = forwardRef<
     [createOpen, initialize, selectedBorrower, showToast],
   );
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      requestNavigation: (complete) => {
-        if (desktop && startup !== 'ready') {
-          showToast('הפעולה מוגנת', 'יש להשלים שחזור לפני היציאה.', 'warning');
-          return;
-        }
-        requestExit(null, complete);
-      },
-    }),
-    [requestExit, showToast, startup],
-  );
+  useImperativeHandle(ref, () => ({
+    requestNavigation: (complete) => {
+      if (desktop && startup !== 'ready') {
+        showToast('הפעולה מוגנת', 'יש להשלים שחזור לפני היציאה.', 'warning');
+        return;
+      }
+      requestExit(null, complete);
+    },
+    openFromSummary: (borrower, onReturn) => {
+      if (startup !== 'ready') {
+        showToast('פתיחת כרטיס שואל', 'יש להשלים את שחזור הפעולות לפני פתיחת כרטיס.', 'warning');
+        return;
+      }
+      if (selectedBorrower || createOpen || operation?.phase.kind === 'refresh-required') {
+        showToast('פתיחת כרטיס שואל', 'יש להשלים את הפעולה הפעילה תחילה.', 'warning');
+        return;
+      }
+      summaryReturnRef.current = onReturn;
+      void openBorrower(borrower);
+    },
+    retryStartup: () => void initialize(),
+  }));
 
   useEffect(() => {
     const protectedCreation = Boolean(createOpen && creation && creationLocks(creation).dismissal);
     const protectedState =
       protectedCreation ||
       Boolean(operation?.staged.length) ||
-      Boolean(operation && operationLocks(operation).exit);
+      Boolean(operation && operationLocks(operation).exit) ||
+      Boolean(
+        summaryReturnRef.current &&
+        operation?.phase.kind === 'refresh-required' &&
+        operation.phase.intent === 'save-and-close',
+      );
     if (!protectedState) return;
     const unload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -477,6 +512,11 @@ export const BorrowerWorkflow = forwardRef<
         protectedCreation ||
         Boolean(operation?.staged.length) ||
         Boolean(operation && operationLocks(operation).exit) ||
+        Boolean(
+          summaryReturnRef.current &&
+          operation?.phase.kind === 'refresh-required' &&
+          operation.phase.intent === 'save-and-close',
+        ) ||
         stack.depth > 1 ||
         Boolean(quantity) ||
         discardOpen;
@@ -750,7 +790,9 @@ export const BorrowerWorkflow = forwardRef<
       } catch {
         const failed = operationReducer(next, { type: 'refresh-failed', refreshId });
         setOperation(failed);
-        if (!operationPresentation(failed).cardOpen) {
+        if (summaryReturnRef.current) {
+          queueMicrotask(() => retryRefreshRef.current?.focus());
+        } else if (!operationPresentation(failed).cardOpen) {
           setSearch('');
           setSelectedBorrower(null);
           removeSentinel(() => window.setTimeout(() => directoryRecoveryRef.current?.focus(), 0));
@@ -1276,7 +1318,15 @@ export const BorrowerWorkflow = forwardRef<
           role="dialog"
           variant="workspace"
           busy={Boolean(operation && operation.phase.kind === 'saving')}
-          dismissible={!operation || !operationLocks(operation).exit}
+          dismissible={
+            !operation ||
+            (!operationLocks(operation).exit &&
+              !(
+                summaryReturnRef.current &&
+                operation.phase.kind === 'refresh-required' &&
+                operation.phase.intent === 'save-and-close'
+              ))
+          }
           onClose={() => requestExit(document.activeElement as HTMLElement | null)}
           returnFocusRef={searchRef}
           initialFocusRef={cardLoadFailed ? retryCardRef : cardOverviewRef}
@@ -1286,7 +1336,14 @@ export const BorrowerWorkflow = forwardRef<
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={operationLocks(operation).exit}
+                  disabled={
+                    operationLocks(operation).exit ||
+                    Boolean(
+                      summaryReturnRef.current &&
+                      operation.phase.kind === 'refresh-required' &&
+                      operation.phase.intent === 'save-and-close',
+                    )
+                  }
                   onClick={(event) => requestExit(event.currentTarget)}
                 >
                   סגירה
