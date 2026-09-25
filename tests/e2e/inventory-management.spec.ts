@@ -59,20 +59,20 @@ test('operator inspects stock and restores damaged units', async ({ page, seed, 
   });
   expect(returned.ok()).toBeTruthy();
   await page.goto('/management');
-  await expect(page.getByRole('button', { name: 'הוספת פריט חדש' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'הוספת פריט חדש' })).toBeDisabled();
   const row = page
     .getByRole('row')
     .filter({ has: page.getByRole('button', { name: seed.item.name, exact: true }) });
   await row.getByRole('button', { name: seed.item.name }).click();
   let dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
   await expect(dialog.getByRole('textbox', { name: 'זמין' })).toBeDisabled();
-  await expect(dialog.getByRole('button', { name: 'שמירה' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'שמירה' })).toBeDisabled();
   await dialog.getByRole('button', { name: 'ביטול' }).click();
 
   await row.getByRole('button', { name: 'טיפול בפגומים' }).click();
   dialog = page.getByRole('dialog', { name: 'טיפול בפגומים' });
   await expect(dialog).toContainText('פגום: 2');
-  await expect(dialog.getByRole('option', { name: 'גריעה קבועה' })).toHaveCount(0);
+  await expect(dialog.getByRole('option', { name: 'גריעה קבועה' })).toHaveAttribute('disabled', '');
   await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
   await dialog.getByRole('button', { name: 'שמירה' }).click();
   await expect(dialog).toBeHidden();

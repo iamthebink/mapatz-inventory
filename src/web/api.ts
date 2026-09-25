@@ -14,6 +14,7 @@ import type {
   CommandProtocolError,
 } from '../contracts/borrower-workflow.js';
 import type { Borrower } from '../domain/types.js';
+import type { RadioFleet } from '../domain/types.js';
 import type { PeriodSummary } from '../contracts/period-summary.js';
 import {
   isCommandUuid,
@@ -533,6 +534,18 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   await requireSuccess(response);
   return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>);
+}
+
+export function fetchRadios(): Promise<RadioFleet> {
+  return api<RadioFleet>('/radios');
+}
+
+export function radioCommand(
+  path: string,
+  method: 'PUT' | 'POST',
+  body: object,
+): Promise<RadioFleet> {
+  return api<RadioFleet>(path, { method, body: JSON.stringify(body) });
 }
 
 export function fetchPeriodSummary(start: string, end: string): Promise<PeriodSummary> {

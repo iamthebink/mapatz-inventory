@@ -432,15 +432,14 @@ export function InventoryManagement({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-3">
-        {admin && (
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() => open({ kind: 'item', item: null })}
-          >
-            הוספת פריט חדש
-          </button>
-        )}
+        <button
+          type="button"
+          className="primary-button"
+          disabled={!admin}
+          onClick={() => open({ kind: 'item', item: null })}
+        >
+          הוספת פריט חדש
+        </button>
         <button
           ref={fallbackRef}
           type="button"
@@ -605,9 +604,8 @@ export function InventoryManagement({
                       {Number(draft.available) - selected.available}
                     </p>
                   )}
-                {admin &&
-                  draft.available !== (selected?.available.toString() ?? '0') &&
-                  field('note', 'הערת התאמה (רשות)')}
+                {draft.available !== (selected?.available.toString() ?? '0') &&
+                  field('note', 'הערת התאמה (רשות)', !admin)}
                 {reviewRequired && (
                   <div>
                     {currentBalances ? (
@@ -654,20 +652,21 @@ export function InventoryManagement({
                 )}
               </div>
               <div className="dialog-actions">
-                {admin && !selected?.archived && (
+                {!selected?.archived && (
                   <button
                     className="primary-button"
                     type="submit"
-                    disabled={pending || !!unresolved || refreshRecovery}
+                    disabled={!admin || pending || !!unresolved || refreshRecovery}
                   >
                     שמירה
                   </button>
                 )}
-                {admin && selected && (
+                {selected && (
                   <button
                     type="button"
                     className="secondary-button"
                     disabled={
+                      !admin ||
                       pending ||
                       (dirty && !selected.archived) ||
                       !!unresolved ||
@@ -725,11 +724,9 @@ export function InventoryManagement({
                   }}
                 >
                   <option value="repair">החזרה לשימוש</option>
-                  {(admin || resolution === 'write_off') && (
-                    <option value="write_off" disabled={!admin}>
-                      גריעה קבועה
-                    </option>
-                  )}
+                  <option value="write_off" disabled={!admin}>
+                    גריעה קבועה
+                  </option>
                 </select>
               </label>
               <label className="field-label">
@@ -825,16 +822,14 @@ export function InventoryManagement({
                     value={locationQuery}
                     onChange={(event) => setLocationQuery(event.target.value)}
                   />
-                  {admin && (
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={pending || !!unresolved || refreshRecovery}
-                      onClick={() => editLocation('new')}
-                    >
-                      מיקום חדש
-                    </button>
-                  )}
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={!admin || pending || !!unresolved || refreshRecovery}
+                    onClick={() => editLocation('new')}
+                  >
+                    מיקום חדש
+                  </button>
                   <div className="table-shell">
                     <table className="data-table">
                       <thead>
@@ -858,26 +853,22 @@ export function InventoryManagement({
                               <td>{location.code}</td>
                               <td>{location.archived ? 'בארכיון' : 'פעיל'}</td>
                               <td>
-                                {admin && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      className="secondary-button"
-                                      disabled={pending || !!unresolved || refreshRecovery}
-                                      onClick={() => editLocation(location)}
-                                    >
-                                      עריכה
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="secondary-button"
-                                      disabled={pending || !!unresolved || refreshRecovery}
-                                      onClick={() => archiveLocation(location)}
-                                    >
-                                      {location.archived ? 'שחזור' : 'ארכוב'}
-                                    </button>
-                                  </>
-                                )}
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  disabled={!admin || pending || !!unresolved || refreshRecovery}
+                                  onClick={() => editLocation(location)}
+                                >
+                                  עריכה
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  disabled={!admin || pending || !!unresolved || refreshRecovery}
+                                  onClick={() => archiveLocation(location)}
+                                >
+                                  {location.archived ? 'שחזור' : 'ארכוב'}
+                                </button>
                               </td>
                             </tr>
                           ))}

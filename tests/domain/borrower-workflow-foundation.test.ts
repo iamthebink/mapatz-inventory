@@ -103,7 +103,7 @@ describe('borrower workflow persistence foundation', () => {
     migrate(db);
 
     expect(db.prepare('SELECT version FROM migrations ORDER BY version').all()).toEqual(
-      [1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => ({ version })),
     );
     expect(
       db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),

@@ -15,6 +15,7 @@ export const migrations = [
   { version: 6, filename: '006_found_returned.sql', disableForeignKeys: true },
   { version: 7, filename: '007_unique_item_names.sql', disableForeignKeys: false },
   { version: 8, filename: '008_recoverable_admin_password.sql', disableForeignKeys: false },
+  { version: 9, filename: '009_radio_fleet.sql', disableForeignKeys: false },
 ];
 
 export type InventoryDatabase = DatabaseSync;

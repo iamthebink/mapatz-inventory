@@ -21,6 +21,7 @@ import {
   PackageOpen,
   CalendarDays,
   Pencil,
+  Radio,
   RotateCcw,
   Settings2,
   ShieldCheck,
@@ -56,6 +57,8 @@ import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
 import { PeriodSummary } from './PeriodSummary';
 import { InventoryManagement } from './InventoryManagement';
+import { Radios } from './Radios';
+import { RadioCountSettings } from './RadioCountSettings';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -69,7 +72,7 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger';
+type Tab = 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger' | 'radios';
 type ManagementTab = 'inventory' | 'borrowers' | 'data' | 'access';
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
@@ -78,6 +81,7 @@ const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   issue: { path: '/consumables' },
   ledger: { path: '/ledger' },
   catalogs: { path: '/management' },
+  radios: { path: '/radios' },
 };
 
 function tabFromPath(pathname: string): Tab | null {
@@ -110,6 +114,7 @@ const eventNames: Record<string, string> = {
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
+  { key: 'radios', label: 'מכשירי קשר', icon: Radio },
   { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
   { key: 'catalogs', label: 'ניהול', icon: Settings2 },
@@ -123,7 +128,7 @@ const managementNavigation: {
   { key: 'inventory', label: 'מלאי ומיקומים', description: 'פריטים, יתרות ומיקומים', icon: Boxes },
   { key: 'borrowers', label: 'שואלים', description: 'אנשים וארגונים', icon: Users },
   { key: 'data', label: 'ייבוא וייצוא', description: 'איפוס ושחזור מקובץ', icon: Download },
-  { key: 'access', label: 'הרשאות', description: 'סיסמאות גישה', icon: ShieldCheck },
+  { key: 'access', label: 'הרשאות והגדרות', description: 'סיסמאות ומכשירי קשר', icon: ShieldCheck },
 ];
 
 function number(form: FormData, name: string): number {
@@ -765,6 +770,7 @@ export function App() {
       )}
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        {tab === 'radios' && <Radios active showToast={showToast} />}
         {(tab === 'desk' || tab === 'summary') && (
           <div hidden={tab !== 'desk'}>
             <BorrowerWorkflow
@@ -967,7 +973,7 @@ export function App() {
                 </div>
               )}
               {managementTab === 'access' && (
-                <div className="max-w-2xl">
+                <div className="max-w-2xl space-y-4">
                   <ActionCard
                     title="החלפת סיסמה"
                     description="עדכון הסיסמה לכניסה למצב מנהל"
@@ -986,6 +992,11 @@ export function App() {
                   >
                     <PasswordField name="password" label="סיסמה חדשה" />
                   </ActionCard>
+                  <RadioCountSettings
+                    isAdmin={isAdmin}
+                    sessionReconciling={sessionReconciling}
+                    showToast={showToast}
+                  />
                   {!isAdmin && <PermissionNote />}
                 </div>
               )}

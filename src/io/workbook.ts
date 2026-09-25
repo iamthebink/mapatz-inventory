@@ -13,6 +13,7 @@ import {
   validateRecoveryPayload,
 } from '../domain/import-export.js';
 import { DomainError, type BorrowerType, type EventKind, type ItemKind } from '../domain/types.js';
+import { RADIO_TEXT_MAX_LENGTH } from '../domain/radios.js';
 import { WORKBOOK_CONTRACT, type WorkbookSheetKey } from './workbook-contract.js';
 
 type Primitive = string | number | boolean | null | undefined;
@@ -103,6 +104,12 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
       event.createdAt,
     ]),
   );
+  addSheet(workbook, 'recoveryRadioFleet', [[snapshot.radioCount]]);
+  addSheet(
+    workbook,
+    'recoveryRadios',
+    snapshot.radios.map((radio) => [radio.number, radio.holder, radio.team, radio.lost]),
+  );
   addSheet(
     workbook,
     'unresolvedDamage',
@@ -148,6 +155,14 @@ function requiredText(value: Primitive, context: string, maximum = 100): string 
   if (typeof value !== 'string' || value.trim().length === 0 || value.trim().length > maximum)
     return importError(`${context} must be nonblank text of at most ${maximum} characters`);
   return value.trim();
+}
+
+function radioHolder(value: Primitive, context: string): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > RADIO_TEXT_MAX_LENGTH)
+    return importError(
+      `${context} must be nonblank text of at most ${RADIO_TEXT_MAX_LENGTH} characters`,
+    );
+  return value;
 }
 
 function optionalText(value: Primitive, context: string): string | null {
@@ -367,6 +382,21 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
   const itemSheet = requiredSheet(workbook, 'recoveryItems');
   const borrowerSheet = requiredSheet(workbook, 'recoveryBorrowers');
   const eventSheet = requiredSheet(workbook, 'recoveryEvents');
+  const radioFleetSheet = requiredSheet(workbook, 'recoveryRadioFleet');
+  const radioSheet = requiredSheet(workbook, 'recoveryRadios');
+  const fleetRows = dataRows(radioFleetSheet, 1);
+  if (fleetRows.length !== 1)
+    return importError('Recovery Radio Fleet must contain exactly one count');
+  const radioCount = integer(fleetRows[0]![0], 'Recovery Radio Fleet Count', 0);
+  const radios = dataRows(radioSheet, 4).map((row, index) => ({
+    number: integer(row[0], `Recovery Radios row ${index + 2} Number`, 1),
+    holder: radioHolder(row[1], `Recovery Radios row ${index + 2} Holder`),
+    team:
+      row[2] == null
+        ? ''
+        : plainText(row[2], `Recovery Radios row ${index + 2} Team`, RADIO_TEXT_MAX_LENGTH),
+    lost: requiredBoolean(row[3], `Recovery Radios row ${index + 2} Lost`),
+  }));
 
   const locations = dataRows(locationSheet, 2).map((row, index) => ({
     name: requiredText(row[0], `Recovery Locations row ${index + 2} Name`),
@@ -445,7 +475,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
       createdAt: timestamp(row[7], `Recovery Events row ${rowNumber} Created At`),
     };
   });
-  return validateRecoveryPayload({ locations, items, borrowers, events });
+  return validateRecoveryPayload({ locations, items, borrowers, events, radioCount, radios });
 }
 
 /** Standalone first-sheet import; never routes through inventory replacement. */

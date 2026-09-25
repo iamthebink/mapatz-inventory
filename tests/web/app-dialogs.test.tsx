@@ -53,6 +53,12 @@ function setup(role: 'admin' | 'operator' = 'admin') {
     if (path === '/api/borrowers?all=1') return response([]);
     if (path === '/api/locations?all=1') return response([location]);
     if (path === '/api/inventory/epoch') return response({ ledgerEpoch: 1 });
+    if (path === '/api/radios')
+      return response({
+        count: 1,
+        generation: 1,
+        radios: [{ number: 1, holder: 'צוללת', team: '', lost: false }],
+      });
     if (path === '/api/borrowers/search?q=')
       return response({ ledgerEpoch: 1, active: [], archivedMatches: [] });
     if (path === '/api/ledger') return response([]);
@@ -100,6 +106,19 @@ afterEach(() => {
 });
 
 describe('inventory management in App', () => {
+  it('keeps radio custody and count settings reachable after the merge', async () => {
+    const { user } = setup('operator');
+    await screen.findByRole('tab', { name: /מלאי ומיקומים/ });
+    await user.click(screen.getByRole('link', { name: 'מכשירי קשר' }));
+    expect(await screen.findByRole('heading', { name: 'רשימת מכשירים' })).toBeTruthy();
+    await user.click(screen.getByRole('link', { name: 'ניהול' }));
+    await user.click(screen.getByRole('tab', { name: /הרשאות והגדרות/ }));
+    expect(await screen.findByRole('heading', { name: 'מספר מכשירי הקשר' })).toBeTruthy();
+    expect(
+      (screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' }) as HTMLInputElement).disabled,
+    ).toBe(true);
+  });
+
   it('shows one management section and the four item balances without a separate inventory tab', async () => {
     setup();
     const navigation = screen.getByRole('navigation', { name: 'ניווט ראשי' });
@@ -120,13 +139,27 @@ describe('inventory management in App', () => {
     expect((screen.getByRole('textbox', { name: 'שם פריט' }) as HTMLInputElement).disabled).toBe(
       true,
     );
+    expect((screen.getByRole('button', { name: 'שמירה' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(
+      (screen.getByRole('button', { name: 'העברה לארכיון' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     await user.click(screen.getByRole('button', { name: 'ביטול' }));
     expect((screen.getByRole('textbox', { name: 'סינון הטבלה' }) as HTMLInputElement).value).toBe(
       'מקבת',
     );
     await user.click(screen.getByRole('button', { name: 'מיקומים' }));
     expect(within(screen.getByRole('dialog')).getByText('מחסן ראשי')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'מיקום חדש' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'מיקום חדש' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: 'עריכה' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: 'ארכוב' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it('creates an item with an initial available target through the unified dialog', async () => {

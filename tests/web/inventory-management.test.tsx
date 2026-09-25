@@ -135,12 +135,16 @@ describe('inventory management UI', () => {
     });
     const user = userEvent.setup();
     view(false);
-    expect(screen.queryByRole('button', { name: 'הוספת פריט חדש' })).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'הוספת פריט חדש' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Hammer' }));
     expect((screen.getByLabelText('שם פריט') as HTMLInputElement).disabled).toBe(true);
     await user.click(screen.getByRole('button', { name: 'ביטול' }));
     await user.click(screen.getByRole('button', { name: 'טיפול בפגומים' }));
-    expect(screen.queryByRole('option', { name: 'גריעה קבועה' })).toBeNull();
+    expect(
+      (screen.getByRole('option', { name: 'גריעה קבועה' }) as HTMLOptionElement).disabled,
+    ).toBe(true);
     await user.click(screen.getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.body).toMatchObject({ itemId: 1, quantity: 1, resolution: 'repair' });

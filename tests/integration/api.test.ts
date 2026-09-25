@@ -210,6 +210,8 @@ describe('inventory API permission and edge-case matrix', () => {
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
     const workbook = await exportWorkbook({
+      radioCount: 0,
+      radios: [],
       locations: [{ name: 'Imported Place', archived: false }],
       items: [
         {

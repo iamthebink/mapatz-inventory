@@ -1,5 +1,5 @@
 export const WORKBOOK_CONTRACT = {
-  version: 2,
+  version: 3,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   filename: 'mapatz-inventory.xlsx',
   sheets: {
@@ -55,6 +55,14 @@ export const WORKBOOK_CONTRACT = {
         'Note',
         'Created At',
       ],
+    },
+    recoveryRadioFleet: {
+      name: 'Recovery Radio Fleet',
+      columns: ['Count'],
+    },
+    recoveryRadios: {
+      name: 'Recovery Radios',
+      columns: ['Number', 'Holder', 'Team', 'Lost'],
     },
     unresolvedDamage: {
       name: 'Unresolved Damage',

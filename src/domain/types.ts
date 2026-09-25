@@ -39,6 +39,19 @@ export interface Borrower {
   archived: boolean;
 }
 
+export interface Radio {
+  number: number;
+  holder: string;
+  team: string;
+  lost: boolean;
+}
+
+export interface RadioFleet {
+  count: number;
+  generation: number;
+  radios: Radio[];
+}
+
 export class DomainError extends Error {
   constructor(
     public readonly code: string,
