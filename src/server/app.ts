@@ -51,7 +51,9 @@ export function createApp(options: AppOptions): Express {
       const path = req.path.toLowerCase();
       const commandRoute =
         req.method === 'POST' &&
-        (/^\/borrowers\/?$/.test(path) || /^\/borrowers\/[^/]+\/operations\/?$/.test(path));
+        (/^\/borrowers\/?$/.test(path) ||
+          /^\/borrowers\/[^/]+\/operations\/?$/.test(path) ||
+          /^\/issue-batch\/?$/.test(path));
       if (commandRoute) return next();
       legacyJson(req, res, next);
     },

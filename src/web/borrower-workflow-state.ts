@@ -26,6 +26,7 @@ export type WorkflowFeedback = {
 export type StagedItem = {
   itemId: number;
   borrow: BorrowPart[];
+  issue?: BorrowPart[];
   return: ReturnPart[];
   lost?: LostPart[];
   lostCredit: LostCreditPart[];
@@ -88,6 +89,7 @@ export type OperationState = {
 
 export type OperationAction =
   | { type: 'stage-borrow'; itemId: number; part: BorrowPart }
+  | { type: 'stage-issue'; itemId: number; part: BorrowPart }
   | { type: 'stage-return'; itemId: number; part: ReturnPart }
   | { type: 'stage-lost'; itemId: number; part: LostPart }
   | { type: 'stage-lost-credit'; itemId: number; part: LostCreditPart }
@@ -96,7 +98,7 @@ export type OperationAction =
   | {
       type: 'rollback';
       itemId: number;
-      direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit';
+      direction: 'borrow' | 'issue' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit';
       condition?: 'usable' | 'damaged';
     }
   | { type: 'dispatch'; attemptKey: string; intent: SaveIntent }
@@ -157,6 +159,7 @@ export function isBorrowerDeskSnapshot(
 
   const itemIds = new Set<number>();
   const itemCodes = new Set<number>();
+  const itemKinds = new Map<number, string>();
   for (const item of value.inventory) {
     if (
       !isRecord(item) ||
@@ -176,7 +179,7 @@ export function isBorrowerDeskSnapshot(
       !isSafePositive(item.id) ||
       !isSafePositive(item.code) ||
       typeof item.name !== 'string' ||
-      item.kind !== 'non_consumable' ||
+      !['non_consumable', 'consumable'].includes(String(item.kind)) ||
       !(item.lotSize === null || isSafePositive(item.lotSize)) ||
       !(item.locationId === null || isSafePositive(item.locationId)) ||
       typeof item.archived !== 'boolean' ||
@@ -192,6 +195,7 @@ export function isBorrowerDeskSnapshot(
       return false;
     itemIds.add(Number(item.id));
     itemCodes.add(Number(item.code));
+    itemKinds.set(Number(item.id), String(item.kind));
   }
   const holdingIds = new Set<number>();
   for (const holding of value.holdings) {
@@ -204,7 +208,8 @@ export function isBorrowerDeskSnapshot(
       holding.returnable + holding.lost <= 0 ||
       !Number.isSafeInteger(holding.returnable + holding.lost) ||
       holdingIds.has(holding.itemId) ||
-      !itemIds.has(holding.itemId)
+      !itemIds.has(holding.itemId) ||
+      itemKinds.get(holding.itemId) !== 'non_consumable'
     )
       return false;
     holdingIds.add(holding.itemId);
@@ -343,7 +348,7 @@ function lostAfter(state: OperationState, itemId: number, staged = state.staged)
 function announcement(
   state: OperationState,
   itemId: number,
-  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
+  direction: 'borrow' | 'issue' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
   quantity: number,
   staged: StagedItem[],
 ): string | null {
@@ -377,6 +382,7 @@ function retainNonEmpty(staged: StagedItem[]): StagedItem[] {
   return staged.filter(
     (group) =>
       group.borrow.length > 0 ||
+      (group.issue ?? []).length > 0 ||
       group.return.length > 0 ||
       (group.lost ?? []).length > 0 ||
       (group.lostCredit ?? []).length > 0,
@@ -422,6 +428,7 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
   );
   if (!item && !group && scopedConflicts.length === 0) return null;
   const borrowed = totalBorrow(group?.borrow ?? []);
+  const issued = totalBorrow(group?.issue ?? []);
   const returned = totalReturn(group?.return ?? []);
   const usable = usableReturn(group?.return ?? []);
   const markedLost = totalLost(group?.lost ?? []);
@@ -452,6 +459,7 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
       const available = safeArithmetic(item.available, usableCredit, recoveredCredit);
       return available === null || borrowed > available;
     }
+    if (conflict.scope === 'issue') return !item || issued === null || issued > item.available;
     return true;
   });
   const projectedHeld =
@@ -513,20 +521,26 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     (group?.lostCredit ?? []).every(validLostCredit) &&
     markLostCompatible;
   const projectedAvailability =
-    borrowed === null || usable === null || lostCredit === null || usableLostCredit === null
+    borrowed === null ||
+    issued === null ||
+    usable === null ||
+    lostCredit === null ||
+    usableLostCredit === null
       ? null
       : safeArithmetic(
           item?.available ?? 0,
           returnCompatible ? usable : 0,
           lostCompatible ? usableLostCredit : 0,
           -borrowed,
+          -issued,
         );
   const compatible =
     item !== undefined &&
     item.selectable &&
-    item.kind === 'non_consumable' &&
+    (item.kind === 'non_consumable' || item.kind === 'consumable') &&
     !item.archived &&
     borrowed !== null &&
+    issued !== null &&
     returned !== null &&
     usable !== null &&
     lostCredit !== null &&
@@ -539,6 +553,12 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     returnableNow >= 0 &&
     lostNow >= 0 &&
     projectedAvailability >= 0 &&
+    (item.kind !== 'consumable' ||
+      (group?.borrow.length === 0 &&
+        (group?.return.length ?? 0) === 0 &&
+        (group?.lost?.length ?? 0) === 0 &&
+        (group?.lostCredit.length ?? 0) === 0)) &&
+    (item.kind !== 'non_consumable' || (group?.issue ?? []).length === 0) &&
     conflicts.length === 0;
   return {
     itemId,
@@ -548,6 +568,7 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     lostCreditParts: (group?.lostCredit ?? []).map((part) => ({ ...part })),
     comments: [
       ...(group?.borrow ?? []).map((part) => part.note),
+      ...(group?.issue ?? []).map((part) => part.note),
       ...(group?.return ?? []).map((part) => part.note),
       ...(group?.lost ?? []).map((part) => part.note),
       ...(group?.lostCredit ?? []).map((part) => part.note),
@@ -569,7 +590,7 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
 function clearDirectionalConflict(
   conflicts: BorrowerOperationConflict[],
   itemId: number,
-  direction: 'borrow' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
+  direction: 'borrow' | 'issue' | 'return' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
 ): BorrowerOperationConflict[] {
   const scopes =
     direction === 'lostCredit'
@@ -593,6 +614,9 @@ export function operationRequest(state: OperationState): BorrowerOperationReques
     items: state.staged.map((group) => ({
       itemId: group.itemId,
       ...(group.borrow.length > 0 ? { borrow: group.borrow.map((part) => ({ ...part })) } : {}),
+      ...((group.issue ?? []).length > 0
+        ? { issue: (group.issue ?? []).map((part) => ({ ...part })) }
+        : {}),
       ...(group.return.length > 0 ? { return: group.return.map((part) => ({ ...part })) } : {}),
       ...((group.lost ?? []).length > 0
         ? { lost: (group.lost ?? []).map((part) => ({ ...part })) }
@@ -610,6 +634,8 @@ export function canSave(state: OperationState): boolean {
   if (state.snapshot.borrower.archived) return false;
   if (
     safeSum(state.staged.flatMap((group) => group.borrow.map((part) => part.quantity))) === null ||
+    safeSum(state.staged.flatMap((group) => (group.issue ?? []).map((part) => part.quantity))) ===
+      null ||
     safeSum(
       state.staged.flatMap((group) => group.return.map((part) => part.usable + part.damaged)),
     ) === null ||
@@ -624,6 +650,7 @@ export function canSave(state: OperationState): boolean {
   return state.staged.every((group) => {
     if (
       !group.borrow.every(validBorrow) ||
+      !(group.issue ?? []).every(validBorrow) ||
       !group.return.every(validReturn) ||
       !(group.lost ?? []).every(validLost) ||
       !(group.lostCredit ?? []).every(validLostCredit)
@@ -703,7 +730,18 @@ function conflictsBelongToState(
     if (!group) return false;
     const item = snapshot.inventory.find((candidate) => candidate.id === conflict.itemId);
     if (conflict.scope === 'item')
-      return conflict.code === 'item_archived' ? item?.archived === true : item === undefined;
+      return conflict.code === 'item_archived'
+        ? item?.archived === true
+        : conflict.code === 'wrong_item_kind'
+          ? item !== undefined &&
+            (item.kind === 'consumable'
+              ? !group.issue ||
+                !!group.borrow ||
+                !!group.return ||
+                !!group.lost ||
+                !!group.lostCredit
+              : !!group.issue)
+          : item === undefined;
     if (conflict.scope === 'return') {
       const requested = totalReturn(group.return ?? []);
       const returnable =
@@ -744,6 +782,16 @@ function conflictsBelongToState(
         requested > lost
       );
     }
+    if (conflict.scope === 'issue') {
+      const requested = totalBorrow(group.issue ?? []);
+      return (
+        item?.kind === 'consumable' &&
+        requested === conflict.requested &&
+        item.available === conflict.available &&
+        requested !== null &&
+        requested > item.available
+      );
+    }
     const requested = totalBorrow(group.borrow ?? []);
     const usable = usableReturn(group.return ?? []);
     const lostCredit = safeSum(
@@ -779,6 +827,19 @@ export function operationReducer(state: OperationState, action: OperationAction)
       conflicts: clearDirectionalConflict(state.conflicts, action.itemId, 'borrow'),
       phase: { kind: 'ready', retiredAttemptKey: retiredKey(state.phase) },
       announcement: announcement(state, action.itemId, 'borrow', action.part.quantity, staged),
+    };
+  }
+  if (action.type === 'stage-issue' && editable(state) && validBorrow(action.part)) {
+    const staged = updateGroup(state.staged, action.itemId, (group) => ({
+      ...group,
+      issue: [...(group.issue ?? []), { ...action.part }],
+    }));
+    return {
+      ...state,
+      staged,
+      conflicts: clearDirectionalConflict(state.conflicts, action.itemId, 'issue'),
+      phase: { kind: 'ready', retiredAttemptKey: retiredKey(state.phase) },
+      announcement: `${itemName(state, action.itemId)}: ניפוק, כמות ${action.part.quantity}`,
     };
   }
   if (action.type === 'stage-return' && editable(state) && validReturn(action.part)) {
@@ -868,19 +929,21 @@ export function operationReducer(state: OperationState, action: OperationAction)
     const quantity =
       action.direction === 'borrow'
         ? totalBorrow(group.borrow)
-        : action.direction === 'return'
-          ? totalReturn(group.return)
-          : action.direction === 'usable'
-            ? safeSum(group.return.map((part) => part.usable))
-            : action.direction === 'damaged'
-              ? safeSum(group.return.map((part) => part.damaged))
-              : action.direction === 'lost'
-                ? totalLost(group.lost ?? [])
-                : totalLostCredit(
-                    (group.lostCredit ?? []).filter(
-                      (part) => !action.condition || part.condition === action.condition,
-                    ),
-                  );
+        : action.direction === 'issue'
+          ? totalBorrow(group.issue ?? [])
+          : action.direction === 'return'
+            ? totalReturn(group.return)
+            : action.direction === 'usable'
+              ? safeSum(group.return.map((part) => part.usable))
+              : action.direction === 'damaged'
+                ? safeSum(group.return.map((part) => part.damaged))
+                : action.direction === 'lost'
+                  ? totalLost(group.lost ?? [])
+                  : totalLostCredit(
+                      (group.lostCredit ?? []).filter(
+                        (part) => !action.condition || part.condition === action.condition,
+                      ),
+                    );
     if (quantity === null || quantity === 0) return state;
     const staged = retainNonEmpty(
       updateGroup(state.staged, action.itemId, (entry) => {

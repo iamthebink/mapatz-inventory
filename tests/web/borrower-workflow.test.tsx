@@ -206,6 +206,96 @@ describe('active descendant search', () => {
 });
 
 describe('borrower desk workflow', () => {
+  it('saves a consumable-only card operation without a borrower holding', async () => {
+    const ties = {
+      ...item,
+      id: 13,
+      code: 103,
+      name: 'אזיקונים',
+      kind: 'consumable' as const,
+      available: 5,
+    };
+    let saved = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot')
+          return json({
+            ...desk(saved ? 2 : 1),
+            inventory: [item, { ...ties, available: saved ? 4 : 5 }],
+          });
+        if (path === '/api/borrowers/7/operations') {
+          const body = JSON.parse(String(init.body)) as { items: unknown[] };
+          expect(body.items).toEqual([
+            { itemId: ties.id, issue: [{ quantity: 1, note: 'supplies' }] },
+          ]);
+          saved = true;
+          const key = new Headers(init.headers).get('idempotency-key');
+          return json({ outcome: 'committed', idempotencyKey: key, replayed: false }, 201);
+        }
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    await userEvent.type(screen.getByRole('combobox', { name: 'חיפוש פריט' }), 'אזיקונים');
+    await userEvent.click(await screen.findByRole('option', { name: /אזיקונים/ }));
+    const quantity = screen.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
+    await userEvent.type(
+      within(quantity).getByRole('textbox', { name: 'הערה (רשות)' }),
+      'supplies',
+    );
+    await userEvent.click(within(quantity).getByRole('button', { name: 'אישור' }));
+    await confirmSave();
+    await waitFor(() => expect(saved).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
+    await activateBorrowerAction();
+    expect(screen.queryByRole('rowheader', { name: ties.name })).toBeNull();
+  });
+  it('stages consumables as issuance without projecting borrower holdings', async () => {
+    const ties = {
+      ...item,
+      id: 13,
+      code: 103,
+      name: 'אזיקונים',
+      kind: 'consumable' as const,
+      available: 5,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path === '/api/borrowers/7/desk-snapshot')
+          return json({ ...desk(), inventory: [item, ties] });
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    const search = screen.getByRole('combobox', { name: 'חיפוש פריט' });
+    await userEvent.type(search, 'אזיקונים');
+    await userEvent.click(await screen.findByRole('option', { name: /אזיקונים/ }));
+    const dialog = screen.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
+    expectDialogItem(dialog, ties.name);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+    expect(screen.getByText('ניפוק · מתכלה · 1')).toBeTruthy();
+    expect(screen.queryByRole('rowheader', { name: ties.name })).toBeNull();
+  });
   it('keeps quantities and return actions aligned with their own item across both tables', async () => {
     const secondItem = { ...item, id: 12, code: 102, name: 'מזרן', available: 5 };
     vi.stubGlobal(

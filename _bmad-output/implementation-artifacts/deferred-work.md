@@ -80,3 +80,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-inventory-management.md`
   summary: Decide whether catalog metadata edits require concurrent edit detection.
   evidence: Metadata-only item saves use last-writer-wins as before this change. The stock snapshot protects changed absolute counts, but does not detect concurrent name, alias, package-size or location edits.
+- source_spec: `_bmad-output/implementation-artifacts/spec-consumable-disbursement.md`
+  summary: Validate whether borrower-card consumable issuance needs explicit anonymity copy.
+  evidence: The card labels the action as consumable issuance and keeps it out of holdings, but an operator might still infer recipient attribution from the card context. A brief operator usability check would settle whether extra copy is needed.

@@ -252,6 +252,102 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
   ).toBe(1);
 });
 
+test('issues consumables anonymously from a mixed borrower handover and a desk batch', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  await openSeededCard(page, seed.borrower.username);
+  await stageBorrow(page, seed.stockItem.name);
+  const search = page.getByRole('combobox', { name: 'חיפוש פריט' });
+  await search.fill(seed.consumable.name);
+  await expect(page.getByRole('option', { name: new RegExp(seed.consumable.name) })).toContainText(
+    'מתכלה',
+  );
+  await search.press('ArrowDown');
+  await search.press('Enter');
+  const quantity = page.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
+  await expectQuantityDialogItem(quantity, seed.consumable.name);
+  await quantity.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await quantity.getByRole('textbox', { name: 'הערה (רשות)' }).fill('card supplies');
+  await quantity.getByRole('button', { name: 'אישור' }).click();
+  await expect(page.getByText('ניפוק · מתכלה · 2')).toBeVisible();
+  await confirmSave(page);
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
+
+  await expect(page.getByRole('link', { name: 'ציוד מתכלה' })).toHaveCount(0);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.getByRole('button', { name: 'ניפוק ציוד מתכלה' }).click();
+  const batch = page.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
+  const bounds = await batch.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+  for (const name of [seed.consumable.name, seed.secondConsumable.name]) {
+    const itemSearch = batch.getByRole('combobox', { name: 'פריט מתכלה' });
+    await itemSearch.fill(name);
+    await page.getByRole('option', { name: new RegExp(name) }).click();
+    await batch.getByRole('button', { name: 'הוספה לרשימה' }).click();
+  }
+  await batch.getByRole('spinbutton', { name: `כמות ${seed.secondConsumable.name}` }).fill('2');
+  await batch.getByRole('button', { name: 'בדיקה ואישור' }).click();
+  await page.getByRole('button', { name: 'אישור ניפוק' }).click();
+  await expect(batch).toBeHidden();
+
+  const database = openLedger();
+  const issued = rows<{
+    item_id: number;
+    borrower_id: number | null;
+    related_event_id: number | null;
+    quantity: number;
+    note: string;
+  }>(
+    database,
+    "SELECT item_id,borrower_id,related_event_id,quantity,note FROM inventory_events WHERE kind='issued' AND item_id IN (?,?) ORDER BY id",
+    seed.consumable.id,
+    seed.secondConsumable.id,
+  );
+  expect(issued).toEqual([
+    {
+      item_id: seed.consumable.id,
+      borrower_id: null,
+      related_event_id: null,
+      quantity: 2,
+      note: 'card supplies',
+    },
+    {
+      item_id: seed.consumable.id,
+      borrower_id: null,
+      related_event_id: null,
+      quantity: 1,
+      note: '',
+    },
+    {
+      item_id: seed.secondConsumable.id,
+      borrower_id: null,
+      related_event_id: null,
+      quantity: 2,
+      note: '',
+    },
+  ]);
+  expect(
+    rows<{ item_id: number }>(
+      database,
+      "SELECT item_id FROM inventory_events WHERE kind='checked_out' AND borrower_id=? AND item_id=?",
+      seed.borrower.id,
+      seed.stockItem.id,
+    ),
+  ).toHaveLength(1);
+  expect(
+    rows<{ item_id: number }>(
+      database,
+      "SELECT item_id FROM inventory_events WHERE kind='checked_out' AND item_id IN (?,?)",
+      seed.consumable.id,
+      seed.secondConsumable.id,
+    ),
+  ).toHaveLength(0);
+});
+
 test('stages loss and dependent found return from the borrower card with keyboard review', async ({
   page,
   seed,

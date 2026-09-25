@@ -13,6 +13,84 @@ afterEach(() => {
 });
 
 describe('inventory domain', () => {
+  it('issues an atomic anonymous batch and replays committed and rejected outcomes', () => {
+    const db = openDatabase(':memory:');
+    try {
+      const inventory = new InventoryService(db);
+      const first = inventory.createItem({ name: 'Tape', kind: 'consumable' });
+      const second = inventory.createItem({ name: 'Ties', kind: 'consumable' });
+      inventory.addStock(first.id, 3);
+      inventory.addStock(second.id, 2);
+      const input = {
+        key: crypto.randomUUID(),
+        ledgerEpoch: 1,
+        items: [
+          { itemId: first.id, quantity: 2, note: 'desk' },
+          { itemId: second.id, quantity: 1, note: '' },
+        ],
+      };
+      expect(inventory.issueBatch(input)).toMatchObject({ outcome: 'committed', replayed: false });
+      expect(inventory.issueBatch(input)).toMatchObject({ outcome: 'committed', replayed: true });
+      expect(
+        db
+          .prepare(
+            "SELECT item_id itemId, borrower_id borrowerId, related_event_id checkoutId FROM inventory_events WHERE kind='issued' ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        { itemId: first.id, borrowerId: null, checkoutId: null },
+        { itemId: second.id, borrowerId: null, checkoutId: null },
+      ]);
+      const shortage = {
+        ...input,
+        key: crypto.randomUUID(),
+        items: [
+          { itemId: first.id, quantity: 2, note: '' },
+          { itemId: second.id, quantity: 2, note: '' },
+        ],
+      };
+      expect(inventory.issueBatch(shortage)).toMatchObject({
+        outcome: 'rejected',
+        conflicts: [
+          { itemId: first.id, code: 'insufficient_stock' },
+          { itemId: second.id, code: 'insufficient_stock' },
+        ],
+      });
+      expect(
+        db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='issued'").get(),
+      ).toEqual({ count: 2 });
+      expect(inventory.issueBatch(shortage)).toMatchObject({ outcome: 'rejected', replayed: true });
+      const repeated = {
+        key: crypto.randomUUID(),
+        ledgerEpoch: 1,
+        items: [
+          { itemId: first.id, quantity: 1, note: '' },
+          { itemId: first.id, quantity: 1, note: '' },
+        ],
+      };
+      expect(inventory.issueBatch(repeated)).toMatchObject({
+        outcome: 'rejected',
+        conflicts: [{ itemId: first.id, code: 'insufficient_stock', available: 1 }],
+      });
+      const tool = inventory.createItem({ name: 'Hammer', kind: 'non_consumable' });
+      inventory.addStock(tool.id, 2);
+      expect(
+        inventory.issueBatch({
+          key: crypto.randomUUID(),
+          ledgerEpoch: 1,
+          items: [{ itemId: tool.id, quantity: 1, note: '' }],
+        }),
+      ).toMatchObject({
+        outcome: 'rejected',
+        conflicts: [{ itemId: tool.id, code: 'wrong_item_kind' }],
+      });
+      expect(
+        db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='issued'").get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      db.close();
+    }
+  });
   it('adds the recoverable credential column to an existing version-7 profile', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-password-migration-'));
     cleanup.push(directory);

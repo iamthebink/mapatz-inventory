@@ -514,6 +514,107 @@ export function sendBorrowerCreateCommand(context: {
   );
 }
 
+export type ConsumableBatchRequest = {
+  ledgerEpoch: number;
+  items: Array<{ itemId: number; quantity: number; note: string }>;
+};
+export type ConsumableBatchResult = {
+  outcome: 'committed' | 'rejected';
+  idempotencyKey: string;
+  replayed: boolean;
+  conflicts: Array<{
+    itemId: number;
+    code: 'item_not_found' | 'item_archived' | 'wrong_item_kind' | 'insufficient_stock';
+    available?: number;
+  }>;
+};
+
+export async function sendConsumableBatchCommand(context: {
+  idempotencyKey: string;
+  request: ConsumableBatchRequest;
+}): Promise<
+  | CommandClassification<ConsumableBatchResult>
+  | { kind: 'stale' }
+  | { kind: 'protocol-rejected' }
+  | { kind: 'key-conflict' }
+> {
+  try {
+    const response = await fetch('/api/issue-batch', {
+      method: 'POST',
+      headers: commandHeaders({ 'Idempotency-Key': context.idempotencyKey }),
+      body: JSON.stringify(context.request),
+    });
+    if (response.status === 401 || response.status === 403) {
+      window.dispatchEvent(new Event('mapatz-auth-stale'));
+      return { kind: 'authorization', status: response.status };
+    }
+    if (response.status >= 500)
+      return { kind: 'ambiguous', reason: 'server', status: response.status };
+    const body = await parseCommandBody(response);
+    if (
+      response.status === 409 &&
+      isObject(body) &&
+      exactKeys(body, ['error', 'message']) &&
+      body.error === 'stale_ledger' &&
+      isString(body.message)
+    )
+      return { kind: 'stale' };
+    if (
+      response.status === 400 &&
+      isObject(body) &&
+      exactKeys(body, ['error', 'message', 'fieldErrors']) &&
+      body.error === 'validation_error' &&
+      isString(body.message) &&
+      validFieldErrors(body.fieldErrors)
+    )
+      return { kind: 'protocol-rejected' };
+    if (
+      response.status === 409 &&
+      isObject(body) &&
+      exactKeys(body, ['error', 'message']) &&
+      body.error === 'idempotency_conflict' &&
+      isString(body.message)
+    )
+      return { kind: 'key-conflict' };
+    if (
+      !isObject(body) ||
+      !isCommandUuid(context.idempotencyKey) ||
+      body.idempotencyKey !== context.idempotencyKey ||
+      !isBoolean(body.replayed) ||
+      !Array.isArray(body.conflicts) ||
+      !exactKeys(body, ['outcome', 'idempotencyKey', 'replayed', 'conflicts'])
+    )
+      return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
+    if (body.outcome !== 'committed' && body.outcome !== 'rejected')
+      return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
+    if (response.status !== (body.outcome === 'committed' ? 201 : 409))
+      return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
+    if (body.outcome === 'committed' && body.conflicts.length !== 0)
+      return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
+    if (body.outcome === 'rejected' && body.conflicts.length === 0)
+      return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
+    if (
+      !body.conflicts.every(
+        (conflict) =>
+          isObject(conflict) &&
+          isSafePositive(conflict.itemId) &&
+          context.request.items.some((item) => item.itemId === conflict.itemId) &&
+          ['item_not_found', 'item_archived', 'wrong_item_kind', 'insufficient_stock'].includes(
+            String(conflict.code),
+          ) &&
+          (conflict.code === 'insufficient_stock'
+            ? exactKeys(conflict, ['itemId', 'code', 'available']) &&
+              isSafeNonNegative(conflict.available)
+            : exactKeys(conflict, ['itemId', 'code'])),
+      )
+    )
+      return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
+    return { kind: 'definitive', status: response.status, result: body as ConsumableBatchResult };
+  } catch {
+    return { kind: 'ambiguous', reason: 'network' };
+  }
+}
+
 export const sendFrozenBorrowerAttempt: FrozenTransport = (attempt: FrozenAttempt) =>
   attempt.kind === 'operation'
     ? sendBorrowerOperationCommand({

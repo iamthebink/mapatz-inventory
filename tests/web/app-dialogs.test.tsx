@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/web/App';
@@ -27,9 +27,13 @@ const response = (body: unknown, status = 200) =>
     status,
     headers: { 'content-type': 'application/json' },
   });
-function setup(role: 'admin' | 'operator' = 'admin') {
+function setup(
+  role: 'admin' | 'operator' = 'admin',
+  startPath = '/management',
+  initialItems: Item[] = [hammer],
+) {
   let currentRole = role;
-  let items: Item[] = [hammer];
+  let items: Item[] = initialItems;
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
@@ -91,7 +95,7 @@ function setup(role: 'admin' | 'operator' = 'admin') {
     }
     throw new Error(`Unexpected request: ${method} ${path}`);
   });
-  window.history.replaceState({}, '', '/management');
+  window.history.replaceState({}, '', startPath);
   const user = userEvent.setup();
   render(
     <DialogStackProvider>
@@ -106,6 +110,36 @@ afterEach(() => {
 });
 
 describe('inventory management in App', () => {
+  it('guards a dirty desk batch across navigation and popstate until explicit discard', async () => {
+    const tape: Item = {
+      ...hammer,
+      id: 20,
+      code: 120,
+      name: 'סרט',
+      kind: 'consumable',
+      available: 5,
+      borrowed: 0,
+      lost: 0,
+      damaged: 0,
+    };
+    const { user } = setup('operator', '/', [hammer, tape]);
+    await user.click(await screen.findByRole('button', { name: 'ניפוק ציוד מתכלה' }));
+    const dialog = screen.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
+    await user.type(within(dialog).getByRole('combobox', { name: 'פריט מתכלה' }), 'סרט');
+    await user.click(await screen.findByRole('option', { name: /סרט/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'הוספה לרשימה' }));
+    fireEvent.click(screen.getByRole('link', { name: 'סיכום', hidden: true }));
+    expect(await screen.findByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/');
+    await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
+    expect(within(dialog).getAllByText('סרט').length).toBeGreaterThan(0);
+    window.history.replaceState({}, '', '/summary');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(await screen.findByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/');
+    await user.click(screen.getByRole('button', { name: 'מחיקת טיוטה' }));
+    expect(window.location.pathname).toBe('/summary');
+  });
   it('keeps radio custody and count settings reachable after the merge', async () => {
     const { user } = setup('operator');
     await screen.findByRole('tab', { name: /מלאי ומיקומים/ });

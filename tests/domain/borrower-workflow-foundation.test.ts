@@ -441,7 +441,7 @@ describe('borrower workflow persistence foundation', () => {
     const first = inventory.createItem({ name: 'First', kind: 'non_consumable' });
     const lostOnly = inventory.createItem({ name: 'Lost only', kind: 'non_consumable' });
     const returned = inventory.createItem({ name: 'Returned', kind: 'non_consumable' });
-    inventory.createItem({ name: 'Excluded consumable', kind: 'consumable' });
+    const consumable = inventory.createItem({ name: 'Consumable', kind: 'consumable' });
     inventory.createItem({ name: 'Excluded camp item', kind: 'camp_equipment' });
     for (const item of [first, lostOnly, returned]) inventory.addStock(item.id, 10);
 
@@ -469,6 +469,8 @@ describe('borrower workflow persistence foundation', () => {
       { code: first.code, kind: 'non_consumable', selectable: true },
       { code: lostOnly.code, kind: 'non_consumable', selectable: false },
       { code: returned.code, kind: 'non_consumable', selectable: true },
+      { code: consumable.code, kind: 'consumable', selectable: true },
+      { code: unrelated.code, kind: 'consumable', selectable: true },
     ]);
     expect(snapshot.holdings).toEqual([
       { itemId: first.id, returnable: 2, lost: 2 },

@@ -28,6 +28,16 @@ app.post('/__e2e__/seed', (_request, response) => {
     aliases: [`stock-${sequence}`],
   });
   inventory.addStock(stockItem.id, 3, 'e2e seed');
+  const consumable = inventory.createItem({
+    name: `מתכלה בדיקה ${sequence}`,
+    kind: 'consumable',
+  });
+  inventory.addStock(consumable.id, 5, 'e2e seed');
+  const secondConsumable = inventory.createItem({
+    name: `מתכלה נוסף ${sequence}`,
+    kind: 'consumable',
+  });
+  inventory.addStock(secondConsumable.id, 4, 'e2e seed');
   const borrower = inventory.createBorrower({
     username: `e2e-${sequence}`,
     name: `שואל בדיקה ${sequence}`,
@@ -54,7 +64,16 @@ app.post('/__e2e__/seed', (_request, response) => {
     type: 'individual',
   });
   inventory.archiveBorrower(archivedBorrower.id, true);
-  response.json({ borrower, item, stockItem, archiveItem, archivedBorrower, checkoutId });
+  response.json({
+    borrower,
+    item,
+    stockItem,
+    consumable,
+    secondConsumable,
+    archiveItem,
+    archivedBorrower,
+    checkoutId,
+  });
 });
 app.post('/__e2e__/period-summary/history/:borrowerId/:itemId', (request, response) => {
   const today = todayInIsrael();

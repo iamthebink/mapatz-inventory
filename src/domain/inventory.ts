@@ -685,6 +685,9 @@ export class InventoryService {
       for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
         for (const part of group.borrow ?? [])
           this.append('checked_out', group.itemId, part.quantity, borrowerId, null, part.note);
+      for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
+        for (const part of group.issue ?? [])
+          this.append('issued', group.itemId, part.quantity, null, null, part.note);
 
       const result: BorrowerOperationResult = {
         outcome: 'committed',
@@ -903,6 +906,89 @@ export class InventoryService {
         throw new DomainError('wrong_item_kind', 'Only consumables can be issued');
       this.requireAvailable(itemId, quantity);
       return this.append('issued', itemId, quantity, null, null, note);
+    });
+  }
+
+  issueBatch(input: {
+    key: string;
+    ledgerEpoch: number;
+    items: Array<{ itemId: number; quantity: number; note: string }>;
+  }): {
+    outcome: 'committed' | 'rejected';
+    idempotencyKey: string;
+    replayed: boolean;
+    conflicts: Array<{
+      itemId: number;
+      code: 'item_not_found' | 'item_archived' | 'wrong_item_kind' | 'insufficient_stock';
+      available?: number;
+    }>;
+  } {
+    if (
+      input.items.length === 0 ||
+      input.items.some(
+        (part) =>
+          !Number.isSafeInteger(part.itemId) ||
+          part.itemId < 1 ||
+          !Number.isSafeInteger(part.quantity) ||
+          part.quantity < 1 ||
+          typeof part.note !== 'string' ||
+          part.note.length > 500,
+      )
+    )
+      throw new DomainError('validation_error', 'Invalid consumable batch');
+    const hash = createHash('sha256').update(stableJson(input)).digest('hex');
+    return transaction(this.db, () => {
+      const receipt = this.db
+        .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
+        .get(input.key) as Row | undefined;
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return {
+          ...(JSON.parse(String(receipt.result_json)) as ReturnType<
+            InventoryService['issueBatch']
+          >),
+          replayed: true,
+        };
+      }
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const totals = new Map<number, number>();
+      for (const part of input.items)
+        totals.set(part.itemId, (totals.get(part.itemId) ?? 0) + part.quantity);
+      const conflicts: ReturnType<InventoryService['issueBatch']>['conflicts'] = [];
+      for (const [itemId, quantity] of totals) {
+        if (!Number.isSafeInteger(quantity))
+          throw new DomainError('validation_error', 'Invalid quantity');
+        let item: Item;
+        try {
+          item = this.getItem(itemId);
+        } catch (error) {
+          if (error instanceof DomainError && error.code === 'not_found') {
+            conflicts.push({ itemId, code: 'item_not_found' });
+            continue;
+          }
+          throw error;
+        }
+        if (item.archived) conflicts.push({ itemId, code: 'item_archived' });
+        else if (item.kind !== 'consumable') conflicts.push({ itemId, code: 'wrong_item_kind' });
+        else if (quantity > item.available)
+          conflicts.push({ itemId, code: 'insufficient_stock', available: item.available });
+      }
+      if (conflicts.length === 0)
+        for (const part of input.items)
+          this.append('issued', part.itemId, part.quantity, null, null, part.note);
+      const result = {
+        outcome: conflicts.length ? ('rejected' as const) : ('committed' as const),
+        idempotencyKey: input.key,
+        replayed: false,
+        conflicts,
+      };
+      this.db
+        .prepare(
+          'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
+        )
+        .run(input.key, hash, JSON.stringify(result));
+      return result;
     });
   }
 
@@ -1224,7 +1310,26 @@ export class InventoryService {
         conflicts.push({ scope: 'item', code: 'item_archived', itemId: group.itemId });
         continue;
       }
-      if (item.kind !== 'non_consumable') {
+      if (
+        item.kind === 'consumable' &&
+        group.issue?.length &&
+        !group.borrow &&
+        !group.return &&
+        !group.lost &&
+        !group.lostCredit
+      ) {
+        const requested = (group.issue ?? []).reduce((total, part) => total + part.quantity, 0);
+        if (requested > item.available)
+          conflicts.push({
+            scope: 'issue',
+            code: 'insufficient_stock',
+            itemId: group.itemId,
+            requested,
+            available: item.available,
+          });
+        continue;
+      }
+      if (item.kind !== 'non_consumable' || group.issue) {
         conflicts.push({ scope: 'item', code: 'wrong_item_kind', itemId: group.itemId });
         continue;
       }
@@ -1562,7 +1667,7 @@ export class InventoryService {
       COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
       COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
       COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot
-          FROM items i WHERE i.kind='non_consumable' ORDER BY i.code`,
+          FROM items i WHERE i.kind IN ('non_consumable','consumable') ORDER BY i.code`,
         )
         .all() as Row[]
     ).map((row) => {

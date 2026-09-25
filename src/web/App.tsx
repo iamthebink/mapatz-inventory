@@ -1,14 +1,6 @@
 import { desktop } from './desktop';
 import { BorrowerImportDialog } from './BorrowerImportDialog';
-import {
-  FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Archive,
   BookOpen,
@@ -18,7 +10,6 @@ import {
   Eye,
   EyeOff,
   KeyRound,
-  PackageOpen,
   CalendarDays,
   Pencil,
   Radio,
@@ -36,7 +27,6 @@ import {
   AdminPasswordDialog,
   AdminRecoveryDialog,
 } from './AdminMode';
-import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
 import {
   ApiError,
   api,
@@ -55,6 +45,7 @@ import {
 } from './InventoryDialogs';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
+import { ConsumableBatchDialog } from './ConsumableBatchDialog';
 import { PeriodSummary } from './PeriodSummary';
 import { InventoryManagement } from './InventoryManagement';
 import { Radios } from './Radios';
@@ -72,13 +63,12 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger' | 'radios';
+type Tab = 'desk' | 'summary' | 'catalogs' | 'ledger' | 'radios';
 type ManagementTab = 'inventory' | 'borrowers' | 'data' | 'access';
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   desk: { path: '/', aliases: ['/frontdesk'] },
   summary: { path: '/summary' },
-  issue: { path: '/consumables' },
   ledger: { path: '/ledger' },
   catalogs: { path: '/management' },
   radios: { path: '/radios' },
@@ -117,7 +107,6 @@ const ledgerEventName = (event: LedgerEvent) =>
     : (eventNames[event.kind] ?? event.kind);
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
-  { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'radios', label: 'מכשירי קשר', icon: Radio },
   { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
@@ -135,9 +124,6 @@ const managementNavigation: {
   { key: 'access', label: 'הרשאות והגדרות', description: 'סיסמאות ומכשירי קשר', icon: ShieldCheck },
 ];
 
-function number(form: FormData, name: string): number {
-  return Number(form.get(name));
-}
 function join(...values: (string | number | null | undefined)[]) {
   return values.filter((value) => value != null).join(' ');
 }
@@ -156,9 +142,6 @@ export function App() {
   const [workflowStartup, setWorkflowStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [summaryReturnRevision, setSummaryReturnRevision] = useState(0);
   const [managementTab, setManagementTab] = useState<ManagementTab>('inventory');
-  const [issueQuery, setIssueQuery] = useState('');
-  const [selectedIssueItemId, setSelectedIssueItemId] = useState<number | null>(null);
-  const [issueItemInvalid, setIssueItemInvalid] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
@@ -180,9 +163,15 @@ export function App() {
   const imminentAnnouncedRef = useRef(false);
   const resetFileRef = useRef<HTMLInputElement>(null);
   const recoveryFileRef = useRef<HTMLInputElement>(null);
-  const issueItemRef = useRef<HTMLInputElement>(null);
   const borrowerWorkflowRef = useRef<BorrowerWorkflowHandle>(null);
   const inventoryLeaveGuardRef = useRef<((continueNavigation: () => void) => boolean) | null>(null);
+  const batchLeaveGuardRef = useRef<((continueNavigation: () => void) => boolean) | null>(null);
+  const registerBatchLeaveGuard = useCallback(
+    (guard: ((continueNavigation: () => void) => boolean) | null) => {
+      batchLeaveGuardRef.current = guard;
+    },
+    [],
+  );
   const registerInventoryLeaveGuard = useCallback(
     (guard: ((continueNavigation: () => void) => boolean) | null) => {
       inventoryLeaveGuardRef.current = guard;
@@ -212,6 +201,13 @@ export function App() {
 
   const navigateToTab = useCallback(
     (nextTab: Tab) => {
+      if (
+        tabRef.current === 'desk' &&
+        nextTab !== 'desk' &&
+        batchLeaveGuardRef.current &&
+        !batchLeaveGuardRef.current(() => performNavigation(nextTab))
+      )
+        return;
       if (
         tabRef.current === 'catalogs' &&
         nextTab !== 'catalogs' &&
@@ -294,6 +290,19 @@ export function App() {
     const syncTabToLocation = () => {
       const nextTab = tabFromPath(window.location.pathname);
       if (nextTab) {
+        if (
+          tabRef.current === 'desk' &&
+          nextTab !== 'desk' &&
+          batchLeaveGuardRef.current &&
+          !batchLeaveGuardRef.current(() => performNavigation(nextTab))
+        ) {
+          window.history.replaceState(
+            { ...window.history.state, mapatzTab: 'desk' },
+            '',
+            tabRoutes.desk.path,
+          );
+          return;
+        }
         if (
           tabRef.current === 'catalogs' &&
           nextTab !== 'catalogs' &&
@@ -410,43 +419,6 @@ export function App() {
     if (activeDialog.kind === 'import') clearImportInput(activeDialog.mode);
     setActiveDialog(null);
   }, [activeDialog, clearImportInput, isAdmin]);
-  const issueItemOptions = useMemo<ComboboxOption<Item>[]>(
-    () =>
-      items
-        .filter(
-          (item) =>
-            !item.archived &&
-            item.kind === 'consumable' &&
-            item.available > 0 &&
-            join(item.code, item.name, ...item.aliases)
-              .toLocaleLowerCase('he')
-              .includes(issueQuery.trim().toLocaleLowerCase('he')),
-        )
-        .map((item) => ({
-          id: `issue-item-option-${item.id}`,
-          value: item,
-          label: (
-            <>
-              <bdi dir="ltr">{item.code}</bdi> — {item.name}
-            </>
-          ),
-          description: `זמין: ${item.available}`,
-        })),
-    [issueQuery, items],
-  );
-  useEffect(() => {
-    if (selectedIssueItemId == null) return;
-    const selectedItem = items.find((item) => item.id === selectedIssueItemId);
-    if (
-      selectedItem &&
-      !selectedItem.archived &&
-      selectedItem.kind === 'consumable' &&
-      selectedItem.available > 0
-    )
-      return;
-    setSelectedIssueItemId(null);
-    setIssueQuery('');
-  }, [items, selectedIssueItemId]);
   useEffect(
     () =>
       desktop?.onCloseRequest(() => {
@@ -454,9 +426,17 @@ export function App() {
           showToast('הפעולה מוגנת', 'יש להמתין לסיום הפעולה.', 'warning');
           return;
         }
-        if (borrowerWorkflowRef.current)
-          borrowerWorkflowRef.current.requestNavigation(() => desktop?.approveClose());
-        else desktop?.approveClose();
+        const complete = () =>
+          borrowerWorkflowRef.current
+            ? borrowerWorkflowRef.current.requestNavigation(() => desktop?.approveClose())
+            : desktop?.approveClose();
+        if (
+          tabRef.current === 'desk' &&
+          batchLeaveGuardRef.current &&
+          !batchLeaveGuardRef.current(complete)
+        )
+          return;
+        complete();
       }),
     [showToast],
   );
@@ -773,6 +753,15 @@ export function App() {
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'radios' && <Radios active showToast={showToast} />}
+        {tab === 'desk' && (
+          <ConsumableBatchDialog
+            items={items}
+            ledgerEpoch={inventoryEpoch}
+            refresh={refresh}
+            showToast={showToast}
+            registerLeaveGuard={registerBatchLeaveGuard}
+          />
+        )}
         {(tab === 'desk' || tab === 'summary') && (
           <div hidden={tab !== 'desk'}>
             <BorrowerWorkflow
@@ -809,67 +798,6 @@ export function App() {
             )
           }
         />
-        {tab === 'issue' && (
-          <PageSection title="ציוד מתכלה" description="ניפוק ציוד מתכלה מהמלאי" icon={PackageOpen}>
-            <div className="grid gap-4">
-              <ActionCard
-                title="ניפוק מתכלה"
-                description="הוצאה קבועה מהמלאי"
-                icon={PackageOpen}
-                disabled={pending}
-                onSubmit={(form) => {
-                  if (selectedIssueItemId == null) {
-                    setIssueItemInvalid(true);
-                    showToast('ניפוק מתכלה', 'יש לבחור פריט מהרשימה', 'warning');
-                    queueMicrotask(() => issueItemRef.current?.focus());
-                    return false;
-                  }
-                  return action('ניפוק מתכלה', () =>
-                    api('/issue', {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        itemId: selectedIssueItemId,
-                        quantity: number(form, 'quantity'),
-                        note: form.get('note'),
-                      }),
-                    }),
-                  ).then((completed) => {
-                    if (!completed) return false;
-                    setIssueQuery('');
-                    setSelectedIssueItemId(null);
-                    setIssueItemInvalid(false);
-                    return true;
-                  });
-                }}
-              >
-                <div className="issue-item-search">
-                  <ActiveDescendantCombobox
-                    label="פריט"
-                    value={issueQuery}
-                    onChange={(value) => {
-                      setIssueQuery(value);
-                      setSelectedIssueItemId(null);
-                      setIssueItemInvalid(false);
-                    }}
-                    options={issueItemOptions}
-                    onSelect={(item) => {
-                      setSelectedIssueItemId(item.id);
-                      setIssueQuery(item.name);
-                      setIssueItemInvalid(false);
-                    }}
-                    placeholder="שם, כינוי או קוד"
-                    disabled={pending}
-                    invalid={issueItemInvalid}
-                    openOnFocus
-                    inputRef={issueItemRef}
-                  />
-                </div>
-                <Quantity />
-                <Note />
-              </ActionCard>
-            </div>
-          </PageSection>
-        )}
         {tab === 'catalogs' && (
           <PageSection
             title="ניהול"
@@ -1302,12 +1230,6 @@ function PasswordField({
       </span>
     </label>
   );
-}
-function Quantity() {
-  return <Field name="quantity" label="כמות" type="number" />;
-}
-function Note({ label = 'הערה (רשות)' }: { label?: string }) {
-  return <Field name="note" label={label} required={false} />;
 }
 function PermissionNote({
   text = 'המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.',

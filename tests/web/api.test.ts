@@ -12,6 +12,7 @@ import {
   fetchBorrowerDeskSnapshot,
   fetchBorrowerSearch,
   sendBorrowerOperationCommand,
+  sendConsumableBatchCommand,
   sendClassifiedCommand,
 } from '../../src/web/api.js';
 
@@ -549,6 +550,28 @@ describe('generic api compatibility', () => {
 });
 
 describe('borrower workflow transport', () => {
+  it('classifies definitive batch transport rejections without freezing retry', async () => {
+    const request = { ledgerEpoch: 3, items: [{ itemId: 11, quantity: 1, note: '' }] };
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          json(400, {
+            error: 'validation_error',
+            message: 'invalid',
+            fieldErrors: [{ field: 'items[0]', code: 'custom', message: 'invalid' }],
+          }),
+        )
+        .mockResolvedValueOnce(json(409, { error: 'idempotency_conflict', message: 'reused' })),
+    );
+    await expect(sendConsumableBatchCommand({ idempotencyKey: key, request })).resolves.toEqual({
+      kind: 'protocol-rejected',
+    });
+    await expect(sendConsumableBatchCommand({ idempotencyKey: key, request })).resolves.toEqual({
+      kind: 'key-conflict',
+    });
+  });
   it('runtime-validates search and card truth before exposing it', async () => {
     vi.stubGlobal(
       'fetch',

@@ -55,6 +55,10 @@ const borrowerOperationInput = z
               .array(z.object({ quantity: safePositive, note }).strict())
               .min(1)
               .optional(),
+            issue: z
+              .array(z.object({ quantity: safePositive, note }).strict())
+              .min(1)
+              .optional(),
             return: z
               .array(
                 z
@@ -91,6 +95,7 @@ const borrowerOperationInput = z
           .refine(
             (group) =>
               group.borrow !== undefined ||
+              group.issue !== undefined ||
               group.return !== undefined ||
               group.lost !== undefined ||
               group.lostCredit !== undefined,
@@ -105,6 +110,7 @@ const borrowerOperationInput = z
   .superRefine((request, context) => {
     const seen = new Set<number>();
     const commandBorrow: number[] = [];
+    const commandIssue: number[] = [];
     const commandReturn: number[] = [];
     const commandHeld: number[] = [];
     const commandUsable: number[] = [];
@@ -119,6 +125,7 @@ const borrowerOperationInput = z
         });
       seen.add(group.itemId);
       const borrow = (group.borrow ?? []).map((part) => part.quantity);
+      const issue = (group.issue ?? []).map((part) => part.quantity);
       const returned = (group.return ?? []).map((part) => part.usable + part.damaged);
       const usable = (group.return ?? []).map((part) => part.usable);
       const lost = (group.lost ?? []).map((part) => part.quantity);
@@ -134,6 +141,7 @@ const borrowerOperationInput = z
       });
       for (const [values, path, message] of [
         [borrow, 'borrow', 'Per-item borrow total must be a safe integer'],
+        [issue, 'issue', 'Per-item issue total must be a safe integer'],
         [returned, 'return', 'Per-item return total must be a safe integer'],
         [usable, 'return', 'Per-item usable-return total must be a safe integer'],
         [lost, 'lost', 'Per-item lost total must be a safe integer'],
@@ -148,6 +156,7 @@ const borrowerOperationInput = z
           message: 'Per-item held-consumption total must be a safe integer',
         });
       commandBorrow.push(...borrow);
+      commandIssue.push(...issue);
       commandReturn.push(...returned);
       commandHeld.push(...held);
       commandUsable.push(...usable);
@@ -156,6 +165,7 @@ const borrowerOperationInput = z
     });
     for (const [values, message] of [
       [commandBorrow, 'Command borrow total must be a safe integer'],
+      [commandIssue, 'Command issue total must be a safe integer'],
       [commandReturn, 'Command return total must be a safe integer'],
       [commandHeld, 'Command held-consumption total must be a safe integer'],
       [commandUsable, 'Command usable-return total must be a safe integer'],
@@ -732,6 +742,28 @@ export function apiRouter(
         req.body,
       );
       res.status(201).json({ eventId: service.addStock(body.itemId, body.quantity, body.note) });
+    }),
+  );
+  api.post(
+    '/issue-batch',
+    requireRole('operator', 'admin'),
+    commandJson,
+    route((req, res) => {
+      const parsed = parseCommand(
+        z
+          .object({
+            ledgerEpoch: safePositive,
+            items: z
+              .array(z.object({ itemId: safePositive, quantity: safePositive, note }).strict())
+              .min(1),
+          })
+          .strict(),
+        req.body,
+        req.header('Idempotency-Key'),
+      );
+      if ('error' in parsed) return void res.status(400).json(parsed.error);
+      const result = service.issueBatch({ key: parsed.key, ...parsed.data });
+      res.status(result.outcome === 'committed' ? 201 : 409).json(result);
     }),
   );
   api.post(

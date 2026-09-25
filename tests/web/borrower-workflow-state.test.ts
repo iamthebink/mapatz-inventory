@@ -60,6 +60,46 @@ function deepFreeze<T>(value: T): T {
 }
 
 describe('borrower operation state', () => {
+  it('keeps consumable issuance out of holdings and fails closed on unsafe issue totals', () => {
+    const consumable = {
+      ...snapshot().inventory[0]!,
+      id: 12,
+      code: 102,
+      name: 'Ties',
+      kind: 'consumable' as const,
+      available: 5,
+    };
+    const base = snapshot({ inventory: [...snapshot().inventory, consumable] });
+    expect(
+      isBorrowerDeskSnapshot({
+        ...base,
+        holdings: [...base.holdings, { itemId: consumable.id, returnable: 1, lost: 0 }],
+      }),
+    ).toBe(false);
+    let state = createOperationState(7, base);
+    state = operationReducer(state, {
+      type: 'stage-issue',
+      itemId: consumable.id,
+      part: { quantity: 2, note: 'supplies' },
+    });
+    expect(projectItem(state, consumable.id)).toMatchObject({
+      projectedHeld: 0,
+      projectedAvailability: 3,
+      compatible: true,
+    });
+    expect(operationRequest(state).items).toContainEqual({
+      itemId: consumable.id,
+      issue: [{ quantity: 2, note: 'supplies' }],
+    });
+    expect(canSave(state)).toBe(true);
+    state = operationReducer(state, {
+      type: 'stage-issue',
+      itemId: consumable.id,
+      part: { quantity: Number.MAX_SAFE_INTEGER, note: '' },
+    });
+    expect(projectItem(state, consumable.id)?.compatible).toBe(false);
+    expect(canSave(state)).toBe(false);
+  });
   it('moves staged loss between held and lost, funds recovery, and protects dependency rollback', () => {
     let state = createOperationState(7, snapshot());
     state = operationReducer(state, {

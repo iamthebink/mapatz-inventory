@@ -40,6 +40,79 @@ function transactionCountingDatabase(db: InventoryDatabase) {
 }
 
 describe('atomic borrower commands', () => {
+  it('commits mixed loans and anonymous issuance once, and rejects a stale mixed request atomically', () => {
+    const { db, inventory, borrower } = fixture();
+    const pliers = inventory.createItem({ name: 'Pliers', kind: 'non_consumable' });
+    const ties = inventory.createItem({ name: 'Zip ties', kind: 'consumable' });
+    inventory.addStock(pliers.id, 2);
+    inventory.addStock(ties.id, 4);
+    const body: BorrowerOperationRequest = {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [
+        { itemId: pliers.id, borrow: [{ quantity: 1, note: 'tool' }] },
+        { itemId: ties.id, issue: [{ quantity: 3, note: 'supplies' }] },
+      ],
+    };
+    const committed = inventory.commitBorrowerOperations(borrower.id, key(910), body);
+    expect(committed).toMatchObject({ outcome: 'committed', replayed: false });
+    expect(inventory.commitBorrowerOperations(borrower.id, key(910), body)).toMatchObject({
+      outcome: 'committed',
+      replayed: true,
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT borrower_id borrowerId, related_event_id checkoutId, note FROM inventory_events WHERE kind='issued'",
+        )
+        .all(),
+    ).toEqual([{ borrowerId: null, checkoutId: null, note: 'supplies' }]);
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([
+      { itemId: pliers.id, returnable: 1, lost: 0 },
+    ]);
+    const rejected = inventory.commitBorrowerOperations(borrower.id, key(911), {
+      ...body,
+      items: [body.items[0]!, { itemId: ties.id, issue: [{ quantity: 2, note: 'too many' }] }],
+    });
+    expect(rejected).toMatchObject({
+      outcome: 'rejected',
+      conflicts: [{ scope: 'issue', itemId: ties.id, available: 1 }],
+    });
+    expect(
+      db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='checked_out'").get(),
+    ).toEqual({ count: 1 });
+  });
+  it('rejects issuance when a companion return is invalid or the consumable was archived', () => {
+    const { db, inventory, borrower } = fixture();
+    const tool = inventory.createItem({ name: 'Tool', kind: 'non_consumable' });
+    const tape = inventory.createItem({ name: 'Tape', kind: 'consumable' });
+    inventory.addStock(tape.id, 3);
+    const invalidReturn: BorrowerOperationRequest = {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [
+        { itemId: tool.id, return: [{ usable: 1, damaged: 0, note: '' }] },
+        { itemId: tape.id, issue: [{ quantity: 1, note: '' }] },
+      ],
+    };
+    expect(inventory.commitBorrowerOperations(borrower.id, key(912), invalidReturn)).toMatchObject({
+      outcome: 'rejected',
+      conflicts: [{ scope: 'return', itemId: tool.id }],
+    });
+    inventory.archiveItem(tape.id, true);
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(913), {
+        ...invalidReturn,
+        items: [{ itemId: tape.id, issue: [{ quantity: 1, note: '' }] }],
+      }),
+    ).toMatchObject({
+      outcome: 'rejected',
+      conflicts: [{ scope: 'item', code: 'item_archived', itemId: tape.id }],
+    });
+    expect(
+      db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='issued'").get(),
+    ).toEqual({ count: 0 });
+  });
   it('allocates returns, staged loss, dependent recovery, and borrow atomically in ledger order', () => {
     const { db, inventory, borrower } = fixture();
     const item = inventory.createItem({ name: 'Mixed equipment', kind: 'non_consumable' });

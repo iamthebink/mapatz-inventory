@@ -96,6 +96,7 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
     return false;
   const ids = new Set<number>();
   const commandBorrow: number[] = [];
+  const commandIssue: number[] = [];
   const commandReturn: number[] = [];
   const commandUsable: number[] = [];
   const commandLost: number[] = [];
@@ -103,7 +104,7 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
   const groupsValid = value.items.every((group) => {
     if (
       !isObject(group) ||
-      !exactKeys(group, ['itemId', 'borrow', 'return', 'lost', 'lostCredit']) ||
+      !exactKeys(group, ['itemId', 'borrow', 'issue', 'return', 'lost', 'lostCredit']) ||
       !positive(group.itemId) ||
       ids.has(group.itemId)
     )
@@ -111,23 +112,27 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
     ids.add(group.itemId);
     if (
       !(group.borrow === undefined || Array.isArray(group.borrow)) ||
+      !(group.issue === undefined || Array.isArray(group.issue)) ||
       !(group.return === undefined || Array.isArray(group.return)) ||
       !(group.lost === undefined || Array.isArray(group.lost)) ||
       !(group.lostCredit === undefined || Array.isArray(group.lostCredit))
     )
       return false;
     const borrow: unknown[] = Array.isArray(group.borrow) ? group.borrow : [];
+    const issue: unknown[] = Array.isArray(group.issue) ? group.issue : [];
     const returns: unknown[] = Array.isArray(group.return) ? group.return : [];
     const lost: unknown[] = Array.isArray(group.lost) ? group.lost : [];
     const lostCredits: unknown[] = Array.isArray(group.lostCredit) ? group.lostCredit : [];
     if (
       borrow.length === 0 &&
+      issue.length === 0 &&
       returns.length === 0 &&
       lost.length === 0 &&
       lostCredits.length === 0
     )
       return false;
     if (borrow.length === 0 && group.borrow !== undefined) return false;
+    if (issue.length === 0 && group.issue !== undefined) return false;
     if (returns.length === 0 && group.return !== undefined) return false;
     if (lost.length === 0 && group.lost !== undefined) return false;
     if (lostCredits.length === 0 && group.lostCredit !== undefined) return false;
@@ -167,8 +172,18 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
         typeof part.note === 'string' &&
         part.note.length <= 500,
     );
-    if (!borrowValid || !returnsValid || !lostValid || !lostCreditsValid) return false;
+    const issueValid = issue.every(
+      (part) =>
+        isObject(part) &&
+        exactKeys(part, ['quantity', 'note']) &&
+        positive(part.quantity) &&
+        typeof part.note === 'string' &&
+        part.note.length <= 500,
+    );
+    if (!borrowValid || !issueValid || !returnsValid || !lostValid || !lostCreditsValid)
+      return false;
     const borrowValues = borrow.map((part) => Number((part as Record<string, unknown>).quantity));
+    const issueValues = issue.map((part) => Number((part as Record<string, unknown>).quantity));
     const returnValues = returns.map(
       (part) =>
         Number((part as Record<string, unknown>).usable) +
@@ -180,12 +195,14 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
       Number((part as Record<string, unknown>).quantity),
     );
     commandBorrow.push(...borrowValues);
+    commandIssue.push(...issueValues);
     commandReturn.push(...returnValues);
     commandUsable.push(...usableValues);
     commandLost.push(...lostValues);
     commandLostCredit.push(...lostCreditValues);
     return (
       safeAggregate(borrowValues) &&
+      safeAggregate(issueValues) &&
       safeAggregate(returnValues) &&
       safeAggregate(usableValues) &&
       safeAggregate(lostValues) &&
@@ -195,6 +212,7 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
   return (
     groupsValid &&
     safeAggregate(commandBorrow) &&
+    safeAggregate(commandIssue) &&
     safeAggregate(commandReturn) &&
     safeAggregate(commandUsable) &&
     safeAggregate(commandLost) &&
@@ -712,6 +730,42 @@ export function isExactBorrowerOperationConflictSet(
         !exactKeys(candidate, ['scope', 'code', 'itemId']) ||
         candidate.scope !== 'item' ||
         candidate.code !== 'item_archived' ||
+        candidate.itemId !== group.itemId
+      )
+        return false;
+      conflictIndex += 1;
+      continue;
+    }
+    if (
+      item.kind === 'consumable' &&
+      group.issue?.length &&
+      !group.borrow &&
+      !group.return &&
+      !group.lost &&
+      !group.lostCredit
+    ) {
+      const requested = sum(group.issue.map((part) => part.quantity));
+      if (requested > item.available) {
+        if (
+          !isObject(candidate) ||
+          !exactKeys(candidate, ['scope', 'code', 'itemId', 'requested', 'available']) ||
+          candidate.scope !== 'issue' ||
+          candidate.code !== 'insufficient_stock' ||
+          candidate.itemId !== group.itemId ||
+          candidate.requested !== requested ||
+          candidate.available !== item.available
+        )
+          return false;
+        conflictIndex += 1;
+      }
+      continue;
+    }
+    if (item.kind !== 'non_consumable' || group.issue) {
+      if (
+        !isObject(candidate) ||
+        !exactKeys(candidate, ['scope', 'code', 'itemId']) ||
+        candidate.scope !== 'item' ||
+        candidate.code !== 'wrong_item_kind' ||
         candidate.itemId !== group.itemId
       )
         return false;

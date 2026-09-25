@@ -30,6 +30,7 @@ export type BorrowerOperationRequest = {
   items: Array<{
     itemId: number;
     borrow?: BorrowPart[];
+    issue?: BorrowPart[];
     return?: ReturnPart[];
     lost?: LostPart[];
     lostCredit?: LostCreditPart[];
@@ -81,6 +82,13 @@ export type BorrowerOperationConflict =
       itemId: number;
       requested: number;
       availableAfterUsableReturns: number;
+    }
+  | {
+      scope: 'issue';
+      code: 'insufficient_stock';
+      itemId: number;
+      requested: number;
+      available: number;
     }
   | {
       scope: 'return';

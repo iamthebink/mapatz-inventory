@@ -5,6 +5,8 @@ type Seed = {
   borrower: { id: number; name: string; username: string };
   item: { id: number; name: string; code: number };
   stockItem: { id: number; name: string; code: number };
+  consumable: { id: number; name: string; code: number };
+  secondConsumable: { id: number; name: string; code: number };
   archiveItem: { id: number; name: string; code: number };
   archivedBorrower: { id: number; name: string; username: string };
   checkoutId: number;

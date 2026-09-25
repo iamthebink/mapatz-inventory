@@ -54,7 +54,7 @@ export function BorrowerOperationalTables({
   onReturn: (itemId: number, condition: ReturnCondition) => void;
   onRollback: (
     itemId: number,
-    direction: 'borrow' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
+    direction: 'borrow' | 'issue' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
     condition?: 'usable' | 'damaged',
   ) => void;
   returnButtonRefs?: RefObject<Map<string, HTMLButtonElement>>;
@@ -121,7 +121,7 @@ export function BorrowerOperationalTables({
             {state.staged.flatMap((group) => {
               const projection = projectItem(state, group.itemId);
               const rows: Array<{
-                direction: 'borrow' | 'usable' | 'damaged' | 'lost' | 'lostCredit';
+                direction: 'borrow' | 'issue' | 'usable' | 'damaged' | 'lost' | 'lostCredit';
                 condition?: 'usable' | 'damaged';
                 quantity: number;
                 label: string;
@@ -133,6 +133,13 @@ export function BorrowerOperationalTables({
                   quantity: projection?.stagedBorrow ?? 0,
                   label: 'השאלה',
                   notes: group.borrow.map((part) => part.note),
+                });
+              if ((group.issue ?? []).length)
+                rows.push({
+                  direction: 'issue',
+                  quantity: (group.issue ?? []).reduce((sum, part) => sum + part.quantity, 0),
+                  label: 'ניפוק · מתכלה',
+                  notes: (group.issue ?? []).map((part) => part.note),
                 });
               const usable = group.return.reduce((total, part) => total + part.usable, 0);
               if (usable > 0)

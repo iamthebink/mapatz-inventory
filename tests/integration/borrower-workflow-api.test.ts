@@ -25,6 +25,98 @@ function fixture() {
 }
 
 describe('borrower workflow snapshot API', () => {
+  it('commits a standalone consumable batch atomically with replay and strict quantity validation', async () => {
+    const { db, inventory, agent } = fixture();
+    const first = inventory.createItem({ name: 'Tape', kind: 'consumable' });
+    const second = inventory.createItem({ name: 'Ties', kind: 'consumable' });
+    inventory.addStock(first.id, 3);
+    inventory.addStock(second.id, 2);
+    const body = {
+      ledgerEpoch: 1,
+      items: [
+        { itemId: first.id, quantity: 2, note: 'desk' },
+        { itemId: second.id, quantity: 1, note: '' },
+      ],
+    };
+    const path = '/api/issue-batch';
+    const key = '00000000-0000-4000-8000-000000000914';
+    await agent
+      .post(path)
+      .set('Idempotency-Key', key)
+      .send(body)
+      .expect(201)
+      .expect(({ body: result }) =>
+        expect(result).toMatchObject({
+          outcome: 'committed',
+          idempotencyKey: key,
+          replayed: false,
+        }),
+      );
+    await agent
+      .post(path)
+      .set('Idempotency-Key', key)
+      .send(body)
+      .expect(201)
+      .expect(({ body: result }) =>
+        expect(result).toMatchObject({ outcome: 'committed', replayed: true }),
+      );
+    expect(
+      db
+        .prepare(
+          "SELECT item_id itemId, borrower_id borrowerId, related_event_id checkoutId FROM inventory_events WHERE kind='issued' ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { itemId: first.id, borrowerId: null, checkoutId: null },
+      { itemId: second.id, borrowerId: null, checkoutId: null },
+    ]);
+    await agent
+      .post(path)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000915')
+      .send({ ledgerEpoch: 1, items: [{ itemId: first.id, quantity: 1.5, note: '' }] })
+      .expect(400);
+    const shortage = {
+      ledgerEpoch: 1,
+      items: [
+        { itemId: first.id, quantity: 2, note: '' },
+        { itemId: second.id, quantity: 2, note: '' },
+      ],
+    };
+    await agent
+      .post(path)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000916')
+      .send(shortage)
+      .expect(409)
+      .expect(({ body: result }) =>
+        expect(result).toMatchObject({
+          outcome: 'rejected',
+          conflicts: [
+            { itemId: first.id, code: 'insufficient_stock' },
+            { itemId: second.id, code: 'insufficient_stock' },
+          ],
+        }),
+      );
+    expect(
+      db.prepare("SELECT COUNT(*) count FROM inventory_events WHERE kind='issued'").get(),
+    ).toEqual({ count: 2 });
+  });
+  it('rejects malformed batch JSON and non-JSON transport before domain execution', async () => {
+    const { agent } = fixture();
+    await agent
+      .post('/api/issue-batch')
+      .set('Content-Type', 'application/json')
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000917')
+      .send('{"items"')
+      .expect(400)
+      .expect(({ body }) => expect(body).toMatchObject({ error: 'invalid_json' }));
+    await agent
+      .post('/api/issue-batch')
+      .set('Content-Type', 'text/plain')
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000918')
+      .send('not json')
+      .expect(400)
+      .expect(({ body }) => expect(body).toMatchObject({ error: 'validation_error' }));
+  });
   it('lets operators atomically mark held equipment lost and recover it in the same command', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({

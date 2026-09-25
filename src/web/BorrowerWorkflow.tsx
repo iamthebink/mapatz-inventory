@@ -52,7 +52,7 @@ export type BorrowerWorkflowHandle = {
 };
 
 type QuantityDialog = {
-  direction: 'borrow' | 'return';
+  direction: 'borrow' | 'issue' | 'return';
   condition?: ReturnCondition;
   itemId: number;
   quantity: string;
@@ -107,6 +107,8 @@ function OperationReview({ state }: { state: OperationState }) {
         const rows: Array<{ label: string; quantity: number; note: string }> = [];
         for (const part of group.borrow)
           rows.push({ label: 'השאלה', quantity: part.quantity, note: part.note });
+        for (const part of group.issue ?? [])
+          rows.push({ label: 'ניפוק · מתכלה', quantity: part.quantity, note: part.note });
         for (const part of group.return) {
           if (part.usable > 0)
             rows.push({ label: 'החזרת ציוד', quantity: part.usable, note: part.note });
@@ -603,6 +605,7 @@ export const BorrowerWorkflow = forwardRef<
           label: (
             <>
               <bdi dir="ltr">{item.code}</bdi> — {item.name}
+              {item.kind === 'consumable' ? ' · מתכלה' : ''}
             </>
           ),
           description: `זמין: ${available}`,
@@ -626,7 +629,7 @@ export const BorrowerWorkflow = forwardRef<
         ? `${quantity.itemId}-more`
         : `${quantity.itemId}-${quantity.condition ?? 'usable'}`;
     const returnIndex = [...returnButtonRefs.current.keys()].indexOf(returnKey);
-    if (quantity.direction === 'borrow') {
+    if (quantity.direction === 'borrow' || quantity.direction === 'issue') {
       const amount = Number(quantity.quantity);
       if (!Number.isSafeInteger(amount) || amount < 1) {
         setQuantity({ ...quantity, error: 'יש להזין כמות חיובית ושלמה' });
@@ -635,13 +638,16 @@ export const BorrowerWorkflow = forwardRef<
       }
       const available = projectItem(operation, quantity.itemId)?.projectedAvailability;
       if (available == null || amount > available) {
-        setQuantity({ ...quantity, error: `ניתן להשאיל עד ${available ?? 0} יחידות` });
+        setQuantity({
+          ...quantity,
+          error: `ניתן לבחור עד ${available ?? 0} יחידות עבור ${quantityItem?.name ?? ''}`,
+        });
         queueMicrotask(() => quantityErrorRef.current?.focus());
         return;
       }
       setOperation(
         operationReducer(operation, {
-          type: 'stage-borrow',
+          type: quantity.direction === 'issue' ? 'stage-issue' : 'stage-borrow',
           itemId: quantity.itemId,
           part: { quantity: amount, note: quantity.note },
         }),
@@ -1393,7 +1399,7 @@ export const BorrowerWorkflow = forwardRef<
                   options={itemOptions}
                   onSelect={(item) => {
                     setQuantity({
-                      direction: 'borrow',
+                      direction: item.kind === 'consumable' ? 'issue' : 'borrow',
                       itemId: item.id,
                       quantity: '1',
                       note: '',
@@ -1507,13 +1513,15 @@ export const BorrowerWorkflow = forwardRef<
       {quantity && operation && quantityItem && (
         <Dialog
           title={
-            quantity.direction === 'borrow'
-              ? 'הוספת השאלה'
-              : quantity.condition === 'mark-lost'
-                ? 'סמן כאבוד'
-                : quantity.condition === 'found'
-                  ? 'נמצא והוחזר'
-                  : 'החזרת ציוד'
+            quantity.direction === 'issue'
+              ? 'ניפוק ציוד מתכלה'
+              : quantity.direction === 'borrow'
+                ? 'הוספת השאלה'
+                : quantity.condition === 'mark-lost'
+                  ? 'סמן כאבוד'
+                  : quantity.condition === 'found'
+                    ? 'נמצא והוחזר'
+                    : 'החזרת ציוד'
           }
           description={
             <span className="quantity-dialog-item">
