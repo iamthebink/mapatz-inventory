@@ -302,6 +302,37 @@
   .inventory-filter {
     @apply inline-flex items-center gap-2 whitespace-nowrap text-sm font-medium text-ctp-subtext;
   }
+  .inventory-view-header {
+    @apply flex flex-wrap items-center justify-between gap-3;
+  }
+  .inventory-view-switch {
+    @apply inline-flex rounded-xl border border-ctp-surface bg-white p-1 shadow-sm;
+  }
+  .inventory-view-switch button {
+    @apply rounded-lg px-5 py-2 text-sm font-semibold text-ctp-subtext transition hover:text-ctp-text;
+  }
+  .inventory-view-switch button[aria-pressed='true'] {
+    @apply bg-ctp-lavender/20 text-ctp-text shadow-sm ring-1 ring-ctp-lavender/40;
+  }
+  .inventory-locations-toolbar {
+    @apply mb-3 flex flex-wrap items-center justify-between gap-3;
+  }
+  .inventory-locations-toolbar .input-field {
+    @apply max-w-sm;
+  }
+  .inventory-locations-count,
+  .inventory-locations-empty {
+    @apply text-sm text-ctp-subtext;
+  }
+  .inventory-locations-empty {
+    @apply mt-4 text-center;
+  }
+  .inventory-location-actions {
+    @apply flex flex-wrap gap-2;
+  }
+  .inventory-location-recovery {
+    @apply mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-ctp-subtext;
+  }
   .inventory-filter select {
     @apply w-auto min-w-28 max-w-48;
   }

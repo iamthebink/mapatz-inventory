@@ -150,7 +150,10 @@ describe('inventory management in App', () => {
       'מקבת',
     );
     await user.click(screen.getByRole('button', { name: 'מיקומים' }));
-    expect(within(screen.getByRole('dialog')).getByText('מחסן ראשי')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(
+      within(document.getElementById('locations-view-panel')!).getByText('מחסן ראשי'),
+    ).toBeTruthy();
     expect((screen.getByRole('button', { name: 'מיקום חדש' }) as HTMLButtonElement).disabled).toBe(
       true,
     );

@@ -20,7 +20,7 @@ type Attempt = {
   path: string;
   method: 'POST' | 'PUT';
   body: Record<string, unknown>;
-  returnToLocations?: boolean;
+  description?: string;
 };
 
 const kinds: Record<Item['kind'], string> = {
@@ -63,6 +63,7 @@ export function InventoryManagement({
   registerLeaveGuard: (guard: ((continueNavigation: () => void) => boolean) | null) => void;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [view, setView] = useState<'inventory' | 'locations'>('inventory');
   const [editorEpoch, setEditorEpoch] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(itemDraft(null));
   const [damageQuantity, setDamageQuantity] = useState('1');
@@ -74,11 +75,10 @@ export function InventoryManagement({
   const [locationQuery, setLocationQuery] = useState('');
   const [dirty, setDirty] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
-  const [discardToLocations, setDiscardToLocations] = useState(false);
   const [pending, setPending] = useState(false);
   const [unresolved, setUnresolved] = useState<Attempt | null>(null);
   const [refreshRecovery, setRefreshRecovery] = useState(false);
-  const [refreshRecoveryReturnToLocations, setRefreshRecoveryReturnToLocations] = useState(false);
+  const [recoveryDescription, setRecoveryDescription] = useState('');
   const [reviewSnapshot, setReviewSnapshot] = useState<number | null>(null);
   const [reviewRequired, setReviewRequired] = useState(false);
   const [currentBalances, setCurrentBalances] = useState<Item | null>(null);
@@ -89,6 +89,7 @@ export function InventoryManagement({
   const firstFieldRef = useRef<HTMLInputElement>(null);
   const fallbackRef = useRef<HTMLButtonElement>(null);
   const pendingRef = useRef(false);
+  const refreshPendingRef = useRef(false);
   const pendingNavigationRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -102,10 +103,6 @@ export function InventoryManagement({
     return () => registerLeaveGuard(null);
   }, [dirty, editor, refreshRecovery, registerLeaveGuard, unresolved]);
 
-  useEffect(() => {
-    if (editor?.kind === 'locations' && locationEdit === null) firstFieldRef.current?.focus();
-  }, [editor, locationEdit]);
-
   function open(next: Editor) {
     triggerRef.current = document.activeElement as HTMLElement;
     setEditor(next);
@@ -114,7 +111,7 @@ export function InventoryManagement({
     setDirty(false);
     setUnresolved(null);
     setRefreshRecovery(false);
-    setRefreshRecoveryReturnToLocations(false);
+    setRecoveryDescription('');
     setReviewSnapshot(null);
     setReviewRequired(false);
     setCurrentBalances(null);
@@ -137,32 +134,35 @@ export function InventoryManagement({
     setDiscardOpen(false);
     setDirty(false);
     setLocationEdit(null);
-    if (!discardToLocations) queueMicrotask(() => setEditor(null));
-    setDiscardToLocations(false);
+    queueMicrotask(() => setEditor(null));
     const next = pendingNavigationRef.current;
     pendingNavigationRef.current = null;
     if (next) queueMicrotask(next);
   }
-  async function refreshAfterCommit(returnToLocations = false) {
+  async function refreshAfterCommit(description = recoveryDescription) {
+    if (refreshPendingRef.current) return;
+    refreshPendingRef.current = true;
+    setPending(true);
     try {
       await onRefresh();
       setRefreshRecovery(false);
-      setRefreshRecoveryReturnToLocations(false);
+      setRecoveryDescription('');
       setUnresolved(null);
       setDirty(false);
-      if (returnToLocations) {
-        setLocationEdit(null);
-        setEditor({ kind: 'locations' });
-      } else setEditor(null);
+      setLocationEdit(null);
+      setEditor(null);
       showToast('המלאי עודכן', 'השינוי נשמר בהצלחה', 'success');
     } catch (error) {
       setRefreshRecovery(true);
-      setRefreshRecoveryReturnToLocations(returnToLocations);
+      setRecoveryDescription(description);
       showToast(
         'השינוי נשמר',
         error instanceof Error ? `רענון נכשל: ${error.message}` : 'רענון הנתונים נכשל',
         'warning',
       );
+    } finally {
+      refreshPendingRef.current = false;
+      setPending(false);
     }
   }
   async function send(attempt: Attempt) {
@@ -171,7 +171,8 @@ export function InventoryManagement({
     setPending(true);
     try {
       await api(attempt.path, { method: attempt.method, body: JSON.stringify(attempt.body) });
-      await refreshAfterCommit(attempt.returnToLocations);
+      setUnresolved(null);
+      await refreshAfterCommit(attempt.description);
     } catch (error) {
       if (error instanceof ApiError && error.code === 'stale_stock' && editor?.kind === 'item') {
         setUnresolved(null);
@@ -298,6 +299,7 @@ export function InventoryManagement({
     });
   }
   function editLocation(location: Location | 'new') {
+    open({ kind: 'locations' });
     setLocationEdit(location);
     setLocationName(location === 'new' ? '' : location.name);
     setLocationCode(location === 'new' ? '' : location.code);
@@ -324,22 +326,22 @@ export function InventoryManagement({
         name: locationName.trim(),
         code: locationCode.trim(),
       },
-      returnToLocations: true,
     });
   }
   function archiveLocation(location: Location) {
-    if (!admin || editorEpoch === null || pendingRef.current) return;
+    if (!admin || ledgerEpoch === null || pendingRef.current || unresolved || refreshRecovery)
+      return;
     void send({
       path: `/inventory/locations/${location.id}`,
       method: 'PUT',
       body: {
         key: crypto.randomUUID(),
-        ledgerEpoch: editorEpoch,
+        ledgerEpoch,
         name: location.name,
         code: location.code,
         archived: !location.archived,
       },
-      returnToLocations: true,
+      description: `${location.archived ? 'שחזור' : 'ארכוב'}: ${location.name}`,
     });
   }
   const filtered = useMemo(
@@ -352,6 +354,12 @@ export function InventoryManagement({
       ),
     [items, includeArchived, typeFilter, locationFilter],
   );
+  const filteredLocations = useMemo(() => {
+    const query = locationQuery.trim().toLocaleLowerCase();
+    return locations.filter((location) =>
+      `${location.name} ${location.code}`.toLocaleLowerCase().includes(query),
+    );
+  }, [locations, locationQuery]);
   const columns: TableColumn<Item>[] = [
     { key: 'code', label: 'קוד', render: (item) => item.code, sortValue: (item) => item.code },
     {
@@ -438,74 +446,186 @@ export function InventoryManagement({
   );
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className="primary-button"
-          disabled={!admin}
-          onClick={() => open({ kind: 'item', item: null })}
-        >
-          הוספת פריט חדש
-        </button>
-        <button
-          ref={fallbackRef}
-          type="button"
-          className="secondary-button"
-          onClick={() => open({ kind: 'locations' })}
-        >
-          מיקומים
-        </button>
+      <div className="inventory-view-header">
+        <div className="inventory-view-switch" role="group" aria-label="תצוגת ניהול מלאי">
+          <button
+            ref={fallbackRef}
+            type="button"
+            id="inventory-view-tab"
+            aria-controls="inventory-view-panel"
+            aria-pressed={view === 'inventory'}
+            disabled={pending || !!unresolved || refreshRecovery}
+            onClick={() => setView('inventory')}
+          >
+            מלאי
+          </button>
+          <button
+            type="button"
+            id="locations-view-tab"
+            aria-controls="locations-view-panel"
+            aria-pressed={view === 'locations'}
+            disabled={pending || !!unresolved || refreshRecovery}
+            onClick={() => setView('locations')}
+          >
+            מיקומים
+          </button>
+        </div>
+        {view === 'inventory' ? (
+          <button
+            type="button"
+            className="primary-button"
+            disabled={!admin || pending || !!unresolved || refreshRecovery}
+            onClick={() => open({ kind: 'item', item: null })}
+          >
+            הוספת פריט חדש
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary-button"
+            disabled={!admin || pending || !!unresolved || refreshRecovery}
+            onClick={() => editLocation('new')}
+          >
+            מיקום חדש
+          </button>
+        )}
       </div>
-      <DataTable
-        rows={filtered}
-        columns={columns}
-        rowKey={(item) => item.id}
-        searchText={(item) => [item.name, item.code, ...item.aliases].join(' ')}
-        searchPlaceholder="חיפוש שם, כינוי או קוד…"
-        toolbar={
-          <>
-            <label className="inventory-filter">
-              סוג
-              <select
-                className="input-field"
-                value={typeFilter}
-                onChange={(event) => setTypeFilter(event.target.value)}
-              >
-                <option value="">הכול</option>
-                {Object.entries(kinds).map(([kind, name]) => (
-                  <option key={kind} value={kind}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="inventory-filter">
-              מיקום
-              <select
-                className="input-field"
-                value={locationFilter}
-                title={locations.find((location) => String(location.id) === locationFilter)?.name}
-                onChange={(event) => setLocationFilter(event.target.value)}
-              >
-                <option value="">הכול</option>
-                {locations.map((location) => (
-                  <option key={location.id} value={location.id}>
-                    {location.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="inventory-archive-toggle">
-              <input
-                type="checkbox"
-                checked={includeArchived}
-                onChange={(event) => setIncludeArchived(event.target.checked)}
-              />
-              כולל ארכיון
-            </label>
-          </>
-        }
-      />
+      <div id="inventory-view-panel" aria-label="טבלת מלאי" hidden={view !== 'inventory'}>
+        <DataTable
+          rows={filtered}
+          columns={columns}
+          rowKey={(item) => item.id}
+          searchText={(item) => [item.name, item.code, ...item.aliases].join(' ')}
+          searchPlaceholder="חיפוש שם, כינוי או קוד…"
+          toolbar={
+            <>
+              <label className="inventory-filter">
+                סוג
+                <select
+                  className="input-field"
+                  value={typeFilter}
+                  onChange={(event) => setTypeFilter(event.target.value)}
+                >
+                  <option value="">הכול</option>
+                  {Object.entries(kinds).map(([kind, name]) => (
+                    <option key={kind} value={kind}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inventory-filter">
+                מיקום
+                <select
+                  className="input-field"
+                  value={locationFilter}
+                  title={locations.find((location) => String(location.id) === locationFilter)?.name}
+                  onChange={(event) => setLocationFilter(event.target.value)}
+                >
+                  <option value="">הכול</option>
+                  {locations.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inventory-archive-toggle">
+                <input
+                  type="checkbox"
+                  checked={includeArchived}
+                  onChange={(event) => setIncludeArchived(event.target.checked)}
+                />
+                כולל ארכיון
+              </label>
+            </>
+          }
+        />
+      </div>
+      <div id="locations-view-panel" aria-label="טבלת מיקומים" hidden={view !== 'locations'}>
+        <div className="inventory-locations-toolbar">
+          <input
+            className="input-field"
+            aria-label="חיפוש מיקומים"
+            placeholder="חיפוש מיקומים…"
+            value={locationQuery}
+            onChange={(event) => setLocationQuery(event.target.value)}
+          />
+          <span className="inventory-locations-count">{filteredLocations.length} מיקומים</span>
+        </div>
+        <div className="table-shell">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>שם</th>
+                <th>קוד</th>
+                <th>מצב</th>
+                <th>פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLocations.map((location) => (
+                <tr key={location.id}>
+                  <td>{location.name}</td>
+                  <td>{location.code}</td>
+                  <td>{location.archived ? 'בארכיון' : 'פעיל'}</td>
+                  <td>
+                    <div className="inventory-location-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={!admin || pending || !!unresolved || refreshRecovery}
+                        onClick={() => editLocation(location)}
+                      >
+                        עריכה
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={!admin || pending || !!unresolved || refreshRecovery}
+                        onClick={() => archiveLocation(location)}
+                      >
+                        {location.archived ? 'שחזור' : 'ארכוב'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filteredLocations.length === 0 && (
+          <p className="inventory-locations-empty">לא נמצאו מיקומים</p>
+        )}
+        {!editor && unresolved && (
+          <div className="inventory-location-recovery">
+            <span>{unresolved.description ?? 'פעולה במיקום'}: תוצאת הפעולה אינה ידועה</span>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={pending}
+              onClick={() => void send(unresolved)}
+            >
+              בדוק שוב את אותה פעולה
+            </button>
+          </div>
+        )}
+        {!editor && refreshRecovery && (
+          <div className="inventory-location-recovery">
+            <span>
+              {recoveryDescription ? `${recoveryDescription} נשמר; ` : ''}רענון הנתונים נכשל
+            </span>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={pending}
+              onClick={() => void refreshAfterCommit()}
+            >
+              רענון נתונים
+            </button>
+          </div>
+        )}
+      </div>
       {editor && (
         <Dialog
           title={
@@ -515,7 +635,9 @@ export function InventoryManagement({
                 : 'הוספת פריט חדש'
               : editor.kind === 'damage'
                 ? 'טיפול בפגומים'
-                : 'מיקומים'
+                : locationEdit === 'new'
+                  ? 'מיקום חדש'
+                  : 'עריכת מיקום'
           }
           level="root"
           role="dialog"
@@ -770,127 +892,46 @@ export function InventoryManagement({
               </div>
             </form>
           )}
-          {editor.kind === 'locations' && (
-            <div className="space-y-4">
-              {locationEdit ? (
-                <form className="dialog-form" onSubmit={saveLocation}>
-                  <label className="field-label">
-                    שם
-                    <input
-                      ref={firstFieldRef}
-                      className="input-field"
-                      value={locationName}
-                      disabled={lockedDraft}
-                      onChange={(event) => {
-                        setLocationName(event.target.value);
-                        setDirty(true);
-                      }}
-                    />
-                  </label>
-                  <label className="field-label">
-                    קוד
-                    <input
-                      className="input-field"
-                      value={locationCode}
-                      disabled={lockedDraft}
-                      onChange={(event) => {
-                        setLocationCode(event.target.value);
-                        setDirty(true);
-                      }}
-                    />
-                  </label>
-                  <div className="dialog-actions">
-                    <button
-                      className="primary-button"
-                      type="submit"
-                      disabled={pending || !!unresolved || refreshRecovery}
-                    >
-                      שמירה
-                    </button>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      disabled={lockedDraft}
-                      onClick={() => {
-                        if (dirty) {
-                          setDiscardToLocations(true);
-                          setDiscardOpen(true);
-                        } else setLocationEdit(null);
-                      }}
-                    >
-                      חזרה
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <>
-                  <input
-                    ref={firstFieldRef}
-                    className="input-field"
-                    aria-label="חיפוש מיקומים"
-                    placeholder="חיפוש מיקומים…"
-                    value={locationQuery}
-                    onChange={(event) => setLocationQuery(event.target.value)}
-                  />
-                  <button
-                    className="primary-button"
-                    type="button"
-                    disabled={!admin || pending || !!unresolved || refreshRecovery}
-                    onClick={() => editLocation('new')}
-                  >
-                    מיקום חדש
-                  </button>
-                  <div className="table-shell">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>שם</th>
-                          <th>קוד</th>
-                          <th>מצב</th>
-                          <th>פעולות</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {locations
-                          .filter((location) =>
-                            `${location.name} ${location.code}`
-                              .toLowerCase()
-                              .includes(locationQuery.toLowerCase()),
-                          )
-                          .map((location) => (
-                            <tr key={location.id}>
-                              <td>{location.name}</td>
-                              <td>{location.code}</td>
-                              <td>{location.archived ? 'בארכיון' : 'פעיל'}</td>
-                              <td>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  disabled={!admin || pending || !!unresolved || refreshRecovery}
-                                  onClick={() => editLocation(location)}
-                                >
-                                  עריכה
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  disabled={!admin || pending || !!unresolved || refreshRecovery}
-                                  onClick={() => archiveLocation(location)}
-                                >
-                                  {location.archived ? 'שחזור' : 'ארכוב'}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-              <button className="secondary-button" type="button" onClick={close}>
-                סגירה
-              </button>
-            </div>
+          {editor.kind === 'locations' && locationEdit && (
+            <form className="dialog-form" onSubmit={saveLocation}>
+              <label className="field-label">
+                שם
+                <input
+                  ref={firstFieldRef}
+                  className="input-field"
+                  value={locationName}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setLocationName(event.target.value);
+                    setDirty(true);
+                  }}
+                />
+              </label>
+              <label className="field-label">
+                קוד
+                <input
+                  className="input-field"
+                  value={locationCode}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setLocationCode(event.target.value);
+                    setDirty(true);
+                  }}
+                />
+              </label>
+              <div className="dialog-actions">
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={!admin || pending || !!unresolved || refreshRecovery}
+                >
+                  שמירה
+                </button>
+                <button className="secondary-button" type="button" onClick={close}>
+                  ביטול
+                </button>
+              </div>
+            </form>
           )}
           {unresolved && (
             <div className="dialog-actions">
@@ -910,7 +951,7 @@ export function InventoryManagement({
                 className="primary-button"
                 type="button"
                 disabled={pending}
-                onClick={() => void refreshAfterCommit(refreshRecoveryReturnToLocations)}
+                onClick={() => void refreshAfterCommit()}
               >
                 רענון נתונים
               </button>
@@ -930,7 +971,6 @@ export function InventoryManagement({
           onClose={() => {
             setDiscardOpen(false);
             pendingNavigationRef.current = null;
-            setDiscardToLocations(false);
           }}
           returnFocusRef={firstFieldRef}
           returnFocusFallbackRef={triggerRef}
@@ -942,7 +982,6 @@ export function InventoryManagement({
               onClick={() => {
                 setDiscardOpen(false);
                 pendingNavigationRef.current = null;
-                setDiscardToLocations(false);
               }}
             >
               להמשיך לערוך

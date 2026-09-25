@@ -100,6 +100,27 @@ describe('inventory management UI', () => {
     expect(screen.getByText('2 מתוך 2')).toBeTruthy();
   });
 
+  it('opens on stock and switches inline to locations while preserving stock filters', async () => {
+    const user = userEvent.setup();
+    view(true, [item], [{ id: 31, code: 'A-1', name: 'Main store', archived: false }]);
+    expect(screen.getByRole('button', { name: 'מלאי' }).getAttribute('aria-pressed')).toBe('true');
+    await user.type(screen.getByRole('textbox', { name: 'סינון הטבלה' }), 'Mallet');
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(
+      within(document.getElementById('locations-view-panel')!).getByText('Main store'),
+    ).toBeTruthy();
+    await user.type(screen.getByRole('textbox', { name: 'חיפוש מיקומים' }), 'A-1');
+    await user.click(screen.getByRole('button', { name: 'מלאי' }));
+    expect((screen.getByRole('textbox', { name: 'סינון הטבלה' }) as HTMLInputElement).value).toBe(
+      'Mallet',
+    );
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+    expect((screen.getByRole('textbox', { name: 'חיפוש מיקומים' }) as HTMLInputElement).value).toBe(
+      'A-1',
+    );
+  });
+
   it('retries uncertain location creation with the same command and returns to the locations table', async () => {
     const bodies: Record<string, unknown>[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
@@ -139,6 +160,45 @@ describe('inventory management UI', () => {
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
     expect(save).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('textbox', { name: 'חיפוש מיקומים' })).toBeTruthy();
+  });
+
+  it('keeps inline archive recovery available and retries the same location command', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (bodies.length === 1) throw new Error('connection lost');
+      return respond({ id: 31, code: 'A-1', name: 'Main store', archived: true });
+    });
+    const user = userEvent.setup();
+    view(true, [item], [{ id: 31, code: 'A-1', name: 'Main store', archived: false }]);
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+    await user.click(screen.getByRole('button', { name: 'ארכוב' }));
+    expect(screen.getByRole('button', { name: 'מלאי' }).hasAttribute('disabled')).toBe(true);
+    await user.click(await screen.findByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual(bodies[0]);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce());
+    expect(screen.getByRole('button', { name: 'מלאי' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('offers refresh alone after an uncertain archive succeeds but refreshing fails', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    fetch.mockRejectedValueOnce(new Error('connection lost'));
+    fetch.mockResolvedValueOnce(
+      respond({ id: 31, code: 'A-1', name: 'Main store', archived: true }),
+    );
+    onRefresh.mockRejectedValueOnce(new Error('refresh failed'));
+    const user = userEvent.setup();
+    view(true, [item], [{ id: 31, code: 'A-1', name: 'Main store', archived: false }]);
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+    await user.click(screen.getByRole('button', { name: 'ארכוב' }));
+    expect(await screen.findByText(/ארכוב: Main store/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
+    expect(await screen.findByRole('button', { name: 'רענון נתונים' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'בדוק שוב את אותה פעולה' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'רענון נתונים' }));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('shows the four balances and requires a discard decision for edited item details', async () => {
