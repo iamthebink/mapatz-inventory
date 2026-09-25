@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { type InventoryDatabase } from '../db/database.js';
 import { InventoryService } from '../domain/inventory.js';
 import { InventoryTransferService } from '../domain/import-export.js';
+import { RadioService } from '../domain/radios.js';
 import { DomainError } from '../domain/types.js';
 import { apiRouter } from './routes.js';
 import { readCookie, SessionStore } from './session.js';
@@ -43,6 +44,7 @@ export function createApp(options: AppOptions): Express {
   );
   const service = new InventoryService(options.database);
   const transfers = new InventoryTransferService(options.database);
+  const radios = new RadioService(options.database);
   app.use(
     '/api',
     (req, res, next) => {
@@ -64,7 +66,7 @@ export function createApp(options: AppOptions): Express {
       res.locals.session = session;
       next();
     },
-    apiRouter(service, transfers, sessions, recoveryEnabled),
+    apiRouter(service, transfers, sessions, recoveryEnabled, radios),
     (_req, res) => {
       res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
     },

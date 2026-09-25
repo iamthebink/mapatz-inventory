@@ -63,6 +63,7 @@ import {
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
 import { PeriodSummary } from './PeriodSummary';
+import { Radios } from './Radios';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -76,7 +77,7 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'inventory' | 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger';
+type Tab = 'inventory' | 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger' | 'radios';
 type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
@@ -86,6 +87,7 @@ const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   inventory: { path: '/inventory' },
   ledger: { path: '/ledger' },
   catalogs: { path: '/management' },
+  radios: { path: '/radios' },
 };
 
 function tabFromPath(pathname: string): Tab | null {
@@ -124,6 +126,7 @@ const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
+  { key: 'radios', label: 'מכשירי קשר', icon: ArrowLeftRight },
   { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
   { key: 'catalogs', label: 'ניהול', icon: Settings2 },
@@ -974,6 +977,7 @@ export function App() {
       )}
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+        {tab === 'radios' && <Radios active isAdmin={isAdmin} showToast={showToast} />}
         {(tab === 'desk' || tab === 'summary') && (
           <div hidden={tab !== 'desk'}>
             <BorrowerWorkflow

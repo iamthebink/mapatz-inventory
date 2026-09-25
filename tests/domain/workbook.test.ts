@@ -28,6 +28,8 @@ async function save(workbook: ExcelJS.Workbook): Promise<Buffer> {
 }
 
 const emptySnapshot: InventoryTransferSnapshot = {
+  radioCount: 0,
+  radios: [],
   locations: [],
   items: [],
   borrowers: [],
@@ -37,6 +39,8 @@ const emptySnapshot: InventoryTransferSnapshot = {
 describe('inventory XLSX workbook', () => {
   it('normalizes accepted offset timestamps before storing a recovery ledger and summarizing Israel days', async () => {
     const exported = await exportWorkbook({
+      radioCount: 0,
+      radios: [],
       locations: [],
       items: [
         {

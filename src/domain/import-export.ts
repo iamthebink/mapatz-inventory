@@ -2,6 +2,8 @@ import type { InventoryDatabase } from '../db/database.js';
 import { transaction } from '../db/database.js';
 import { normalizeItemName } from './item-name.js';
 import { DomainError, type BorrowerType, type EventKind, type ItemKind } from './types.js';
+import type { Radio } from './types.js';
+import { RadioService, validateRadioFleet } from './radios.js';
 
 type Row = Record<string, unknown>;
 
@@ -49,6 +51,8 @@ export interface InventoryTransferSnapshot {
   items: TransferItem[];
   borrowers: TransferBorrower[];
   events: TransferEvent[];
+  radioCount: number;
+  radios: Radio[];
 }
 
 export interface ResetItem {
@@ -74,6 +78,8 @@ export interface RecoveryPayload {
   items: RecoveryItem[];
   borrowers: TransferBorrower[];
   events: TransferEvent[];
+  radioCount: number;
+  radios: Radio[];
 }
 
 export interface UnresolvedDamageReportRow {
@@ -203,6 +209,7 @@ function recoveryTotal(state: RecoveryItemState): number {
 
 export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPayload {
   payload = normalizeRecoveryTimestamps(payload);
+  validateRadioFleet(payload.radioCount, payload.radios);
   const locations = new Map<string, TransferLocation>();
   for (const location of payload.locations) {
     const key = location.name.toLocaleLowerCase();
@@ -478,7 +485,8 @@ export class InventoryTransferService {
       note: String(row.note),
       createdAt: String(row.created_at),
     }));
-    return { locations, items, borrowers, events };
+    const fleet = new RadioService(this.db).fleet();
+    return { locations, items, borrowers, events, radioCount: fleet.count, radios: fleet.radios };
   }
 
   replaceWithReset(payload: ResetPayload): void {
@@ -547,6 +555,7 @@ export class InventoryTransferService {
   replaceWithRecovery(payload: RecoveryPayload): void {
     payload = validateRecoveryPayload(payload);
     transaction(this.db, () => {
+      new RadioService(this.db).restore(payload.radioCount, payload.radios);
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();

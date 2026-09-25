@@ -12,6 +12,7 @@ import type {
 } from '../contracts/borrower-workflow.js';
 import type { InventoryService } from '../domain/inventory.js';
 import type { InventoryTransferService } from '../domain/import-export.js';
+import type { RadioService } from '../domain/radios.js';
 import { DomainError, type Role } from '../domain/types.js';
 import {
   exportWorkbook,
@@ -273,9 +274,72 @@ export function apiRouter(
   transfers: InventoryTransferService,
   sessions: SessionStore,
   desktopRecovery = false,
+  radios?: RadioService,
 ): Router {
   const api = Router();
   const commandJson = express.json({ limit: '32kb' });
+
+  if (radios) {
+    const generation = z.number().int().positive();
+    const radioId = z.coerce.number().int().positive();
+    api.get(
+      '/radios',
+      requireRole('operator', 'admin'),
+      route((_req, res) => res.json(radios.fleet())),
+    );
+    api.put(
+      '/radios/count',
+      requireRole('admin'),
+      route((req, res) => {
+        const body = parse(
+          z.object({ count: z.number().int().min(0), generation }).strict(),
+          req.body,
+        );
+        res.json(radios.setCount(body.count, body.generation));
+      }),
+    );
+    api.put(
+      '/radios/:number/custody',
+      requireRole('operator', 'admin'),
+      route((req, res) => {
+        const number = parse(radioId, req.params.number);
+        const body = parse(
+          z
+            .object({ generation, holder: z.string().trim().min(1), team: z.string().default('') })
+            .strict(),
+          req.body,
+        );
+        res.json(radios.custody(number, body.generation, body.holder, body.team));
+      }),
+    );
+    api.post(
+      '/radios/:number/return',
+      requireRole('operator', 'admin'),
+      route((req, res) => {
+        const number = parse(radioId, req.params.number);
+        const body = parse(z.object({ generation }).strict(), req.body);
+        res.json(radios.returnRadio(number, body.generation));
+      }),
+    );
+    api.post(
+      '/radios/:number/lost',
+      requireRole('operator', 'admin'),
+      route((req, res) => {
+        const number = parse(radioId, req.params.number);
+        const body = parse(z.object({ generation }).strict(), req.body);
+        res.json(radios.setLost(number, body.generation, true));
+      }),
+    );
+    api.post(
+      '/radios/:number/found',
+      requireRole('operator', 'admin'),
+      route((req, res) => {
+        const number = parse(radioId, req.params.number);
+        const body = parse(z.object({ generation }).strict(), req.body);
+        res.json(radios.setLost(number, body.generation, false));
+      }),
+    );
+  }
 
   if (desktopRecovery)
     api.post('/password/recovery', (_req, res) => {
