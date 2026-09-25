@@ -299,6 +299,18 @@
   .management-tabs small {
     @apply text-xs font-normal text-ctp-subtext;
   }
+  .inventory-filter {
+    @apply inline-flex items-center gap-2 whitespace-nowrap text-sm font-medium text-ctp-subtext;
+  }
+  .inventory-filter select {
+    @apply w-auto min-w-28 max-w-48;
+  }
+  .inventory-archive-toggle {
+    @apply inline-flex min-h-10 items-center gap-2 whitespace-nowrap text-sm font-medium text-ctp-subtext;
+  }
+  .inventory-archive-toggle input {
+    @apply size-4 accent-ctp-lavender;
+  }
   .table-shell {
     @apply overflow-x-auto rounded-2xl border border-ctp-surface bg-white shadow-sm;
   }

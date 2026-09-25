@@ -431,7 +431,7 @@ export function InventoryManagement({
   );
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="primary-button"
@@ -449,52 +449,55 @@ export function InventoryManagement({
           מיקומים
         </button>
       </div>
-      <div className="flex flex-wrap gap-3">
-        <label className="field-label">
-          סוג
-          <select
-            className="input-field"
-            value={typeFilter}
-            onChange={(event) => setTypeFilter(event.target.value)}
-          >
-            <option value="">הכול</option>
-            {Object.entries(kinds).map(([kind, name]) => (
-              <option key={kind} value={kind}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field-label">
-          מיקום
-          <select
-            className="input-field"
-            value={locationFilter}
-            onChange={(event) => setLocationFilter(event.target.value)}
-          >
-            <option value="">הכול</option>
-            {locations.map((location) => (
-              <option key={location.id} value={location.id}>
-                {location.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field-label">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(event) => setIncludeArchived(event.target.checked)}
-          />{' '}
-          הצג פריטים בארכיון
-        </label>
-      </div>
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(item) => item.id}
         searchText={(item) => [item.name, item.code, ...item.aliases].join(' ')}
         searchPlaceholder="חיפוש שם, כינוי או קוד…"
+        toolbar={
+          <>
+            <label className="inventory-filter">
+              סוג
+              <select
+                className="input-field"
+                value={typeFilter}
+                onChange={(event) => setTypeFilter(event.target.value)}
+              >
+                <option value="">הכול</option>
+                {Object.entries(kinds).map(([kind, name]) => (
+                  <option key={kind} value={kind}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inventory-filter">
+              מיקום
+              <select
+                className="input-field"
+                value={locationFilter}
+                title={locations.find((location) => String(location.id) === locationFilter)?.name}
+                onChange={(event) => setLocationFilter(event.target.value)}
+              >
+                <option value="">הכול</option>
+                {locations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inventory-archive-toggle">
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                onChange={(event) => setIncludeArchived(event.target.checked)}
+              />
+              כולל ארכיון
+            </label>
+          </>
+        }
       />
       {editor && (
         <Dialog

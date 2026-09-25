@@ -15,6 +15,7 @@ type Props<T> = {
   rowKey: (row: T) => string | number;
   searchText: (row: T) => string;
   searchPlaceholder?: string;
+  toolbar?: ReactNode;
   emptyMessage?: string;
   initialSort?: { key: string; direction: 'asc' | 'desc' };
 };
@@ -25,6 +26,7 @@ export function DataTable<T>({
   rowKey,
   searchText,
   searchPlaceholder = 'סינון הטבלה…',
+  toolbar,
   emptyMessage = 'אין רשומות להצגה',
   initialSort,
 }: Props<T>) {
@@ -64,8 +66,14 @@ export function DataTable<T>({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-sm">
+      <div
+        className={
+          toolbar
+            ? 'flex flex-col gap-3 lg:flex-row lg:items-center'
+            : 'flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'
+        }
+      >
+        <div className={`relative w-full ${toolbar ? 'lg:min-w-72 lg:flex-1' : 'sm:max-w-sm'}`}>
           <Search
             aria-hidden="true"
             className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-ctp-overlay"
@@ -88,7 +96,8 @@ export function DataTable<T>({
             </button>
           )}
         </div>
-        <span className="text-xs text-ctp-subtext">
+        {toolbar && <div className="flex min-w-0 flex-wrap items-center gap-3">{toolbar}</div>}
+        <span className={`text-xs text-ctp-subtext ${toolbar ? 'lg:ms-auto' : ''}`}>
           {visibleRows.length} מתוך {rows.length}
         </span>
       </div>

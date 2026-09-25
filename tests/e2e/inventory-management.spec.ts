@@ -1,5 +1,26 @@
 import { expect, test } from './fixtures';
 
+test('inventory search and filters share a desktop row and stack on narrow screens', async ({
+  page,
+}) => {
+  await page.goto('/management');
+  const search = page.getByRole('textbox', { name: 'סינון הטבלה' });
+  const type = page.getByRole('combobox', { name: 'סוג' });
+  await expect(search).toBeVisible();
+  const desktopSearch = await search.boundingBox();
+  const desktopType = await type.boundingBox();
+  expect(desktopSearch).not.toBeNull();
+  expect(desktopType).not.toBeNull();
+  expect(Math.abs(desktopSearch!.y - desktopType!.y)).toBeLessThan(8);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileSearch = await search.boundingBox();
+  const mobileType = await type.boundingBox();
+  expect(mobileSearch).not.toBeNull();
+  expect(mobileType).not.toBeNull();
+  expect(mobileType!.y).toBeGreaterThan(mobileSearch!.y + mobileSearch!.height);
+});
+
 test('administrator creates, adjusts, zeros and archives an item', async ({ page, openLedger }) => {
   await page.goto('/management');
   await page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
@@ -36,7 +57,7 @@ test('administrator creates, adjusts, zeros and archives an item', async ({ page
   await dialog.getByRole('button', { name: 'העברה לארכיון' }).click();
   await expect(dialog).toBeHidden();
   await expect(row).toHaveCount(0);
-  await page.getByRole('checkbox', { name: 'הצג פריטים בארכיון' }).check();
+  await page.getByRole('checkbox', { name: 'כולל ארכיון' }).check();
   await expect(page.getByRole('button', { name: `${name} (בארכיון)` })).toBeVisible();
 
   const database = openLedger();

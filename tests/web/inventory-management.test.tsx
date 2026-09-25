@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DialogStackProvider } from '../../src/web/Dialog';
 import { InventoryManagement } from '../../src/web/InventoryManagement';
-import type { Item } from '../../src/web/InventoryDialogs';
+import type { Item, Location } from '../../src/web/InventoryDialogs';
 
 const item: Item = {
   id: 1,
@@ -26,12 +26,12 @@ const respond = (body: unknown, status = 200) =>
 const showToast = vi.fn();
 const onRefresh = vi.fn(async () => undefined);
 const registerLeaveGuard = vi.fn();
-const view = (admin = true) =>
+const view = (admin = true, items: Item[] = [item], locations: Location[] = []) =>
   render(
     <DialogStackProvider>
       <InventoryManagement
-        items={[item]}
-        locations={[]}
+        items={items}
+        locations={locations}
         ledgerEpoch={1}
         admin={admin}
         onRefresh={onRefresh}
@@ -49,6 +49,40 @@ afterEach(() => {
 });
 
 describe('inventory management UI', () => {
+  it('keeps search and filters in the toolbar without changing table behavior', async () => {
+    const user = userEvent.setup();
+    const store: Location = {
+      id: 31,
+      code: 'A-1',
+      name: 'Long storage location name',
+      archived: false,
+    };
+    view(
+      true,
+      [
+        item,
+        { ...item, id: 2, name: 'Rope', kind: 'consumable', locationId: 31 },
+        { ...item, id: 3, name: 'Archived', locationId: 31, archived: true },
+      ],
+      [store],
+    );
+    expect(screen.getByRole('textbox', { name: 'סינון הטבלה' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'כולל ארכיון' })).toBeTruthy();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'סוג' }), 'consumable');
+    expect(screen.queryByRole('button', { name: 'Hammer' })).toBeNull();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'סוג' }), 'non_consumable');
+    expect(screen.getByRole('button', { name: 'Hammer' })).toBeTruthy();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'סוג' }), '');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'מיקום' }), '31');
+    expect(screen.queryByRole('button', { name: 'Hammer' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Rope' })).toBeTruthy();
+    expect(screen.getByText('1 מתוך 1')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'מיקום' }).getAttribute('title')).toBe(store.name);
+    await user.click(screen.getByRole('checkbox', { name: 'כולל ארכיון' }));
+    expect(screen.getByRole('button', { name: 'Archived (בארכיון)' })).toBeTruthy();
+    expect(screen.getByText('2 מתוך 2')).toBeTruthy();
+  });
+
   it('retries uncertain location creation with the same command and returns to the locations table', async () => {
     const bodies: Record<string, unknown>[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
@@ -127,7 +161,7 @@ describe('inventory management UI', () => {
     await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce());
   });
 
-  it('lets operators inspect and restore damage while hiding catalog mutations and write-off', async () => {
+  it('lets operators inspect and restore damage while disabling catalog mutations and write-off', async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       calls.push({ path: String(url), body: JSON.parse(String(init?.body)) });
