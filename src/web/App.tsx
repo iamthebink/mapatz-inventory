@@ -1165,7 +1165,7 @@ export function App() {
                     </ActionCard>
                     <ActionCard
                       title="טיפול בפגום"
-                      description={isAdmin ? 'החזרה לשימוש או גריעה' : 'החזרת ציוד פגום לשימוש'}
+                      description="החזרה לשימוש או גריעה"
                       icon={TriangleAlert}
                       disabled={
                         pending ||
@@ -1208,27 +1208,26 @@ export function App() {
                           ])}
                       />
                       <Quantity />
-                      {isAdmin ? (
-                        <label className="field-label">
-                          פתרון
-                          <select
-                            name="resolution"
-                            className="input-field"
-                            value={damageResolution}
-                            onChange={(event) =>
-                              setDamageResolution(event.target.value as 'repair' | 'write_off')
-                            }
-                          >
-                            <option value="repair">תוקן</option>
-                            <option value="write_off">הוצאה מהמלאי</option>
-                          </select>
-                        </label>
-                      ) : damageResolution === 'write_off' ? (
+                      <label className="field-label">
+                        פתרון
+                        <select
+                          name="resolution"
+                          className="input-field"
+                          value={damageResolution}
+                          onChange={(event) =>
+                            setDamageResolution(event.target.value as 'repair' | 'write_off')
+                          }
+                        >
+                          <option value="repair">תוקן</option>
+                          <option value="write_off" disabled={!adminActionsEnabled}>
+                            הוצאה מהמלאי
+                          </option>
+                        </select>
+                      </label>
+                      {!isAdmin && damageResolution === 'write_off' && (
                         <p className="text-sm text-ctp-subtext">
-                          גריעה דורשת מצב מנהל. יש לבחור שחזור במפורש כדי להמשיך.
+                          גריעה דורשת מצב מנהל. יש לבחור החזרה לשימוש במפורש כדי להמשיך.
                         </p>
-                      ) : (
-                        <p className="text-sm text-ctp-subtext">פתרון: החזרה לשימוש</p>
                       )}
                       <Note />
                     </ActionCard>

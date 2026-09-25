@@ -591,12 +591,15 @@ describe('App dialog workflows', () => {
     const user = await renderReadyApp();
     api.expireAdmin();
     await openManagement(user, 'מלאי ופגומים');
-    await screen.findByText('החזרת ציוד פגום לשימוש');
+    await screen.findByText('החזרה לשימוש או גריעה');
     const repair = screen.getByText('טיפול בפגום').closest('form')!;
     const addStock = screen.getByText('הוספת מלאי').closest('form')!;
     expect((repair.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
     expect((addStock.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
-    expect(within(repair).queryByLabelText('פתרון')).toBeNull();
+    expect(within(repair).getByLabelText('פתרון')).toBeTruthy();
+    expect(
+      (within(repair).getByRole('option', { name: 'הוצאה מהמלאי' }) as HTMLOptionElement).disabled,
+    ).toBe(true);
     expect(screen.queryByText('המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.')).toBeNull();
     await user.selectOptions(within(repair).getByLabelText('פריט'), String(item.id));
     await user.type(within(repair).getByLabelText('כמות'), '1');
@@ -618,7 +621,13 @@ describe('App dialog workflows', () => {
     await waitFor(() =>
       expect((form.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true),
     );
-    expect(within(form).queryByLabelText('פתרון')).toBeNull();
+    expect(within(form).getByLabelText('פתרון')).toHaveProperty('value', 'write_off');
+    expect(
+      screen.getByText('גריעה דורשת מצב מנהל. יש לבחור החזרה לשימוש במפורש כדי להמשיך.'),
+    ).toBeTruthy();
+    expect(
+      (within(form).getByRole('option', { name: 'הוצאה מהמלאי' }) as HTMLOptionElement).disabled,
+    ).toBe(true);
     fireEvent.submit(form);
     expect(api.requests.filter((request) => request.path === '/api/damage')).toHaveLength(0);
     await user.click(screen.getByRole('button', { name: 'בחירת החזרה לשימוש' }));
@@ -636,7 +645,7 @@ describe('App dialog workflows', () => {
     const user = await renderReadyApp();
     api.expireAdmin();
     await openManagement(user, 'מלאי ופגומים');
-    await screen.findByText('החזרת ציוד פגום לשימוש');
+    await screen.findByText('החזרה לשימוש או גריעה');
     const form = screen.getByText('טיפול בפגום').closest('form')!;
     api.startSessionReconciliation();
     await waitFor(() =>

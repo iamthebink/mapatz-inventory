@@ -53,6 +53,13 @@ export function Radios({ active, isAdmin, showToast }: Props) {
     };
   }, [active, showToast, loadRevision]);
 
+  useEffect(() => {
+    if (!isAdmin) {
+      setConfirmCount(null);
+      if (fleet) setCount(String(fleet.count));
+    }
+  }, [isAdmin, fleet]);
+
   async function mutate(
     path: string,
     method: 'PUT' | 'POST',
@@ -88,7 +95,7 @@ export function Radios({ active, isAdmin, showToast }: Props) {
   }
 
   function submitCount() {
-    if (!fleet) return;
+    if (!fleet || !isAdmin || busy) return;
     const next = Number(count);
     if (!Number.isSafeInteger(next) || next < 0 || count.trim() === '') {
       showToast('מספר מכשירי קשר לא תקין', 'יש להזין מספר שלם שאינו שלילי', 'error');
@@ -112,11 +119,14 @@ export function Radios({ active, isAdmin, showToast }: Props) {
           <p className="mt-1 text-sm text-ctp-subtext">מיקום ומצב מכשירי הקשר</p>
         </div>
       </div>
-      {isAdmin && fleet && (
+      {fleet && (
         <div className="action-card flex flex-wrap items-end justify-between gap-4">
           <div>
             <h3 className="font-semibold">מספר מכשירי הקשר</h3>
             <p className="mt-1 text-sm text-ctp-subtext">שינוי הכמות יגדיר את כל המכשירים מחדש</p>
+            {!isAdmin && (
+              <p className="mt-1 text-sm text-ctp-subtext">שינוי הכמות דורש מצב מנהל.</p>
+            )}
           </div>
           <form
             onSubmit={(event) => {
@@ -134,9 +144,10 @@ export function Radios({ active, isAdmin, showToast }: Props) {
                 value={count}
                 onChange={(event) => setCount(event.target.value)}
                 className="input-field w-32"
+                disabled={!isAdmin || busy}
               />
             </label>
-            <button type="submit" disabled={busy} className="primary-button">
+            <button type="submit" disabled={!isAdmin || busy} className="primary-button">
               שמירה
             </button>
           </form>
@@ -324,7 +335,7 @@ export function Radios({ active, isAdmin, showToast }: Props) {
           </form>
         </Dialog>
       )}
-      {confirmCount !== null && fleet && (
+      {isAdmin && confirmCount !== null && fleet && (
         <Dialog
           title="אישור שינוי מספר מכשירי קשר"
           level="root"

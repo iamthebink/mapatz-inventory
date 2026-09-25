@@ -22,6 +22,45 @@ const fleet: RadioFleet = {
   radios: [{ number: 1, holder: 'Alice', team: 'Old', lost: false }],
 };
 
+it('keeps the count editor visible but disabled outside admin mode', async () => {
+  vi.mocked(fetchRadios).mockResolvedValue(fleet);
+  render(
+    <DialogStackProvider>
+      <Radios active isAdmin={false} showToast={vi.fn()} />
+    </DialogStackProvider>,
+  );
+  expect(
+    (await screen.findByRole('spinbutton', { name: 'מספר מכשירי קשר' })).hasAttribute('disabled'),
+  ).toBe(true);
+  expect(screen.getByRole('button', { name: 'שמירה' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByText('שינוי הכמות דורש מצב מנהל.')).toBeTruthy();
+  expect(radioCommand).not.toHaveBeenCalled();
+});
+
+it('closes a pending count confirmation when admin mode ends', async () => {
+  vi.mocked(fetchRadios).mockResolvedValue(fleet);
+  const showToast = vi.fn();
+  const view = render(
+    <DialogStackProvider>
+      <Radios active isAdmin showToast={showToast} />
+    </DialogStackProvider>,
+  );
+  fireEvent.change(await screen.findByRole('spinbutton', { name: 'מספר מכשירי קשר' }), {
+    target: { value: '2' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+  expect(screen.getByRole('alertdialog')).toBeTruthy();
+  view.rerender(
+    <DialogStackProvider>
+      <Radios active isAdmin={false} showToast={showToast} />
+    </DialogStackProvider>,
+  );
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  expect(screen.getByRole('button', { name: 'שמירה' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' })).toHaveProperty('value', '1');
+  expect(radioCommand).not.toHaveBeenCalled();
+});
+
 it('clears the previous team once and retains a newly entered team through later holder edits', async () => {
   vi.mocked(fetchRadios).mockResolvedValue(fleet);
   vi.mocked(radioCommand).mockResolvedValue(fleet);
