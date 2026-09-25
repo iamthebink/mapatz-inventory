@@ -28,6 +28,11 @@ const kinds: Record<Item['kind'], string> = {
   non_consumable: 'מושאל',
   camp_equipment: 'ציוד מחנה',
 };
+const kindTones: Record<Item['kind'], 'blue' | 'mauve' | 'green'> = {
+  consumable: 'blue',
+  non_consumable: 'mauve',
+  camp_equipment: 'green',
+};
 const itemDraft = (item: Item | null): Draft => ({
   name: item?.name ?? '',
   kind: item?.kind ?? 'consumable',
@@ -367,7 +372,9 @@ export function InventoryManagement({
     {
       key: 'kind',
       label: 'סוג',
-      render: (item) => kinds[item.kind],
+      render: (item) => (
+        <span className={`status-badge ${kindTones[item.kind]}`}>{kinds[item.kind]}</span>
+      ),
       sortValue: (item) => item.kind,
     },
     {

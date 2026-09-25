@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DialogStackProvider } from '../../src/web/Dialog';
@@ -49,6 +49,23 @@ afterEach(() => {
 });
 
 describe('inventory management UI', () => {
+  it('uses the previous blue, mauve and green badges for item types', () => {
+    view(true, [
+      { ...item, id: 1, kind: 'consumable', name: 'Consumable' },
+      { ...item, id: 2, kind: 'non_consumable', name: 'Loanable' },
+      { ...item, id: 3, kind: 'camp_equipment', name: 'Camp' },
+    ]);
+    expect(
+      within(screen.getByRole('row', { name: /Consumable/ })).getByText('מתכלה').className,
+    ).toBe('status-badge blue');
+    expect(within(screen.getByRole('row', { name: /Loanable/ })).getByText('מושאל').className).toBe(
+      'status-badge mauve',
+    );
+    expect(within(screen.getByRole('row', { name: /Camp/ })).getByText('ציוד מחנה').className).toBe(
+      'status-badge green',
+    );
+  });
+
   it('keeps search and filters in the toolbar without changing table behavior', async () => {
     const user = userEvent.setup();
     const store: Location = {
