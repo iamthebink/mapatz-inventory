@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Radio as RadioIcon } from 'lucide-react';
 import type { Radio, RadioFleet } from '../domain/types.js';
 import { Dialog } from './Dialog';
 import { ApiError, fetchRadios, radioCommand } from './api';
@@ -101,107 +102,136 @@ export function Radios({ active, isAdmin, showToast }: Props) {
   }
 
   return (
-    <section dir="rtl" aria-label="מכשירי קשר" className="space-y-5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">מכשירי קשר</h1>
-          <p>מיקום ומצב מכשירי הקשר</p>
+    <section dir="rtl" aria-label="מכשירי קשר" className="mx-auto max-w-6xl space-y-5">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl bg-ctp-lavender/10 text-ctp-lavender">
+          <RadioIcon className="size-5" aria-hidden="true" />
         </div>
-        {isAdmin && fleet && (
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">מכשירי קשר</h2>
+          <p className="mt-1 text-sm text-ctp-subtext">מיקום ומצב מכשירי הקשר</p>
+        </div>
+      </div>
+      {isAdmin && fleet && (
+        <div className="action-card flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h3 className="font-semibold">מספר מכשירי הקשר</h3>
+            <p className="mt-1 text-sm text-ctp-subtext">שינוי הכמות יגדיר את כל המכשירים מחדש</p>
+          </div>
           <form
             onSubmit={(event) => {
               event.preventDefault();
               submitCount();
             }}
-            className="flex items-end gap-2"
+            className="flex flex-wrap items-end gap-2"
           >
-            <label>
-              מספר מכשירי קשר{' '}
+            <label className="field-label">
+              מספר מכשירי קשר
               <input
                 type="number"
                 min="0"
                 step="1"
                 value={count}
                 onChange={(event) => setCount(event.target.value)}
-                className="block rounded border px-2 py-1"
+                className="input-field w-32"
               />
             </label>
-            <button type="submit" disabled={busy} className="secondary-button">
+            <button type="submit" disabled={busy} className="primary-button">
               שמירה
             </button>
           </form>
-        )}
-      </div>
-      {loadStatus === 'failed' && !fleet ? (
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => setLoadRevision((value) => value + 1)}
-        >
-          ניסיון טעינה מחדש
-        </button>
-      ) : !fleet ? (
-        <p role="status">טוען מכשירי קשר…</p>
-      ) : fleet.count === 0 ? (
-        <p>אין מכשירי קשר מוגדרים.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-right">
+        </div>
+      )}
+      <div className="table-shell">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ctp-surface px-4 py-3">
+          <h3 className="font-semibold">רשימת מכשירים</h3>
+          {fleet && <span className="text-xs text-ctp-subtext">{fleet.count} מכשירים</span>}
+        </div>
+        {loadStatus === 'failed' && !fleet ? (
+          <div className="grid min-h-32 place-items-center px-4">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setLoadRevision((value) => value + 1)}
+            >
+              ניסיון טעינה מחדש
+            </button>
+          </div>
+        ) : !fleet ? (
+          <p role="status" className="px-4 py-10 text-center text-sm text-ctp-subtext">
+            טוען מכשירי קשר…
+          </p>
+        ) : fleet.count === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-ctp-subtext">אין מכשירי קשר מוגדרים.</p>
+        ) : (
+          <table className="data-table min-w-[680px]">
             <thead>
               <tr>
-                <th>מספר</th>
-                <th>מחזיק/ה</th>
-                <th>צוות</th>
-                <th>מצב</th>
-                <th>פעולות</th>
+                <th scope="col">מספר</th>
+                <th scope="col">מחזיק/ה</th>
+                <th scope="col">צוות</th>
+                <th scope="col">מצב</th>
+                <th scope="col">פעולות</th>
               </tr>
             </thead>
             <tbody>
               {fleet.radios.map((radio) => (
-                <tr key={radio.number} className="border-t">
-                  <td>{radio.number}</td>
-                  <td>{radio.holder}</td>
-                  <td>{radio.team}</td>
-                  <td>{radio.lost ? 'אבוד' : 'תקין'}</td>
-                  <td className="space-x-2">
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={busy || radio.lost}
-                      onClick={() =>
-                        setEdit({
-                          radio,
-                          generation: fleet.generation,
-                          holder: radio.holder,
-                          team: radio.team,
-                          holderEdited: false,
-                        })
-                      }
+                <tr key={radio.number}>
+                  <td>
+                    <span className="code-pill">{radio.number}</span>
+                  </td>
+                  <td className="font-medium">{radio.holder}</td>
+                  <td className={radio.team ? undefined : 'text-ctp-overlay'}>
+                    {radio.team || '—'}
+                  </td>
+                  <td>
+                    <span
+                      className={`status-badge ${radio.lost ? 'bg-ctp-red/10 text-ctp-red' : 'green'}`}
                     >
-                      עדכון מיקום
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={busy}
-                      onClick={() =>
-                        void mutate(
-                          `/radios/${radio.number}/${radio.lost ? 'found' : 'lost'}`,
-                          'POST',
-                          { generation: fleet.generation },
-                          radio.lost ? 'מכשיר הקשר נמצא' : 'מכשיר הקשר סומן כאבוד',
-                        )
-                      }
-                    >
-                      {radio.lost ? 'נמצא' : 'סמן כאבוד'}
-                    </button>
+                      {radio.lost ? 'אבוד' : 'תקין'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="small-button"
+                        disabled={busy || radio.lost}
+                        onClick={() =>
+                          setEdit({
+                            radio,
+                            generation: fleet.generation,
+                            holder: radio.holder,
+                            team: radio.team,
+                            holderEdited: false,
+                          })
+                        }
+                      >
+                        עדכון מיקום
+                      </button>
+                      <button
+                        type="button"
+                        className={`small-button ${radio.lost ? 'text-ctp-green' : 'text-ctp-red'}`}
+                        disabled={busy}
+                        onClick={() =>
+                          void mutate(
+                            `/radios/${radio.number}/${radio.lost ? 'found' : 'lost'}`,
+                            'POST',
+                            { generation: fleet.generation },
+                            radio.lost ? 'מכשיר הקשר נמצא' : 'מכשיר הקשר סומן כאבוד',
+                          )
+                        }
+                      >
+                        {radio.lost ? 'נמצא' : 'סמן כאבוד'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
       {edit && (
         <Dialog
           title={`עדכון מיקום מכשיר קשר ${edit.radio.number}`}
@@ -237,7 +267,12 @@ export function Radios({ active, isAdmin, showToast }: Props) {
               >
                 החזרה לצוללת
               </button>
-              <button type="submit" form="radio-custody-form" disabled={busy}>
+              <button
+                type="submit"
+                form="radio-custody-form"
+                disabled={busy}
+                className="primary-button"
+              >
                 שמירה
               </button>
             </>
@@ -255,34 +290,37 @@ export function Radios({ active, isAdmin, showToast }: Props) {
                 true,
               );
             }}
-            className="space-y-3"
+            className="dialog-form"
           >
-            <label className="block">
-              מחזיק/ה
-              <input
-                className="block w-full rounded border px-2 py-1"
-                value={edit.holder}
-                onChange={(event) =>
-                  setEdit({
-                    ...edit,
-                    holder: event.target.value,
-                    holderEdited: edit.holderEdited || event.target.value !== edit.holder,
-                    team: !edit.holderEdited && event.target.value !== edit.holder ? '' : edit.team,
-                  })
-                }
-                required
-                maxLength={32767}
-              />
-            </label>
-            <label className="block">
-              צוות
-              <input
-                className="block w-full rounded border px-2 py-1"
-                value={edit.team}
-                onChange={(event) => setEdit({ ...edit, team: event.target.value })}
-                maxLength={32767}
-              />
-            </label>
+            <div className="dialog-fields">
+              <label className="field-label">
+                מחזיק/ה
+                <input
+                  className="input-field"
+                  value={edit.holder}
+                  onChange={(event) =>
+                    setEdit({
+                      ...edit,
+                      holder: event.target.value,
+                      holderEdited: edit.holderEdited || event.target.value !== edit.holder,
+                      team:
+                        !edit.holderEdited && event.target.value !== edit.holder ? '' : edit.team,
+                    })
+                  }
+                  required
+                  maxLength={32767}
+                />
+              </label>
+              <label className="field-label">
+                צוות
+                <input
+                  className="input-field"
+                  value={edit.team}
+                  onChange={(event) => setEdit({ ...edit, team: event.target.value })}
+                  maxLength={32767}
+                />
+              </label>
+            </div>
           </form>
         </Dialog>
       )}
@@ -307,6 +345,7 @@ export function Radios({ active, isAdmin, showToast }: Props) {
               </button>
               <button
                 type="button"
+                className="danger-button"
                 disabled={busy}
                 onClick={() =>
                   void mutate(
