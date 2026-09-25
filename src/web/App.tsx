@@ -65,6 +65,7 @@ import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
 import { PeriodSummary } from './PeriodSummary';
 import { Radios } from './Radios';
+import { RadioCountSettings } from './RadioCountSettings';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -152,7 +153,7 @@ const managementNavigation: {
   },
   { key: 'borrowers', label: 'שואלים', description: 'אנשים וארגונים', icon: Users },
   { key: 'data', label: 'ייבוא וייצוא', description: 'איפוס ושחזור מקובץ', icon: Download },
-  { key: 'access', label: 'הרשאות', description: 'סיסמאות גישה', icon: ShieldCheck },
+  { key: 'access', label: 'הרשאות והגדרות', description: 'סיסמאות ומכשירי קשר', icon: ShieldCheck },
 ];
 
 function number(form: FormData, name: string): number {
@@ -978,7 +979,7 @@ export function App() {
       )}
       {toast && <Toast key={`toast-${toast.id}`} toast={toast} onDismiss={dismissToast} />}
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        {tab === 'radios' && <Radios active isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'radios' && <Radios active showToast={showToast} />}
         {(tab === 'desk' || tab === 'summary') && (
           <div hidden={tab !== 'desk'}>
             <BorrowerWorkflow
@@ -1431,7 +1432,7 @@ export function App() {
                 </div>
               )}
               {managementTab === 'access' && (
-                <div className="max-w-2xl">
+                <div className="max-w-2xl space-y-4">
                   <ActionCard
                     title="החלפת סיסמה"
                     description="עדכון הסיסמה לכניסה למצב מנהל"
@@ -1450,6 +1451,11 @@ export function App() {
                   >
                     <PasswordField name="password" label="סיסמה חדשה" />
                   </ActionCard>
+                  <RadioCountSettings
+                    isAdmin={isAdmin}
+                    sessionReconciling={sessionReconciling}
+                    showToast={showToast}
+                  />
                   {!isAdmin && <PermissionNote />}
                 </div>
               )}

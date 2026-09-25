@@ -7,7 +7,6 @@ import type { ToastTone } from './Toast';
 
 type Props = {
   active: boolean;
-  isAdmin: boolean;
   showToast: (title: string, message: string, tone: ToastTone) => void;
 };
 type CustodyEdit = {
@@ -18,11 +17,9 @@ type CustodyEdit = {
   holderEdited: boolean;
 };
 
-export function Radios({ active, isAdmin, showToast }: Props) {
+export function Radios({ active, showToast }: Props) {
   const [fleet, setFleet] = useState<RadioFleet | null>(null);
   const [edit, setEdit] = useState<CustodyEdit | null>(null);
-  const [count, setCount] = useState('');
-  const [confirmCount, setConfirmCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadStatus, setLoadStatus] = useState<'loading' | 'failed' | 'ready'>('loading');
   const [loadRevision, setLoadRevision] = useState(0);
@@ -35,7 +32,6 @@ export function Radios({ active, isAdmin, showToast }: Props) {
       .then((next) => {
         if (live) {
           setFleet(next);
-          setCount(String(next.count));
           setLoadStatus('ready');
         }
       })
@@ -53,13 +49,6 @@ export function Radios({ active, isAdmin, showToast }: Props) {
     };
   }, [active, showToast, loadRevision]);
 
-  useEffect(() => {
-    if (!isAdmin) {
-      setConfirmCount(null);
-      if (fleet) setCount(String(fleet.count));
-    }
-  }, [isAdmin, fleet]);
-
   async function mutate(
     path: string,
     method: 'PUT' | 'POST',
@@ -71,10 +60,8 @@ export function Radios({ active, isAdmin, showToast }: Props) {
     try {
       const next = await radioCommand(path, method, body);
       setFleet(next);
-      setCount(String(next.count));
       if (close) {
         setEdit(null);
-        setConfirmCount(null);
       }
       showToast(success, '', 'success');
     } catch (error) {
@@ -94,20 +81,6 @@ export function Radios({ active, isAdmin, showToast }: Props) {
     }
   }
 
-  function submitCount() {
-    if (!fleet || !isAdmin || busy) return;
-    const next = Number(count);
-    if (!Number.isSafeInteger(next) || next < 0 || count.trim() === '') {
-      showToast('מספר מכשירי קשר לא תקין', 'יש להזין מספר שלם שאינו שלילי', 'error');
-      return;
-    }
-    if (next === fleet.count) {
-      showToast('מספר מכשירי הקשר לא השתנה', '', 'success');
-      return;
-    }
-    setConfirmCount(next);
-  }
-
   return (
     <section dir="rtl" aria-label="מכשירי קשר" className="mx-auto max-w-6xl space-y-5">
       <div className="flex items-start gap-3">
@@ -119,40 +92,6 @@ export function Radios({ active, isAdmin, showToast }: Props) {
           <p className="mt-1 text-sm text-ctp-subtext">מיקום ומצב מכשירי הקשר</p>
         </div>
       </div>
-      {fleet && (
-        <div className="action-card flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h3 className="font-semibold">מספר מכשירי הקשר</h3>
-            <p className="mt-1 text-sm text-ctp-subtext">שינוי הכמות יגדיר את כל המכשירים מחדש</p>
-            {!isAdmin && (
-              <p className="mt-1 text-sm text-ctp-subtext">שינוי הכמות דורש מצב מנהל.</p>
-            )}
-          </div>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitCount();
-            }}
-            className="flex flex-wrap items-end gap-2"
-          >
-            <label className="field-label">
-              מספר מכשירי קשר
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={count}
-                onChange={(event) => setCount(event.target.value)}
-                className="input-field w-32"
-                disabled={!isAdmin || busy}
-              />
-            </label>
-            <button type="submit" disabled={!isAdmin || busy} className="primary-button">
-              שמירה
-            </button>
-          </form>
-        </div>
-      )}
       <div className="table-shell">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ctp-surface px-4 py-3">
           <h3 className="font-semibold">רשימת מכשירים</h3>
@@ -333,50 +272,6 @@ export function Radios({ active, isAdmin, showToast }: Props) {
               </label>
             </div>
           </form>
-        </Dialog>
-      )}
-      {isAdmin && confirmCount !== null && fleet && (
-        <Dialog
-          title="אישור שינוי מספר מכשירי קשר"
-          level="root"
-          role="alertdialog"
-          variant="destructive"
-          busy={busy}
-          dismissible={!busy}
-          onClose={() => setConfirmCount(null)}
-          actions={
-            <>
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={busy}
-                onClick={() => setConfirmCount(null)}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                disabled={busy}
-                onClick={() =>
-                  void mutate(
-                    '/radios/count',
-                    'PUT',
-                    { count: confirmCount, generation: fleet.generation },
-                    'מספר מכשירי הקשר עודכן',
-                    true,
-                  )
-                }
-              >
-                אישור שינוי
-              </button>
-            </>
-          }
-        >
-          <p>
-            שינוי מספר מכשירי הקשר מ־{fleet.count} ל־{confirmCount} ימחק את כל מיקומי המכשירים
-            והסימונים כאבודים. כל המכשירים יוגדרו מחדש בצוללת, ללא צוות וללא סימון כאבוד. להמשיך?
-          </p>
         </Dialog>
       )}
     </section>

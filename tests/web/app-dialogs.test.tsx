@@ -150,6 +150,12 @@ function installApiMock({
       if (path === '/api/locations?all=1') return response(catalogLocations);
       if (path === '/api/loans') return response(loans);
       if (path === '/api/ledger') return response([]);
+      if (path === '/api/radios')
+        return response({
+          count: 1,
+          generation: 4,
+          radios: [{ number: 1, holder: 'צוללת', team: '', lost: false }],
+        });
       throw new Error(`Unexpected request: ${method} ${path}`);
     }),
   );
@@ -427,7 +433,7 @@ describe('App dialog workflows', () => {
   it('conceals the password field again after a successful password change', async () => {
     installApiMock();
     const user = await renderReadyApp();
-    await openManagement(user, 'הרשאות');
+    await openManagement(user, 'הרשאות והגדרות');
 
     const form = screen.getByText('החלפת סיסמה').closest('form')!;
     const password = within(form).getByLabelText('סיסמה חדשה') as HTMLInputElement;
@@ -440,6 +446,26 @@ describe('App dialog workflows', () => {
     await waitFor(() => expect(password.value).toBe(''));
     expect(password.type).toBe('password');
     expect(within(form).getByRole('button', { name: 'הצגת סיסמה' })).toBeTruthy();
+  });
+
+  it('shows radio quantity in Permissions and Settings instead of the Radios tab', async () => {
+    const api = installApiMock();
+    const user = await renderReadyApp();
+    await user.click(screen.getByRole('link', { name: 'מכשירי קשר' }));
+    await screen.findByText('רשימת מכשירים');
+    expect(screen.queryByRole('spinbutton', { name: 'מספר מכשירי קשר' })).toBeNull();
+
+    await openManagement(user, 'הרשאות והגדרות');
+    expect(await screen.findByRole('spinbutton', { name: 'מספר מכשירי קשר' })).toHaveProperty(
+      'value',
+      '1',
+    );
+    api.expireAdmin();
+    await waitFor(() =>
+      expect(
+        screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' }).hasAttribute('disabled'),
+      ).toBe(true),
+    );
   });
 
   it('keeps item editing open when a duplicate-name conflict is Toasted', async () => {

@@ -22,52 +22,13 @@ const fleet: RadioFleet = {
   radios: [{ number: 1, holder: 'Alice', team: 'Old', lost: false }],
 };
 
-it('keeps the count editor visible but disabled outside admin mode', async () => {
-  vi.mocked(fetchRadios).mockResolvedValue(fleet);
-  render(
-    <DialogStackProvider>
-      <Radios active isAdmin={false} showToast={vi.fn()} />
-    </DialogStackProvider>,
-  );
-  expect(
-    (await screen.findByRole('spinbutton', { name: 'מספר מכשירי קשר' })).hasAttribute('disabled'),
-  ).toBe(true);
-  expect(screen.getByRole('button', { name: 'שמירה' }).hasAttribute('disabled')).toBe(true);
-  expect(screen.getByText('שינוי הכמות דורש מצב מנהל.')).toBeTruthy();
-  expect(radioCommand).not.toHaveBeenCalled();
-});
-
-it('closes a pending count confirmation when admin mode ends', async () => {
-  vi.mocked(fetchRadios).mockResolvedValue(fleet);
-  const showToast = vi.fn();
-  const view = render(
-    <DialogStackProvider>
-      <Radios active isAdmin showToast={showToast} />
-    </DialogStackProvider>,
-  );
-  fireEvent.change(await screen.findByRole('spinbutton', { name: 'מספר מכשירי קשר' }), {
-    target: { value: '2' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'שמירה' }));
-  expect(screen.getByRole('alertdialog')).toBeTruthy();
-  view.rerender(
-    <DialogStackProvider>
-      <Radios active isAdmin={false} showToast={showToast} />
-    </DialogStackProvider>,
-  );
-  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-  expect(screen.getByRole('button', { name: 'שמירה' }).hasAttribute('disabled')).toBe(true);
-  expect(screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' })).toHaveProperty('value', '1');
-  expect(radioCommand).not.toHaveBeenCalled();
-});
-
 it('clears the previous team once and retains a newly entered team through later holder edits', async () => {
   vi.mocked(fetchRadios).mockResolvedValue(fleet);
   vi.mocked(radioCommand).mockResolvedValue(fleet);
   const showToast = vi.fn();
   render(
     <DialogStackProvider>
-      <Radios active isAdmin showToast={showToast} />
+      <Radios active showToast={showToast} />
     </DialogStackProvider>,
   );
   const update = await screen.findByRole('button', { name: 'עדכון מיקום' });
@@ -100,44 +61,6 @@ it('clears the previous team once and retains a newly entered team through later
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 });
 
-it('confirms a count change and renders the returned fleet', async () => {
-  vi.mocked(fetchRadios).mockResolvedValue(fleet);
-  const expanded: RadioFleet = {
-    count: 2,
-    generation: 5,
-    radios: [
-      { number: 1, holder: 'צוללת', team: '', lost: false },
-      { number: 2, holder: 'צוללת', team: '', lost: false },
-    ],
-  };
-  vi.mocked(radioCommand).mockResolvedValue(expanded);
-  render(
-    <DialogStackProvider>
-      <Radios active isAdmin showToast={vi.fn()} />
-    </DialogStackProvider>,
-  );
-  await screen.findByRole('spinbutton', { name: 'מספר מכשירי קשר' });
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' }), {
-    target: { value: '2' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'שמירה' }));
-  const confirmation = screen.getByRole('alertdialog');
-  expect(confirmation.textContent).toContain('מ־1 ל־2');
-  fireEvent.click(within(confirmation).getByRole('button', { name: 'ביטול' }));
-  expect(radioCommand).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'שמירה' }));
-  const confirmed = screen.getByRole('alertdialog');
-  fireEvent.click(within(confirmed).getByRole('button', { name: 'אישור שינוי' }));
-  await waitFor(() =>
-    expect(radioCommand).toHaveBeenCalledWith('/radios/count', 'PUT', { count: 2, generation: 4 }),
-  );
-  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-  expect(screen.getAllByRole('row')).toHaveLength(3);
-  expect(
-    (screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' }) as HTMLInputElement).value,
-  ).toBe('2');
-});
-
 it('offers lost and found actions and locks custody while lost', async () => {
   vi.mocked(fetchRadios).mockResolvedValue(fleet);
   vi.mocked(radioCommand)
@@ -145,7 +68,7 @@ it('offers lost and found actions and locks custody while lost', async () => {
     .mockResolvedValueOnce(fleet);
   render(
     <DialogStackProvider>
-      <Radios active isAdmin={false} showToast={vi.fn()} />
+      <Radios active showToast={vi.fn()} />
     </DialogStackProvider>,
   );
   fireEvent.click(await screen.findByRole('button', { name: 'סמן כאבוד' }));
@@ -171,7 +94,7 @@ it('retries a failed initial load after a toast without leaving a loading messag
   const showToast = vi.fn();
   render(
     <DialogStackProvider>
-      <Radios active isAdmin showToast={showToast} />
+      <Radios active showToast={showToast} />
     </DialogStackProvider>,
   );
   const retry = await screen.findByRole('button', { name: 'ניסיון טעינה מחדש' });
@@ -189,7 +112,7 @@ it('closes obsolete custody edits on a generation conflict and retains edits on 
     .mockRejectedValueOnce(new ApiError(409, 'stale_radio_fleet', 'obsolete'));
   render(
     <DialogStackProvider>
-      <Radios active isAdmin showToast={vi.fn()} />
+      <Radios active showToast={vi.fn()} />
     </DialogStackProvider>,
   );
   fireEvent.click(await screen.findByRole('button', { name: 'עדכון מיקום' }));

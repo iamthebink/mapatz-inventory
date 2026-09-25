@@ -77,3 +77,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
   summary: Reconcile inventory action state after a committed mutation whose general snapshot refresh fails.
   evidence: Existing `action()` warns that refresh failed but releases pending state with stale quantities, allowing a second non-idempotent repair or other inventory action before a successful refresh.
+- source_spec: `/Users/orba/projects/mapatz-inventory/_bmad-output/implementation-artifacts/spec-radio-count-in-permissions-settings.md`
+  summary: Define and enforce an operational maximum for the radio fleet count.
+  evidence: The pre-existing count parser accepts scientific notation and the server sets no upper bound; a safe limit requires a domain decision and consistent validation across UI and API.
