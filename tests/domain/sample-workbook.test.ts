@@ -30,7 +30,19 @@ describe('field-scale sample workbook', () => {
     });
     expect(payload.items).toHaveLength(72);
     expect(payload.borrowers).toHaveLength(12);
-    expect(payload.events).toHaveLength(221);
+    expect(payload.events).toHaveLength(483);
+    const eventsByDay = new Map<string, number>();
+    for (const event of payload.events) {
+      const day = event.createdAt.slice(0, 10);
+      eventsByDay.set(day, (eventsByDay.get(day) ?? 0) + 1);
+    }
+    expect(eventsByDay.size).toBe(14);
+    expect([...eventsByDay.values()].every((count) => count >= 25)).toBe(true);
+    expect(payload.events.at(-1)).toMatchObject({
+      id: 483,
+      kind: 'stock_removed',
+      createdAt: '2026-01-14 14:46:00',
+    });
     // Three deliberately authored histories each return one outstanding and recover one lost unit.
     for (const [checkout, recovered, ordinary] of [
       [135, 137, 138],
@@ -97,8 +109,8 @@ describe('field-scale sample workbook', () => {
     expect(items.filter((item) => item.kind === 'consumable')).toHaveLength(36);
     expect(items.filter((item) => item.kind === 'non_consumable')).toHaveLength(36);
     expect(items.filter((item) => item.archived)).toHaveLength(8);
-    expect(loans).toHaveLength(18);
-    expect(loans.reduce((total, loan) => total + loan.outstanding, 0)).toBe(39);
+    expect(loans).toHaveLength(34);
+    expect(loans.reduce((total, loan) => total + loan.outstanding, 0)).toBe(55);
     expect(unresolvedDamageReport(snapshot)).toHaveLength(6);
     expect(consumablesUsageReport(snapshot)).toHaveLength(36);
     db.close();
@@ -108,7 +120,7 @@ describe('field-scale sample workbook', () => {
     const payload = await parseResetWorkbook(await sampleWorkbook());
     expect(payload.locations).toHaveLength(3);
     expect(payload.items).toHaveLength(72);
-    expect(payload.items.reduce((total, item) => total + item.total, 0)).toBe(5_299);
+    expect(payload.items.reduce((total, item) => total + item.total, 0)).toBe(4_470);
 
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
