@@ -209,7 +209,7 @@
     overflow-x: auto;
   }
   .period-summary-table {
-    min-width: 40rem;
+    min-width: 34rem;
   }
   .period-summary-table th,
   .period-summary-table td,
@@ -217,8 +217,14 @@
   .period-summary-items td {
     @apply border-b border-ctp-surface px-3 py-2;
   }
-  .period-summary-actions {
-    @apply flex flex-wrap gap-2;
+  .period-summary-borrower {
+    @apply flex items-center gap-2;
+  }
+  .period-summary-expander {
+    @apply inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ctp-subtext;
+  }
+  .period-summary-expander:hover {
+    @apply bg-ctp-mantle text-ctp-text;
   }
   .toast-viewport {
     @apply pointer-events-none fixed inset-x-0 bottom-4 z-90 flex justify-center px-4 sm:right-4 sm:left-auto sm:w-full sm:max-w-md sm:px-0;

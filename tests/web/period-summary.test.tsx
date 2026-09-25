@@ -57,10 +57,23 @@ describe('period summary view', () => {
     vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
     const { openCard } = view();
     await screen.findByText('אלף');
-    const expand = screen.getAllByRole('button', { name: 'הצגת ציוד' });
-    fireEvent.click(expand[0]!);
-    fireEvent.click(expand[1]!);
-    expect(screen.getAllByRole('button', { name: 'הסתרת ציוד' })).toHaveLength(2);
+    const firstRow = screen.getByText('אלף').closest('tr')!;
+    const firstToggle = within(firstRow).getByRole('button', { name: 'הצגת ציוד של אלף' });
+    expect(firstToggle.closest('td')).toBe(firstRow.querySelector('td'));
+    expect(
+      within(firstRow)
+        .getByRole('button', { name: 'פתיחת כרטיס שואל — אלף' })
+        .classList.contains('borrower-directory-action'),
+    ).toBe(true);
+    expect(screen.queryByRole('columnheader', { name: 'פעולות' })).toBeNull();
+    fireEvent.click(firstToggle);
+    fireEvent.click(screen.getByRole('button', { name: 'הצגת ציוד של בית' }));
+    expect(
+      screen.getByRole('button', { name: 'הסתרת ציוד של אלף' }).getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('button', { name: 'הסתרת ציוד של בית' }).getAttribute('aria-expanded'),
+    ).toBe('true');
     expect(screen.getByText('כיסא')).toBeTruthy();
     expect(screen.getByText('מקדחה')).toBeTruthy();
     fireEvent.change(screen.getByRole('searchbox', { name: 'חיפוש שואל' }), {
@@ -73,7 +86,7 @@ describe('period summary view', () => {
     });
     expect(screen.queryByText('אלף')).toBeNull();
     const row = screen.getByText('בית').closest('tr')!;
-    fireEvent.click(within(row).getByRole('button', { name: 'פתיחת כרטיס שואל' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'פתיחת כרטיס שואל — בית' }));
     expect(openCard).toHaveBeenCalledWith(expect.objectContaining({ id: 2, archived: true }));
     expect(screen.getByRole('searchbox', { name: 'חיפוש שואל' }).getAttribute('value')).toBe(
       'user-2',

@@ -22,7 +22,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
   const requestRef = useRef(0);
   const priorTodayRef = useRef(todayInIsrael());
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const openButtonsRef = useRef(new Map<number, HTMLButtonElement>());
+  const borrowerNameRefs = useRef(new Map<number, HTMLButtonElement>());
   const returnFocusRef = useRef<number | null>(null);
   const lastReturnRevisionRef = useRef(returnRevision);
 
@@ -95,7 +95,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
     if (status !== 'ready' || !result || returnFocusRef.current === null) return;
     const id = returnFocusRef.current;
     returnFocusRef.current = null;
-    (openButtonsRef.current.get(id) ?? headingRef.current)?.focus();
+    (borrowerNameRefs.current.get(id) ?? headingRef.current)?.focus();
   }, [result, status]);
 
   useEffect(() => {
@@ -193,7 +193,6 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                   <th scope="col">מזהה</th>
                   <th scope="col">איש קשר</th>
                   <th scope="col">כמות</th>
-                  <th scope="col">פעולות</th>
                 </tr>
               </thead>
               <tbody>
@@ -201,51 +200,56 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                   const isExpanded = expanded.has(borrower.id);
                   return [
                     <tr key={`borrower-${borrower.id}`}>
-                      <td>{borrower.name}</td>
+                      <td>
+                        <div className="period-summary-borrower">
+                          <button
+                            type="button"
+                            className="period-summary-expander"
+                            aria-label={`${isExpanded ? 'הסתרת' : 'הצגת'} ציוד של ${borrower.name}`}
+                            aria-expanded={isExpanded}
+                            aria-controls={`period-items-${borrower.id}`}
+                            onClick={() =>
+                              setExpanded((current) => {
+                                const next = new Set(current);
+                                if (next.has(borrower.id)) next.delete(borrower.id);
+                                else next.add(borrower.id);
+                                return next;
+                              })
+                            }
+                          >
+                            <span aria-hidden="true" dir="ltr">
+                              {isExpanded ? '▼' : '◀'}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="borrower-directory-action"
+                            aria-label={`פתיחת כרטיס שואל — ${borrower.name}`}
+                            ref={(node) => {
+                              if (node) borrowerNameRefs.current.set(borrower.id, node);
+                              else borrowerNameRefs.current.delete(borrower.id);
+                            }}
+                            onClick={() => {
+                              returnFocusRef.current = borrower.id;
+                              openCard(borrower);
+                            }}
+                          >
+                            {borrower.name}
+                          </button>
+                        </div>
+                      </td>
                       <td>
                         <bdi dir="ltr">{borrower.username}</bdi>
                       </td>
                       <td>{borrower.contact || '—'}</td>
                       <td>{total}</td>
-                      <td className="period-summary-actions">
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          aria-expanded={isExpanded}
-                          aria-controls={`period-items-${borrower.id}`}
-                          onClick={() =>
-                            setExpanded((current) => {
-                              const next = new Set(current);
-                              if (next.has(borrower.id)) next.delete(borrower.id);
-                              else next.add(borrower.id);
-                              return next;
-                            })
-                          }
-                        >
-                          {isExpanded ? 'הסתרת ציוד' : 'הצגת ציוד'}
-                        </button>
-                        <button
-                          type="button"
-                          className="primary-button"
-                          ref={(node) => {
-                            if (node) openButtonsRef.current.set(borrower.id, node);
-                            else openButtonsRef.current.delete(borrower.id);
-                          }}
-                          onClick={() => {
-                            returnFocusRef.current = borrower.id;
-                            openCard(borrower);
-                          }}
-                        >
-                          פתיחת כרטיס שואל
-                        </button>
-                      </td>
                     </tr>,
                     <tr
                       key={`items-${borrower.id}`}
                       id={`period-items-${borrower.id}`}
                       hidden={!isExpanded}
                     >
-                      <td colSpan={5}>
+                      <td colSpan={4}>
                         <table className="period-summary-items">
                           <thead>
                             <tr>

@@ -122,9 +122,9 @@ const eventNames: Record<string, string> = {
 };
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
-  { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
   { key: 'inventory', label: 'מלאי', icon: Boxes },
+  { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
   { key: 'catalogs', label: 'ניהול', icon: Settings2 },
 ];

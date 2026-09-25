@@ -51,16 +51,18 @@ test('keeps summary search and expansion through a guarded card return', async (
     .filter({ hasText: seed.borrower.name })
     .first();
   await expect(row).toBeVisible();
-  await row.getByRole('button', { name: 'הצגת ציוד' }).click();
+  await row.getByRole('button', { name: `הצגת ציוד של ${seed.borrower.name}` }).click();
   await expect(page.getByText(seed.item.name, { exact: true })).toBeVisible();
-  await row.getByRole('button', { name: 'פתיחת כרטיס שואל' }).click();
+  await row.getByRole('button', { name: `פתיחת כרטיס שואל — ${seed.borrower.name}` }).click();
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   await expect(card).toBeVisible();
   await expect(card.getByText(seed.borrower.username, { exact: true })).toBeVisible();
   await card.getByRole('button', { name: 'סגירה' }).last().click();
   await expect(card).toBeHidden();
   await expect(search).toHaveValue(seed.borrower.username);
-  await expect(row.getByRole('button', { name: 'הסתרת ציוד' })).toBeVisible();
+  await expect(
+    row.getByRole('button', { name: `הסתרת ציוד של ${seed.borrower.name}` }),
+  ).toBeVisible();
   await expect(page.getByText(seed.item.name, { exact: true })).toBeVisible();
 });
 
@@ -73,8 +75,8 @@ test('refreshes the originating summary after reviewed save and close', async ({
     .filter({ hasText: seed.borrower.name })
     .first();
   await expect(row).toContainText('2');
-  await row.getByRole('button', { name: 'הצגת ציוד' }).click();
-  await row.getByRole('button', { name: 'פתיחת כרטיס שואל' }).click();
+  await row.getByRole('button', { name: `הצגת ציוד של ${seed.borrower.name}` }).click();
+  await row.getByRole('button', { name: `פתיחת כרטיס שואל — ${seed.borrower.name}` }).click();
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   const holding = card.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await holding.getByRole('button', { name: 'החזרת ציוד' }).click();
@@ -86,9 +88,13 @@ test('refreshes the originating summary after reviewed save and close', async ({
   await review.getByRole('button', { name: 'אישור ושמירה' }).click();
   await expect(card).toBeHidden();
   await expect(search).toHaveValue(seed.borrower.username);
-  await expect(row.getByRole('button', { name: 'הסתרת ציוד' })).toBeVisible();
+  await expect(
+    row.getByRole('button', { name: `הסתרת ציוד של ${seed.borrower.name}` }),
+  ).toBeVisible();
   await expect(row.locator('td').nth(3)).toHaveText('1');
-  await expect(row.getByRole('button', { name: 'פתיחת כרטיס שואל' })).toBeFocused();
+  await expect(
+    row.getByRole('button', { name: `פתיחת כרטיס שואל — ${seed.borrower.name}` }),
+  ).toBeFocused();
 });
 
 test('keeps a staged card open when exit is canceled, then returns after confirmed discard', async ({
@@ -102,7 +108,7 @@ test('keeps a staged card open when exit is canceled, then returns after confirm
     .locator('.period-summary-table tbody tr')
     .filter({ hasText: seed.borrower.name })
     .first();
-  await row.getByRole('button', { name: 'פתיחת כרטיס שואל' }).click();
+  await row.getByRole('button', { name: `פתיחת כרטיס שואל — ${seed.borrower.name}` }).click();
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   const holding = card.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await holding.getByRole('button', { name: 'החזרת ציוד' }).click();
@@ -132,7 +138,7 @@ test('keeps a committed card open through failed snapshot refresh and returns af
     .locator('.period-summary-table tbody tr')
     .filter({ hasText: seed.borrower.name })
     .first();
-  await row.getByRole('button', { name: 'פתיחת כרטיס שואל' }).click();
+  await row.getByRole('button', { name: `פתיחת כרטיס שואל — ${seed.borrower.name}` }).click();
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   await expect(card.getByText(seed.borrower.username, { exact: true })).toBeVisible();
   let failRefresh = true;
@@ -200,7 +206,7 @@ test('returning today from a historical-period card leaves that period unchanged
     )
       historicalReads += 1;
   });
-  await row.getByRole('button', { name: 'פתיחת כרטיס שואל' }).click();
+  await row.getByRole('button', { name: `פתיחת כרטיס שואל — ${seed.borrower.name}` }).click();
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   const holding = card.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await holding.getByRole('button', { name: 'החזרת ציוד' }).click();
