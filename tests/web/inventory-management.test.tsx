@@ -238,6 +238,24 @@ describe('inventory management UI', () => {
     await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce());
   });
 
+  it('warns and confirms before archiving an item with available stock', async () => {
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(respond({ itemId: 1, archived: true }));
+    const user = userEvent.setup();
+    view(true, [{ ...item, damaged: 0 }]);
+    await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    await user.click(screen.getByRole('button', { name: 'העברה לארכיון' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('יאפס את כל המלאי הזמין');
+    expect(fetch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    expect(fetch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'העברה לארכיון' }));
+    await user.click(screen.getByRole('button', { name: 'ארכוב ואיפוס מלאי זמין' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({ archived: true });
+  });
+
   it('lets operators inspect and restore damage while disabling catalog mutations and write-off', async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {

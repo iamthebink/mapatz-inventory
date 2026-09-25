@@ -756,20 +756,6 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(409)
       .expect(({ body }) => expect(body.error).toBe('nonzero_balances'));
     inventory.returnCheckout(checkoutId, 1, 0);
-    const current = inventory.listItems(item.name)[0]!;
-    await agent
-      .put(`/api/inventory/items/${item.id}`)
-      .send({
-        key: 'archive-zero-0001',
-        ledgerEpoch: inventory.inventoryEpoch(),
-        name: item.name,
-        aliases: [],
-        lotSize: null,
-        locationId: null,
-        targetAvailable: 0,
-        stockSnapshot: current.stockSnapshot,
-      })
-      .expect(200);
     await agent.post(`/api/items/${item.id}/archive`).send({ archived: true }).expect(204);
     await agent
       .get('/api/items')
@@ -778,7 +764,7 @@ describe('inventory API permission and edge-case matrix', () => {
     await agent
       .get('/api/items?all=1')
       .expect(200)
-      .expect(({ body }) => expect(body[0].archived).toBe(true));
+      .expect(({ body }) => expect(body[0]).toMatchObject({ archived: true, available: 0 }));
     expect(inventory.listLedger()).toHaveLength(4);
     db.close();
   });

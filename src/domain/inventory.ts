@@ -557,15 +557,17 @@ export class InventoryService {
     replacementLocationId?: number | null,
   ): void {
     const item = this.getItem(id);
-    if (archived && (item.available || item.borrowed || item.lost || item.damaged))
+    if (archived && (item.borrowed || item.lost || item.damaged))
       throw new DomainError(
         'nonzero_balances',
-        `לא ניתן לארכב פריט עם יתרות: זמין ${item.available}, מושאל ${item.borrowed}, אבוד ${item.lost}, פגום ${item.damaged}`,
+        `לא ניתן לארכב פריט עם יתרות: מושאל ${item.borrowed}, אבוד ${item.lost}, פגום ${item.damaged}`,
         409,
       );
     const locationId =
       replacementLocationId === undefined ? item.locationId : replacementLocationId;
     if (!archived) this.requireActiveLocation(locationId);
+    if (archived && item.available > 0)
+      this.append('stock_removed', id, item.available, null, null, 'ארכוב פריט');
     this.db
       .prepare('UPDATE items SET archived=?,location_id=? WHERE id=?')
       .run(Number(archived), locationId, id);

@@ -111,6 +111,10 @@ const eventNames: Record<string, string> = {
   repaired: 'תיקון',
   written_off: 'גריעה',
 };
+const ledgerEventName = (event: LedgerEvent) =>
+  event.kind === 'stock_removed' && event.note === 'ארכוב פריט'
+    ? 'איפוס מלאי בארכוב'
+    : (eventNames[event.kind] ?? event.kind);
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
@@ -646,9 +650,7 @@ export function App() {
     {
       key: 'kind',
       label: 'אירוע',
-      render: (event) => (
-        <StatusBadge tone="blue">{eventNames[event.kind] ?? event.kind}</StatusBadge>
-      ),
+      render: (event) => <StatusBadge tone="blue">{ledgerEventName(event)}</StatusBadge>,
       sortValue: (event) => event.kind,
     },
     {
@@ -1115,7 +1117,7 @@ export function App() {
                   event.id,
                   event.created_at,
                   event.kind,
-                  eventNames[event.kind],
+                  ledgerEventName(event),
                   event.itemCode,
                   event.itemName,
                   event.borrowerName,

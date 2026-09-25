@@ -206,7 +206,7 @@ describe('inventory management commands', () => {
     db.close();
   });
 
-  it('requires four zero balances and prevents archived locations on active items', () => {
+  it('zeros available stock while archiving and prevents archived locations on active items', () => {
     const { db, inventory } = setup();
     const location = inventory.createLocation('store', 'Store');
     const item = inventory.createItem({
@@ -222,21 +222,13 @@ describe('inventory management commands', () => {
       }),
     ).toThrow(expect.objectContaining({ code: 'location_in_use' }));
     inventory.addStock(item.id, 1);
-    expect(() => inventory.archiveItem(item.id, true)).toThrow(
-      expect.objectContaining({ code: 'nonzero_balances' }),
-    );
-    const current = inventory.listItems('Rope')[0]!;
-    inventory.saveInventoryItem({
-      key: 'zero-rope-0001',
-      itemId: item.id,
-      name: item.name,
-      aliases: [],
-      lotSize: null,
-      locationId: Number(location.id),
-      targetAvailable: 0,
-      stockSnapshot: current.stockSnapshot,
-    });
     inventory.archiveItem(item.id, true);
+    expect(inventory.listItems('Rope', true)[0]).toMatchObject({ archived: true, available: 0 });
+    expect(inventory.listLedger()[0]).toMatchObject({
+      kind: 'stock_removed',
+      quantity: 1,
+      note: 'ארכוב פריט',
+    });
     inventory.updateLocation(Number(location.id), { code: 'store', name: 'Store', archived: true });
     expect(() => inventory.archiveItem(item.id, false)).toThrow(
       expect.objectContaining({ code: 'invalid_location' }),
@@ -270,6 +262,25 @@ describe('inventory management commands', () => {
     expect(() => inventory.archiveItemCommand(archive)).toThrow(
       expect.objectContaining({ code: 'stale_ledger' }),
     );
+    db.close();
+  });
+
+  it('replays a keyed archive without removing available stock twice', () => {
+    const { db, inventory } = setup();
+    const item = inventory.createItem({ name: 'Archive stock replay', kind: 'consumable' });
+    inventory.addStock(item.id, 5);
+    const command = {
+      key: 'archive-stock-replay-1',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      itemId: item.id,
+      archived: true,
+    };
+    expect(inventory.archiveItemCommand(command)).toEqual({ itemId: item.id, archived: true });
+    expect(inventory.listItems('', true)[0]).toMatchObject({ archived: true, available: 0 });
+    expect(inventory.archiveItemCommand(command)).toEqual({ itemId: item.id, archived: true });
+    expect(inventory.listLedger().filter((event) => event.kind === 'stock_removed')).toMatchObject([
+      { quantity: 5 },
+    ]);
     db.close();
   });
 

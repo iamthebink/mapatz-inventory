@@ -75,6 +75,7 @@ export function InventoryManagement({
   const [locationQuery, setLocationQuery] = useState('');
   const [dirty, setDirty] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [archiveConfirm, setArchiveConfirm] = useState<Item | null>(null);
   const [pending, setPending] = useState(false);
   const [unresolved, setUnresolved] = useState<Attempt | null>(null);
   const [refreshRecovery, setRefreshRecovery] = useState(false);
@@ -717,14 +718,9 @@ export function InventoryManagement({
                 </p>
                 {selected &&
                   !selected.archived &&
-                  !!(
-                    selected.available ||
-                    selected.borrowed ||
-                    selected.lost ||
-                    selected.damaged
-                  ) && (
+                  !!(selected.borrowed || selected.lost || selected.damaged) && (
                     <p>
-                      ארכוב חסום עד שכל היתרות השמורות הן אפס: זמין {selected.available}, מושאל{' '}
+                      ארכוב חסום כל עוד יש יתרות מושאלות, אבודות או פגומות: מושאל{' '}
                       {selected.borrowed}, אבוד {selected.lost}, פגום {selected.damaged}.
                     </p>
                   )}
@@ -804,14 +800,11 @@ export function InventoryManagement({
                       !!unresolved ||
                       refreshRecovery ||
                       (!selected.archived &&
-                        !!(
-                          selected.available ||
-                          selected.borrowed ||
-                          selected.lost ||
-                          selected.damaged
-                        ))
+                        !!(selected.borrowed || selected.lost || selected.damaged))
                     }
-                    onClick={() => archiveItem(selected)}
+                    onClick={() =>
+                      selected.archived ? archiveItem(selected) : setArchiveConfirm(selected)
+                    }
                   >
                     {selected.archived ? 'שחזור פריט' : 'העברה לארכיון'}
                   </button>
@@ -957,6 +950,40 @@ export function InventoryManagement({
               </button>
             </div>
           )}
+        </Dialog>
+      )}
+      {archiveConfirm && (
+        <Dialog
+          title={`לארכב את ${archiveConfirm.name}?`}
+          description="ארכוב הפריט יאפס את כל המלאי הזמין שלו, גם אם היתרה השתנתה מאז פתיחת הפריט. אם נותר מלאי זמין, ההפחתה תירשם בהיסטוריית המלאי."
+          level="subordinate"
+          role="alertdialog"
+          variant="destructive"
+          busy={pending}
+          dismissible={!pending}
+          onClose={() => setArchiveConfirm(null)}
+          returnFocusFallbackRef={fallbackRef}
+        >
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setArchiveConfirm(null)}
+            >
+              ביטול
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              disabled={pending}
+              onClick={() => {
+                archiveItem(archiveConfirm);
+                setArchiveConfirm(null);
+              }}
+            >
+              ארכוב ואיפוס מלאי זמין
+            </button>
+          </div>
         </Dialog>
       )}
       {discardOpen && (
