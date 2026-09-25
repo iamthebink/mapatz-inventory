@@ -311,6 +311,41 @@ export function apiRouter(
   );
 
   api.get('/locations', (req, res) => res.json(service.listLocations(req.query.all === '1')));
+  api.get('/inventory/epoch', (_req, res) => res.json({ ledgerEpoch: service.inventoryEpoch() }));
+  const inventoryLocationSave = z
+    .object({
+      key: z.string().min(8).max(128),
+      ledgerEpoch: positive,
+      code: z.string().trim().min(1).max(40),
+      name: z.string().trim().min(1).max(100),
+      archived: z.boolean().optional(),
+    })
+    .strict();
+  api.post(
+    '/inventory/locations',
+    requireRole('admin'),
+    route((req, res) => {
+      res
+        .status(201)
+        .json(
+          service.saveInventoryLocation(
+            parse(inventoryLocationSave.omit({ archived: true }), req.body),
+          ),
+        );
+    }),
+  );
+  api.put(
+    '/inventory/locations/:id',
+    requireRole('admin'),
+    route((req, res) => {
+      res.json(
+        service.saveInventoryLocation({
+          ...parse(inventoryLocationSave, req.body),
+          locationId: parse(id, req.params.id),
+        }),
+      );
+    }),
+  );
   api.post(
     '/locations',
     requireRole('admin'),
@@ -345,6 +380,91 @@ export function apiRouter(
   api.get('/items', (req, res) =>
     res.json(service.listItems(String(req.query.q ?? ''), req.query.all === '1')),
   );
+  const inventorySave = z
+    .object({
+      key: z.string().min(8).max(128),
+      ledgerEpoch: positive,
+      name: z.string().trim().min(1).max(100),
+      kind: z.enum(['consumable', 'non_consumable', 'camp_equipment']).optional(),
+      aliases: aliases.default([]),
+      lotSize: positive.nullable(),
+      locationId: positive.nullable(),
+      targetAvailable: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+      stockSnapshot: z.number().int().min(0).optional(),
+      note: z.string().max(500).optional(),
+    })
+    .strict();
+  api.post(
+    '/inventory/items',
+    requireRole('admin'),
+    route((req, res) => {
+      res.status(201).json(service.saveInventoryItem(parse(inventorySave, req.body)));
+    }),
+  );
+  api.put(
+    '/inventory/items/:id',
+    requireRole('admin'),
+    route((req, res) => {
+      res.json(
+        service.saveInventoryItem({
+          ...parse(inventorySave.omit({ kind: true }), req.body),
+          itemId: parse(id, req.params.id),
+        }),
+      );
+    }),
+  );
+  api.post(
+    '/inventory/items/:id/archive',
+    requireRole('admin'),
+    route((req, res) => {
+      const body = parse(
+        z
+          .object({
+            key: z.string().min(8).max(128),
+            ledgerEpoch: positive,
+            archived: z.boolean(),
+            locationId: positive.nullable().optional(),
+          })
+          .strict(),
+        req.body,
+      );
+      res.json(service.archiveItemCommand({ ...body, itemId: parse(id, req.params.id) }));
+    }),
+  );
+  api.post(
+    '/inventory/damage',
+    requireRole('operator', 'admin'),
+    route((req, res) => {
+      const body = parse(
+        z
+          .object({
+            key: z.string().min(8).max(128),
+            ledgerEpoch: positive,
+            itemId: positive,
+            quantity: positive,
+            resolution: z.enum(['repair', 'write_off']),
+            note: z.string().max(500).default(''),
+          })
+          .strict(),
+        req.body,
+      );
+      if (
+        body.resolution === 'write_off' &&
+        (res.locals.session as { role: Role }).role !== 'admin'
+      )
+        throw new DomainError('forbidden', 'אין הרשאה לפעולה זו', 403);
+      res.status(201).json(
+        service.resolveDamageCommand({
+          key: body.key,
+          ledgerEpoch: body.ledgerEpoch,
+          itemId: body.itemId,
+          quantity: body.quantity,
+          repaired: body.resolution === 'repair',
+          note: body.note,
+        }),
+      );
+    }),
+  );
   api.post(
     '/items',
     requireRole('admin'),
@@ -362,8 +482,11 @@ export function apiRouter(
     '/items/:id/archive',
     requireRole('admin'),
     route((req, res) => {
-      const body = parse(z.object({ archived: z.boolean() }), req.body);
-      service.archiveItem(parse(id, req.params.id), body.archived);
+      const body = parse(
+        z.object({ archived: z.boolean(), locationId: positive.nullable().optional() }),
+        req.body,
+      );
+      service.archiveItem(parse(id, req.params.id), body.archived, body.locationId);
       res.status(204).end();
     }),
   );

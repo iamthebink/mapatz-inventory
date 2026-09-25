@@ -966,3 +966,19 @@
     padding-inline: 0.75rem;
   }
 }
+
+.inventory-link {
+  color: var(--color-ctp-lavender);
+  font-weight: 600;
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+.inventory-link:hover {
+  color: var(--color-ctp-mauve);
+}
+.inventory-link:focus-visible {
+  outline: 2px solid var(--color-ctp-lavender);
+  outline-offset: 3px;
+  border-radius: 0.15rem;
+}

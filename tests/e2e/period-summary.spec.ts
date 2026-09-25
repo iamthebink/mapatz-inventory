@@ -28,14 +28,17 @@ test('waits for startup recovery before reading a direct summary and offers retr
   await expect.poll(() => summaryReads).toBeGreaterThan(0);
 });
 
-test('does not mount the borrower workflow on unrelated tabs', async ({ page }) => {
+test('does not mount the borrower workflow in inventory management', async ({ page }) => {
   let searchReads = 0;
   await page.route('**/api/borrowers/search?**', async (route) => {
     searchReads += 1;
     await route.fallback();
   });
-  await page.goto('/inventory');
-  await expect(page.getByRole('heading', { name: 'מצב מלאי' })).toBeVisible();
+  await page.goto('/management');
+  await expect(page.getByRole('tab', { name: /מלאי ומיקומים/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
   await expect(page.locator('.borrower-workflow-entry')).toHaveCount(0);
   expect(searchReads).toBe(0);
 });

@@ -11,7 +11,6 @@ import {
 } from 'react';
 import {
   Archive,
-  ArrowLeftRight,
   BookOpen,
   Boxes,
   ClipboardList,
@@ -19,18 +18,12 @@ import {
   Eye,
   EyeOff,
   KeyRound,
-  LayoutGrid,
-  MapPin,
-  PackageCheck,
   PackageOpen,
-  PackagePlus,
   CalendarDays,
   Pencil,
-  Plus,
   RotateCcw,
   Settings2,
   ShieldCheck,
-  TriangleAlert,
   Upload,
   UserPlus,
   Users,
@@ -57,12 +50,12 @@ import {
   type Borrower,
   type DialogSubmission,
   type Item,
-  type Loan,
   type Location,
 } from './InventoryDialogs';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
 import { PeriodSummary } from './PeriodSummary';
+import { InventoryManagement } from './InventoryManagement';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -76,14 +69,13 @@ type LedgerEvent = {
   note?: string;
 };
 type Session = { role: Role; deadline: number | null };
-type Tab = 'inventory' | 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger';
-type ManagementTab = 'stock' | 'catalog' | 'borrowers' | 'data' | 'access';
+type Tab = 'desk' | 'summary' | 'issue' | 'catalogs' | 'ledger';
+type ManagementTab = 'inventory' | 'borrowers' | 'data' | 'access';
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   desk: { path: '/', aliases: ['/frontdesk'] },
   summary: { path: '/summary' },
   issue: { path: '/consumables' },
-  inventory: { path: '/inventory' },
   ledger: { path: '/ledger' },
   catalogs: { path: '/management' },
 };
@@ -102,11 +94,6 @@ const borrowerTypeNames: Record<Borrower['type'], string> = {
   camp_organization: 'ארגון מחנה',
   other: 'אחר',
 };
-const itemKindNames: Record<Item['kind'], string> = {
-  consumable: 'מתכלה',
-  non_consumable: 'מושאל',
-  camp_equipment: 'ציוד מחנה',
-};
 const eventNames: Record<string, string> = {
   stock_added: 'קליטת מלאי',
   stock_removed: 'תיקון מלאי',
@@ -123,7 +110,6 @@ const eventNames: Record<string, string> = {
 const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'desk', label: 'דלפק השאלות', icon: Users },
   { key: 'issue', label: 'ציוד מתכלה', icon: PackageOpen },
-  { key: 'inventory', label: 'מלאי', icon: Boxes },
   { key: 'summary', label: 'סיכום', icon: CalendarDays },
   { key: 'ledger', label: 'יומן', icon: BookOpen },
   { key: 'catalogs', label: 'ניהול', icon: Settings2 },
@@ -134,18 +120,7 @@ const managementNavigation: {
   description: string;
   icon: LucideIcon;
 }[] = [
-  {
-    key: 'stock',
-    label: 'מלאי ופגומים',
-    description: 'קליטה וטיפול בפגום',
-    icon: PackagePlus,
-  },
-  {
-    key: 'catalog',
-    label: 'פריטים ומיקומים',
-    description: 'מבנה הקטלוג והאחסון',
-    icon: LayoutGrid,
-  },
+  { key: 'inventory', label: 'מלאי ומיקומים', description: 'פריטים, יתרות ומיקומים', icon: Boxes },
   { key: 'borrowers', label: 'שואלים', description: 'אנשים וארגונים', icon: Users },
   { key: 'data', label: 'ייבוא וייצוא', description: 'איפוס ושחזור מקובץ', icon: Download },
   { key: 'access', label: 'הרשאות', description: 'סיסמאות גישה', icon: ShieldCheck },
@@ -164,14 +139,14 @@ export function App() {
   const [session, setSession] = useState<Session>({ role: 'operator', deadline: null });
   const [items, setItems] = useState<Item[]>([]);
   const [catalogItems, setCatalogItems] = useState<Item[]>([]);
+  const [inventoryEpoch, setInventoryEpoch] = useState<number | null>(null);
   const [catalogBorrowers, setCatalogBorrowers] = useState<Borrower[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [loans, setLoans] = useState<Loan[]>([]);
   const [ledger, setLedger] = useState<LedgerEvent[]>([]);
   const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname) ?? 'desk');
   const [workflowStartup, setWorkflowStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [summaryReturnRevision, setSummaryReturnRevision] = useState(0);
-  const [managementTab, setManagementTab] = useState<ManagementTab>('stock');
+  const [managementTab, setManagementTab] = useState<ManagementTab>('inventory');
   const [issueQuery, setIssueQuery] = useState('');
   const [selectedIssueItemId, setSelectedIssueItemId] = useState<number | null>(null);
   const [issueItemInvalid, setIssueItemInvalid] = useState(false);
@@ -183,7 +158,6 @@ export function App() {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
   const [adminPasswordError, setAdminPasswordError] = useState('');
   const [sessionReconciling, setSessionReconciling] = useState(false);
-  const [damageResolution, setDamageResolution] = useState<'repair' | 'write_off'>('repair');
   const [announcement, setAnnouncement] = useState({ id: 0, text: '' });
   const pendingRef = useRef(false);
   const toastIdRef = useRef(0);
@@ -199,6 +173,13 @@ export function App() {
   const recoveryFileRef = useRef<HTMLInputElement>(null);
   const issueItemRef = useRef<HTMLInputElement>(null);
   const borrowerWorkflowRef = useRef<BorrowerWorkflowHandle>(null);
+  const inventoryLeaveGuardRef = useRef<((continueNavigation: () => void) => boolean) | null>(null);
+  const registerInventoryLeaveGuard = useCallback(
+    (guard: ((continueNavigation: () => void) => boolean) | null) => {
+      inventoryLeaveGuardRef.current = guard;
+    },
+    [],
+  );
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const [now, setNow] = useState(Date.now());
@@ -208,7 +189,7 @@ export function App() {
   const adminActionsEnabled = isAdmin && !sessionReconciling;
   const inventoryDialogPending = pending || (sessionReconciling && activeDialog != null);
 
-  const navigateToTab = useCallback((nextTab: Tab) => {
+  const performNavigation = useCallback((nextTab: Tab) => {
     if (nextTab !== 'desk' && nextTab !== 'summary') setWorkflowStartup('loading');
     if (nextTab === 'summary' && tabRef.current !== 'desk' && tabRef.current !== 'summary')
       setWorkflowStartup('loading');
@@ -219,6 +200,20 @@ export function App() {
     );
     setTab(nextTab);
   }, []);
+
+  const navigateToTab = useCallback(
+    (nextTab: Tab) => {
+      if (
+        tabRef.current === 'catalogs' &&
+        nextTab !== 'catalogs' &&
+        inventoryLeaveGuardRef.current &&
+        !inventoryLeaveGuardRef.current(() => performNavigation(nextTab))
+      )
+        return;
+      performNavigation(nextTab);
+    },
+    [performNavigation],
+  );
 
   const clearImportInput = useCallback((mode: 'reset' | 'recovery') => {
     const input = mode === 'reset' ? resetFileRef.current : recoveryFileRef.current;
@@ -266,19 +261,18 @@ export function App() {
 
   const refresh = useCallback(async () => {
     const sessionRequestId = ++sessionRequestRef.current;
-    const [current, nextItems, nextLoans, allItems, allBorrowers, nextLocations] =
-      await Promise.all([
-        api<Session>('/session'),
-        api<Item[]>('/items'),
-        api<Loan[]>('/loans'),
-        api<Item[]>('/items?all=1'),
-        api<Borrower[]>('/borrowers?all=1'),
-        api<Location[]>('/locations?all=1'),
-      ]);
+    const [current, nextItems, allItems, allBorrowers, nextLocations, epoch] = await Promise.all([
+      api<Session>('/session'),
+      api<Item[]>('/items'),
+      api<Item[]>('/items?all=1'),
+      api<Borrower[]>('/borrowers?all=1'),
+      api<Location[]>('/locations?all=1'),
+      api<{ ledgerEpoch: number }>('/inventory/epoch'),
+    ]);
     applySession(current, sessionRequestId);
     setItems(nextItems);
-    setLoans(nextLoans);
     setCatalogItems(allItems);
+    setInventoryEpoch(epoch.ledgerEpoch);
     setCatalogBorrowers(allBorrowers);
     setLocations(nextLocations);
     if (tab === 'ledger') setLedger(await api<LedgerEvent[]>('/ledger'));
@@ -291,6 +285,19 @@ export function App() {
     const syncTabToLocation = () => {
       const nextTab = tabFromPath(window.location.pathname);
       if (nextTab) {
+        if (
+          tabRef.current === 'catalogs' &&
+          nextTab !== 'catalogs' &&
+          inventoryLeaveGuardRef.current &&
+          !inventoryLeaveGuardRef.current(() => performNavigation(nextTab))
+        ) {
+          window.history.replaceState(
+            { ...window.history.state, mapatzTab: 'catalogs' },
+            '',
+            tabRoutes.catalogs.path,
+          );
+          return;
+        }
         if (nextTab !== 'desk' && nextTab !== 'summary') setWorkflowStartup('loading');
         if (nextTab === 'summary' && tabRef.current !== 'desk' && tabRef.current !== 'summary')
           setWorkflowStartup('loading');
@@ -307,7 +314,7 @@ export function App() {
     syncTabToLocation();
     window.addEventListener('popstate', syncTabToLocation);
     return () => window.removeEventListener('popstate', syncTabToLocation);
-  }, []);
+  }, [performNavigation]);
   useEffect(() => {
     const auth = () => refresh().catch((error) => showError('רענון הרשאות', error));
     window.addEventListener('mapatz-auth-stale', auth);
@@ -536,32 +543,6 @@ export function App() {
   async function submitInventoryDialog(submission: DialogSubmission): Promise<boolean> {
     let succeeded = false;
     switch (submission.kind) {
-      case 'lost':
-        succeeded = await action('סימון ציוד כאבוד', () =>
-          api('/lost', {
-            method: 'POST',
-            body: JSON.stringify({
-              checkoutId: submission.checkoutId,
-              quantity: submission.quantity,
-              lost: submission.lost,
-              note: submission.note,
-            }),
-          }),
-        );
-        break;
-      case 'edit-item':
-        succeeded = await action('עריכת פריט', () =>
-          api(`/items/${submission.itemId}`, {
-            method: 'PUT',
-            body: JSON.stringify({
-              name: submission.name,
-              aliases: submission.aliases,
-              lotSize: submission.lotSize,
-              locationId: submission.locationId,
-            }),
-          }),
-        );
-        break;
       case 'edit-borrower':
         succeeded = await action('עריכת שואל', () =>
           api(`/borrowers/${submission.borrowerId}`, {
@@ -571,18 +552,6 @@ export function App() {
               username: submission.username,
               contact: submission.contact,
               type: submission.borrowerType,
-            }),
-          }),
-        );
-        break;
-      case 'edit-location':
-        succeeded = await action('עריכת מיקום', () =>
-          api(`/locations/${submission.locationId}`, {
-            method: 'PUT',
-            body: JSON.stringify({
-              name: submission.name,
-              code: submission.code,
-              archived: submission.archived,
             }),
           }),
         );
@@ -602,138 +571,6 @@ export function App() {
     return succeeded;
   }
 
-  const inventoryColumns: TableColumn<Item>[] = [
-    {
-      key: 'code',
-      label: 'קוד',
-      render: (item) => <span className="code-pill">{item.code}</span>,
-      sortValue: (item) => item.code,
-    },
-    {
-      key: 'name',
-      label: 'פריט',
-      render: (item) => (
-        <div>
-          <strong className="font-medium text-ctp-text">{item.name}</strong>
-          {item.aliases.length > 0 && (
-            <div className="mt-0.5 text-xs text-ctp-subtext">{item.aliases.join(' · ')}</div>
-          )}
-        </div>
-      ),
-      sortValue: (item) => item.name,
-    },
-    {
-      key: 'kind',
-      label: 'סוג',
-      render: (item) => (
-        <StatusBadge
-          tone={
-            item.kind === 'consumable' ? 'blue' : item.kind === 'non_consumable' ? 'mauve' : 'green'
-          }
-        >
-          {itemKindNames[item.kind]}
-        </StatusBadge>
-      ),
-      sortValue: (item) => item.kind,
-    },
-    {
-      key: 'available',
-      label: 'זמין',
-      render: (item) => <Metric value={item.available} />,
-      sortValue: (item) => item.available,
-    },
-    {
-      key: 'damaged',
-      label: 'פגום',
-      render: (item) => <Metric value={item.damaged} warning={item.damaged > 0} />,
-      sortValue: (item) => item.damaged,
-    },
-  ];
-  const loanColumns: TableColumn<Loan>[] = [
-    {
-      key: 'code',
-      label: 'קוד',
-      render: (loan) => <span className="code-pill">{loan.code}</span>,
-      sortValue: (loan) => loan.code,
-    },
-    {
-      key: 'item',
-      label: 'פריט',
-      render: (loan) => loan.itemName,
-      sortValue: (loan) => loan.itemName,
-    },
-    {
-      key: 'borrower',
-      label: 'שואל',
-      render: (loan) => loan.borrowerName,
-      sortValue: (loan) => loan.borrowerName,
-    },
-    {
-      key: 'outstanding',
-      label: 'בחוץ',
-      render: (loan) => <Metric value={loan.outstanding} />,
-      sortValue: (loan) => loan.outstanding,
-    },
-    {
-      key: 'lost',
-      label: 'אבוד',
-      render: (loan) => <Metric value={loan.lost} warning={loan.lost > 0} />,
-      sortValue: (loan) => loan.lost,
-    },
-    {
-      key: 'actions',
-      label: 'פעולות',
-      render: (loan) => (
-        <div className="flex flex-wrap gap-1.5">
-          <SmallButton
-            icon={TriangleAlert}
-            disabled={pending || !adminActionsEnabled || loan.outstanding < 1}
-            onClick={() => openInventoryDialog({ kind: 'lost', loan }, managementTabRef.current)}
-          >
-            סמן אבוד
-          </SmallButton>
-        </div>
-      ),
-    },
-  ];
-  const itemCatalogColumns: TableColumn<Item>[] = [
-    {
-      key: 'code',
-      label: 'קוד',
-      render: (item) => <span className="code-pill">{item.code}</span>,
-      sortValue: (item) => item.code,
-    },
-    { key: 'name', label: 'פריט', render: (item) => item.name, sortValue: (item) => item.name },
-    {
-      key: 'status',
-      label: 'מצב',
-      render: (item) => (
-        <StatusBadge tone={item.archived ? 'neutral' : 'green'}>
-          {item.archived ? 'בארכיון' : 'פעיל'}
-        </StatusBadge>
-      ),
-      sortValue: (item) => Number(item.archived),
-    },
-    {
-      key: 'actions',
-      label: 'פעולות',
-      render: (item) => (
-        <RowActions
-          onEdit={() => openInventoryDialog({ kind: 'edit-item', item }, managementTabRef.current)}
-          archived={item.archived}
-          disabled={pending || !adminActionsEnabled}
-          onArchive={() =>
-            void action(item.archived ? 'הוצאת פריט מהארכיון' : 'העברת פריט לארכיון', () =>
-              api(`/items/${item.id}/archive`, {
-                method: 'POST',
-                body: JSON.stringify({ archived: !item.archived }),
-              }),
-            )
-          }
-        />
-      ),
-    },
-  ];
   const borrowerColumns: TableColumn<Borrower>[] = [
     {
       key: 'name',
@@ -782,51 +619,6 @@ export function App() {
               api(`/borrowers/${borrower.id}/archive`, {
                 method: 'POST',
                 body: JSON.stringify({ archived: !borrower.archived }),
-              }),
-            )
-          }
-        />
-      ),
-    },
-  ];
-  const locationColumns: TableColumn<Location>[] = [
-    {
-      key: 'name',
-      label: 'מיקום',
-      render: (location) => location.name,
-      sortValue: (location) => location.name,
-    },
-    {
-      key: 'code',
-      label: 'קוד',
-      render: (location) => <span className="code-pill">{location.code}</span>,
-      sortValue: (location) => location.code,
-    },
-    {
-      key: 'status',
-      label: 'מצב',
-      render: (location) => (
-        <StatusBadge tone={location.archived ? 'neutral' : 'green'}>
-          {location.archived ? 'בארכיון' : 'פעיל'}
-        </StatusBadge>
-      ),
-      sortValue: (location) => Number(location.archived),
-    },
-    {
-      key: 'actions',
-      label: 'פעולות',
-      render: (location) => (
-        <RowActions
-          archived={location.archived}
-          disabled={pending || !adminActionsEnabled}
-          onEdit={() =>
-            openInventoryDialog({ kind: 'edit-location', location }, managementTabRef.current)
-          }
-          onArchive={() =>
-            void action(location.archived ? 'הוצאת מיקום מהארכיון' : 'העברת מיקום לארכיון', () =>
-              api(`/locations/${location.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ ...location, archived: !location.archived }),
               }),
             )
           }
@@ -923,7 +715,6 @@ export function App() {
         <div className="mx-auto flex max-w-screen-2xl items-center gap-1 overflow-x-auto px-3 py-2 sm:px-6 lg:px-8">
           {navigation.map(({ key, label, icon: Icon }) => (
             <div className="contents" key={key}>
-              {key === 'inventory' && <span className="nav-separator" aria-hidden="true" />}
               <a
                 ref={key === 'catalogs' ? managementTabRef : undefined}
                 href={tabRoutes[key].path}
@@ -1010,40 +801,6 @@ export function App() {
             )
           }
         />
-        {tab === 'inventory' && (
-          <PageSection
-            title="מצב מלאי"
-            description="תמונת מצב עדכנית של כל הציוד הזמין"
-            icon={Boxes}
-          >
-            <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatCard label="סוגי פריטים" value={items.length} icon={PackageOpen} />
-              <StatCard
-                label="יחידות זמינות"
-                value={items.reduce((sum, item) => sum + item.available, 0)}
-                icon={PackageCheck}
-              />
-              <StatCard
-                label="יחידות פגומות"
-                value={items.reduce((sum, item) => sum + item.damaged, 0)}
-                icon={TriangleAlert}
-                warning
-              />
-              <StatCard
-                label="ציוד בהשאלה"
-                value={loans.reduce((sum, loan) => sum + loan.outstanding, 0)}
-                icon={ArrowLeftRight}
-              />
-            </div>
-            <DataTable
-              rows={items}
-              columns={inventoryColumns}
-              rowKey={(item) => item.id}
-              searchText={(item) => join(item.code, item.name, item.kind, ...item.aliases)}
-              searchPlaceholder="סינון לפי שם, כינוי, סוג או קוד…"
-            />
-          </PageSection>
-        )}
         {tab === 'issue' && (
           <PageSection title="ציוד מתכלה" description="ניפוק ציוד מתכלה מהמלאי" icon={PackageOpen}>
             <div className="grid gap-4">
@@ -1118,7 +875,16 @@ export function App() {
                   role="tab"
                   aria-selected={managementTab === key}
                   className={managementTab === key ? 'active' : ''}
-                  onClick={() => setManagementTab(key)}
+                  onClick={() => {
+                    if (
+                      managementTab === 'inventory' &&
+                      key !== 'inventory' &&
+                      inventoryLeaveGuardRef.current &&
+                      !inventoryLeaveGuardRef.current(() => setManagementTab(key))
+                    )
+                      return;
+                    setManagementTab(key);
+                  }}
                 >
                   <Icon className="size-5" />
                   <span>
@@ -1129,242 +895,16 @@ export function App() {
               ))}
             </div>
             <div className="mt-6">
-              {managementTab === 'stock' && (
-                <>
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <ActionCard
-                      title="הוספת מלאי"
-                      description="קליטת יחידות חדשות"
-                      icon={PackagePlus}
-                      disabled={!adminActionsEnabled || pending}
-                      onSubmit={(form) =>
-                        action('הוספת מלאי', () =>
-                          api('/stock/add', {
-                            method: 'POST',
-                            body: JSON.stringify({
-                              itemId: number(form, 'itemId'),
-                              quantity: number(form, 'quantity'),
-                              note: form.get('note'),
-                            }),
-                          }),
-                        )
-                      }
-                    >
-                      <Select
-                        name="itemId"
-                        label="פריט"
-                        options={items.map((item) => [item.id, `${item.code} — ${item.name}`])}
-                      />
-                      <Quantity />
-                      <Note />
-                    </ActionCard>
-                    <ActionCard
-                      title="טיפול בפגום"
-                      description={isAdmin ? 'החזרה לשימוש או גריעה' : 'החזרת ציוד פגום לשימוש'}
-                      icon={TriangleAlert}
-                      disabled={
-                        pending ||
-                        sessionReconciling ||
-                        (!isAdmin && damageResolution === 'write_off')
-                      }
-                      onSubmit={(form) => {
-                        const resolution = damageResolution;
-                        if (resolution === 'write_off' && !isAdmin) return false;
-                        return action(
-                          resolution === 'repair'
-                            ? 'תיקון פריט פגום'
-                            : resolution === 'write_off'
-                              ? 'גריעת פריט פגום'
-                              : 'טיפול בפריט פגום',
-                          () =>
-                            api('/damage', {
-                              method: 'POST',
-                              body: JSON.stringify({
-                                itemId: number(form, 'itemId'),
-                                quantity: number(form, 'quantity'),
-                                resolution,
-                                note: form.get('note'),
-                              }),
-                            }),
-                        ).then((completed) => {
-                          if (completed) setDamageResolution('repair');
-                          return completed;
-                        });
-                      }}
-                    >
-                      <Select
-                        name="itemId"
-                        label="פריט"
-                        options={items
-                          .filter((item) => item.damaged > 0)
-                          .map((item) => [
-                            item.id,
-                            `${item.code} — ${item.name} (${item.damaged})`,
-                          ])}
-                      />
-                      <Quantity />
-                      {isAdmin ? (
-                        <label className="field-label">
-                          פתרון
-                          <select
-                            name="resolution"
-                            className="input-field"
-                            value={damageResolution}
-                            onChange={(event) =>
-                              setDamageResolution(event.target.value as 'repair' | 'write_off')
-                            }
-                          >
-                            <option value="repair">תוקן</option>
-                            <option value="write_off">הוצאה מהמלאי</option>
-                          </select>
-                        </label>
-                      ) : damageResolution === 'write_off' ? (
-                        <p className="text-sm text-ctp-subtext">
-                          גריעה דורשת מצב מנהל. יש לבחור שחזור במפורש כדי להמשיך.
-                        </p>
-                      ) : (
-                        <p className="text-sm text-ctp-subtext">פתרון: החזרה לשימוש</p>
-                      )}
-                      <Note />
-                    </ActionCard>
-                    {!isAdmin && damageResolution === 'write_off' && (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={sessionReconciling || pending}
-                        onClick={() => setDamageResolution('repair')}
-                      >
-                        בחירת החזרה לשימוש
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-7">
-                    <h3 className="mb-3 text-lg font-semibold">ציוד בחוץ ואבוד</h3>
-                    <DataTable
-                      rows={loans}
-                      columns={loanColumns}
-                      rowKey={(loan) => loan.checkoutId}
-                      searchText={(loan) =>
-                        join(
-                          loan.code,
-                          loan.itemName,
-                          loan.borrowerName,
-                          loan.outstanding,
-                          loan.lost,
-                        )
-                      }
-                      searchPlaceholder="סינון לפי פריט, שואל או קוד…"
-                    />
-                  </div>
-                  {!isAdmin && (
-                    <PermissionNote text="החזרת ציוד פגום לשימוש זמינה גם במצב מפעיל. פעולות ניהול אחרות דורשות מצב מנהל." />
-                  )}
-                </>
-              )}
-              {managementTab === 'catalog' && (
-                <div className="space-y-7">
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <ActionCard
-                      title="פריט חדש"
-                      description="הוספת סוג ציוד לקטלוג"
-                      icon={Plus}
-                      disabled={!adminActionsEnabled || pending}
-                      onSubmit={(form) =>
-                        action('הוספת פריט חדש', () =>
-                          api('/items', {
-                            method: 'POST',
-                            body: JSON.stringify({
-                              name: form.get('name'),
-                              kind: form.get('kind'),
-                              lotSize: form.get('lotSize') ? number(form, 'lotSize') : null,
-                              locationId: form.get('locationId')
-                                ? number(form, 'locationId')
-                                : null,
-                              aliases: String(form.get('aliases') ?? '')
-                                .split(',')
-                                .map((alias) => alias.trim())
-                                .filter(Boolean),
-                            }),
-                          }),
-                        )
-                      }
-                    >
-                      <Field name="name" label="שם" />
-                      <label className="field-label">
-                        סוג
-                        <select name="kind" className="input-field">
-                          <option value="consumable">מתכלה</option>
-                          <option value="non_consumable">מושאל</option>
-                          <option value="camp_equipment">ציוד מחנה</option>
-                        </select>
-                      </label>
-                      <Field
-                        name="lotSize"
-                        label="גודל מארז (רשות)"
-                        type="number"
-                        required={false}
-                      />
-                      <Field name="aliases" label="כינויים, מופרדים בפסיק" required={false} />
-                      <Select
-                        name="locationId"
-                        label="מיקום"
-                        required={false}
-                        emptyLabel="ללא מיקום"
-                        options={locations
-                          .filter((location) => !location.archived)
-                          .map((location) => [location.id, location.name])}
-                      />
-                    </ActionCard>
-                    <ActionCard
-                      title="מיקום חדש"
-                      description="אזור אחסון שניתן לשייך לפריטים"
-                      icon={MapPin}
-                      disabled={!adminActionsEnabled || pending}
-                      onSubmit={(form) =>
-                        action('הוספת מיקום חדש', () =>
-                          api('/locations', {
-                            method: 'POST',
-                            body: JSON.stringify({
-                              code: form.get('code'),
-                              name: form.get('name'),
-                            }),
-                          }),
-                        )
-                      }
-                    >
-                      <Field name="name" label="שם בעברית" />
-                      <Field name="code" label="קוד" ltr />
-                    </ActionCard>
-                  </div>
-                  <CatalogBlock title="קטלוג פריטים">
-                    <DataTable
-                      rows={catalogItems}
-                      columns={itemCatalogColumns}
-                      rowKey={(item) => item.id}
-                      searchText={(item) =>
-                        join(
-                          item.code,
-                          item.name,
-                          item.archived ? 'ארכיון' : 'פעיל',
-                          ...item.aliases,
-                        )
-                      }
-                      searchPlaceholder="סינון פריטים…"
-                    />
-                  </CatalogBlock>
-                  <CatalogBlock title="מיקומים">
-                    <DataTable
-                      rows={locations}
-                      columns={locationColumns}
-                      rowKey={(location) => location.id}
-                      searchText={(location) =>
-                        join(location.name, location.code, location.archived ? 'ארכיון' : 'פעיל')
-                      }
-                      searchPlaceholder="סינון מיקומים…"
-                    />
-                  </CatalogBlock>
-                  {!isAdmin && <PermissionNote />}
-                </div>
+              {managementTab === 'inventory' && (
+                <InventoryManagement
+                  items={catalogItems}
+                  locations={locations}
+                  ledgerEpoch={inventoryEpoch}
+                  admin={adminActionsEnabled}
+                  onRefresh={refresh}
+                  showToast={showToast}
+                  registerLeaveGuard={registerInventoryLeaveGuard}
+                />
               )}
               {managementTab === 'borrowers' && (
                 <div className="space-y-7">
@@ -1599,7 +1139,6 @@ export function App() {
         <InventoryDialog
           active={activeDialog}
           pending={inventoryDialogPending}
-          locations={locations}
           returnFocusRef={dialogReturnFocusRef}
           fallbackFocusRef={dialogFallbackRef}
           onClose={closeInventoryDialog}
@@ -1634,29 +1173,6 @@ function PageSection({
       </div>
       {children}
     </section>
-  );
-}
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  warning = false,
-}: {
-  label: string;
-  value: number;
-  icon: LucideIcon;
-  warning?: boolean;
-}) {
-  return (
-    <div className="rounded-2xl border border-ctp-surface bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-ctp-subtext">{label}</span>
-        <Icon
-          className={`size-4 ${warning && value > 0 ? 'text-ctp-peach' : 'text-ctp-lavender'}`}
-        />
-      </div>
-      <div className="mt-2 text-2xl font-bold tabular-nums">{value}</div>
-    </div>
   );
 }
 function ActionCard({
@@ -1780,33 +1296,6 @@ function Quantity() {
 function Note({ label = 'הערה (רשות)' }: { label?: string }) {
   return <Field name="note" label={label} required={false} />;
 }
-function Select({
-  name,
-  label,
-  options,
-  required = true,
-  emptyLabel = 'בחירה…',
-}: {
-  name: string;
-  label: string;
-  options: [number, string][];
-  required?: boolean;
-  emptyLabel?: string;
-}) {
-  return (
-    <label className="field-label">
-      {label}
-      <select required={required} name={name} className="input-field">
-        <option value="">{emptyLabel}</option>
-        {options.map(([value, text]) => (
-          <option key={value} value={value}>
-            {text}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
 function PermissionNote({
   text = 'המסך גלוי לעיון. יש לעבור למצב מנהל כדי לבצע שינויים.',
 }: {
@@ -1817,13 +1306,6 @@ function PermissionNote({
       <ShieldCheck className="size-4 shrink-0" />
       {text}
     </p>
-  );
-}
-function Metric({ value, warning = false }: { value: number; warning?: boolean }) {
-  return (
-    <span className={`font-semibold tabular-nums ${warning ? 'text-ctp-red' : 'text-ctp-text'}`}>
-      {value}
-    </span>
   );
 }
 function StatusBadge({

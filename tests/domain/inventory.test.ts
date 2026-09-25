@@ -247,7 +247,7 @@ describe('inventory domain', () => {
     inventory.archiveBorrower(borrower.id, false);
     const checkoutId = inventory.checkout(item.id, borrower.id, 2);
     expect(() => inventory.archiveItem(item.id, true)).toThrow(
-      expect.objectContaining({ code: 'active_loan' }),
+      expect.objectContaining({ code: 'nonzero_balances' }),
     );
     expect(() => inventory.archiveBorrower(borrower.id, true)).toThrow(
       expect.objectContaining({ code: 'active_loan' }),
@@ -303,7 +303,7 @@ describe('inventory domain', () => {
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
     const expectArchivalBlocked = () => {
       expect(() => inventory.archiveItem(item.id, true)).toThrow(
-        expect.objectContaining({ code: 'active_loan' }),
+        expect.objectContaining({ code: 'nonzero_balances' }),
       );
       expect(() => inventory.archiveBorrower(borrower.id, true)).toThrow(
         expect.objectContaining({ code: 'active_loan' }),
@@ -333,10 +333,20 @@ describe('inventory domain', () => {
     ).toMatchObject({ outcome: 'committed' });
     expect(inventory.listLoans()).toEqual([]);
     expect(() => inventory.archiveItem(item.id, true)).toThrow(
-      expect.objectContaining({ code: 'damaged_stock' }),
+      expect.objectContaining({ code: 'nonzero_balances' }),
     );
     inventory.archiveBorrower(borrower.id, true);
     inventory.resolveDamage(item.id, 1, true);
+    inventory.saveInventoryItem({
+      key: 'zero-before-archive',
+      itemId: item.id,
+      name: item.name,
+      aliases: [],
+      lotSize: null,
+      locationId: null,
+      targetAvailable: 0,
+      stockSnapshot: inventory.listItems(item.name)[0]!.stockSnapshot,
+    });
     inventory.archiveItem(item.id, true);
     expect(db.prepare('SELECT archived FROM items WHERE id=?').get(item.id)).toEqual({
       archived: 1,
@@ -392,7 +402,7 @@ describe('inventory domain', () => {
     const checkout = inventory.checkout(item.id, borrower.id, 1);
     inventory.returnCheckout(checkout, 0, 1, 'נשבר');
     expect(() => inventory.archiveItem(item.id, true)).toThrow(
-      expect.objectContaining({ code: 'damaged_stock' }),
+      expect.objectContaining({ code: 'nonzero_balances' }),
     );
     inventory.resolveDamage(item.id, 1, false, 'לא ניתן לתקן');
     inventory.archiveItem(item.id, true);

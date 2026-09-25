@@ -77,3 +77,6 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
   summary: Reconcile inventory action state after a committed mutation whose general snapshot refresh fails.
   evidence: Existing `action()` warns that refresh failed but releases pending state with stale quantities, allowing a second non-idempotent repair or other inventory action before a successful refresh.
+- source_spec: `_bmad-output/implementation-artifacts/spec-inventory-management.md`
+  summary: Decide whether catalog metadata edits require concurrent edit detection.
+  evidence: Metadata-only item saves use last-writer-wins as before this change. The stock snapshot protects changed absolute counts, but does not detect concurrent name, alias, package-size or location edits.

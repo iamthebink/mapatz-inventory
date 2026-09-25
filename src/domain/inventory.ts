@@ -37,6 +37,8 @@ const eventEffect = `CASE kind
   WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity WHEN 'repaired' THEN quantity
   WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
 const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'found_returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
+const borrowedEffect = `CASE kind WHEN 'checked_out' THEN quantity WHEN 'returned_usable' THEN -quantity WHEN 'returned_damaged' THEN -quantity WHEN 'marked_lost' THEN -quantity ELSE 0 END`;
+const lostEffect = `CASE kind WHEN 'marked_lost' THEN quantity WHEN 'found_returned' THEN -quantity WHEN 'found_returned_damaged' THEN -quantity ELSE 0 END`;
 const maxAliases = 20;
 
 type CommandKind = 'borrower_operation' | 'borrower_create';
@@ -217,6 +219,19 @@ export class InventoryService {
 
   constructor(private readonly db: InventoryDatabase) {}
 
+  inventoryEpoch(): number {
+    return this.ledgerEpochInTransaction();
+  }
+
+  private requireInventoryEpoch(epoch?: number): void {
+    if (epoch !== undefined && epoch !== this.ledgerEpochInTransaction())
+      throw new DomainError(
+        'stale_ledger',
+        'המלאי הוחלף מאז פתיחת הטופס. יש לרענן ולבדוק מחדש.',
+        409,
+      );
+  }
+
   listLocations(includeArchived = false): Row[] {
     return this.db
       .prepare(
@@ -236,15 +251,98 @@ export class InventoryService {
   }
 
   updateLocation(id: number, input: { code: string; name: string; archived?: boolean }): void {
-    const result = this.db
-      .prepare('UPDATE locations SET code=?,name=?,archived=COALESCE(?,archived) WHERE id=?')
-      .run(
-        input.code.trim(),
-        input.name.trim(),
-        input.archived == null ? null : Number(input.archived),
-        id,
-      );
-    if (result.changes === 0) throw new DomainError('not_found', 'Location not found', 404);
+    transaction(this.db, () => {
+      if (input.archived) {
+        const blockers = this.db
+          .prepare('SELECT code,name FROM items WHERE location_id=? AND archived=0 ORDER BY code')
+          .all(id) as Row[];
+        if (blockers.length)
+          throw new DomainError(
+            'location_in_use',
+            `יש להעביר תחילה את הפריטים: ${blockers.map((item) => `${item.code} ${item.name}`).join(', ')}`,
+            409,
+          );
+      }
+      const result = this.db
+        .prepare('UPDATE locations SET code=?,name=?,archived=COALESCE(?,archived) WHERE id=?')
+        .run(
+          input.code.trim(),
+          input.name.trim(),
+          input.archived == null ? null : Number(input.archived),
+          id,
+        );
+      if (result.changes === 0) throw new DomainError('not_found', 'Location not found', 404);
+    });
+  }
+
+  saveInventoryLocation(input: {
+    key: string;
+    ledgerEpoch?: number;
+    locationId?: number;
+    code: string;
+    name: string;
+    archived?: boolean;
+  }): Row {
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const receipt = this.db
+        .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
+        .get(input.key) as Row | undefined;
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return JSON.parse(String(receipt.result_json)) as Row;
+      }
+      const code = input.code.trim();
+      const name = input.name.trim();
+      if (!code || code.length > 40 || !name || name.length > 100)
+        throw new DomainError('invalid_location', 'יש להזין שם וקוד תקינים');
+      let locationId = input.locationId;
+      if (locationId === undefined) {
+        locationId = Number(
+          this.db.prepare('INSERT INTO locations(code,name) VALUES (?,?)').run(code, name)
+            .lastInsertRowid,
+        );
+      } else {
+        const current = this.db.prepare('SELECT id FROM locations WHERE id=?').get(locationId) as
+          Row | undefined;
+        if (!current) throw new DomainError('not_found', 'Location not found', 404);
+        if (input.archived) {
+          const blockers = this.db
+            .prepare('SELECT code,name FROM items WHERE location_id=? AND archived=0 ORDER BY code')
+            .all(locationId) as Row[];
+          if (blockers.length)
+            throw new DomainError(
+              'location_in_use',
+              `יש להעביר תחילה את הפריטים: ${blockers.map((item) => `${item.code} ${item.name}`).join(', ')}`,
+              409,
+            );
+        }
+        this.db
+          .prepare('UPDATE locations SET code=?,name=?,archived=COALESCE(?,archived) WHERE id=?')
+          .run(code, name, input.archived == null ? null : Number(input.archived), locationId);
+      }
+      const result = this.db
+        .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
+        .get(locationId) as Row;
+      const response = { ...result, archived: Boolean(result.archived) };
+      this.db
+        .prepare(
+          'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
+        )
+        .run(input.key, hash, JSON.stringify(response));
+      return response;
+    });
+  }
+
+  private requireActiveLocation(locationId: number | null): void {
+    if (locationId == null) return;
+    const location = this.db
+      .prepare('SELECT archived FROM locations WHERE id=?')
+      .get(locationId) as Row | undefined;
+    if (!location || location.archived)
+      throw new DomainError('invalid_location', 'יש לבחור מיקום פעיל', 409);
   }
 
   createItem(input: {
@@ -258,6 +356,7 @@ export class InventoryService {
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (input.lotSize != null) integer(input.lotSize, 'lotSize');
     return transaction(this.db, () => {
+      this.requireActiveLocation(input.locationId ?? null);
       const name = input.name.trim();
       this.requireUniqueItemName(name);
       const code = Number(
@@ -295,6 +394,7 @@ export class InventoryService {
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (lotSize != null) integer(lotSize, 'lotSize');
     return transaction(this.db, () => {
+      this.requireActiveLocation(locationId);
       const name = input.name.trim();
       this.requireUniqueItemName(name, id);
       this.db
@@ -305,6 +405,111 @@ export class InventoryService {
     });
   }
 
+  saveInventoryItem(input: {
+    key: string;
+    ledgerEpoch?: number;
+    itemId?: number;
+    name: string;
+    kind?: ItemKind;
+    aliases: string[];
+    lotSize: number | null;
+    locationId: number | null;
+    targetAvailable?: number;
+    stockSnapshot?: number;
+    note?: string;
+  }): Item {
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const receipt = this.db
+        .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
+        .get(input.key) as Row | undefined;
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return JSON.parse(String(receipt.result_json)) as Item;
+      }
+      this.requireActiveLocation(input.locationId);
+      if (
+        input.targetAvailable !== undefined &&
+        (!Number.isSafeInteger(input.targetAvailable) || input.targetAvailable < 0)
+      )
+        throw new DomainError('invalid_quantity', 'הכמות חייבת להיות מספר שלם שאינו שלילי');
+      if (input.note && input.note.length > 500)
+        throw new DomainError('invalid_note', 'הערה ארוכה מדי');
+      let item: Item;
+      if (input.itemId === undefined) {
+        if (!input.kind) throw new DomainError('invalid_kind', 'יש לבחור סוג פריט');
+        item = this.createItemInTransaction(input);
+      } else {
+        item = this.requireItem(input.itemId);
+        if (item.kind !== 'consumable' && input.lotSize != null)
+          throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
+        if (input.lotSize != null) integer(input.lotSize, 'lotSize');
+        this.requireUniqueItemName(input.name.trim(), input.itemId);
+        this.db
+          .prepare('UPDATE items SET name=?,lot_size=?,location_id=? WHERE id=?')
+          .run(input.name.trim(), input.lotSize, input.locationId, input.itemId);
+        this.setAliases(input.itemId, input.aliases);
+      }
+      const current = this.getItem(item.id);
+      if (input.targetAvailable !== undefined) {
+        if (input.itemId !== undefined && input.stockSnapshot !== current.stockSnapshot)
+          throw new DomainError(
+            'stale_stock',
+            'המלאי השתנה מאז פתיחת הפריט. יש לבדוק את היתרות ולשלוח שוב.',
+            409,
+          );
+        const delta = input.targetAvailable - current.available;
+        if (delta !== 0)
+          this.append(
+            delta > 0 ? 'stock_added' : 'stock_removed',
+            item.id,
+            Math.abs(delta),
+            null,
+            null,
+            input.note ?? '',
+          );
+      }
+      const result = this.getItem(item.id);
+      this.db
+        .prepare(
+          'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
+        )
+        .run(input.key, hash, JSON.stringify(result));
+      return result;
+    });
+  }
+
+  private createItemInTransaction(input: {
+    name: string;
+    kind?: ItemKind;
+    lotSize: number | null;
+    locationId: number | null;
+    aliases: string[];
+  }): Item {
+    if (!input.kind) throw new DomainError('invalid_kind', 'יש לבחור סוג פריט');
+    if (input.kind !== 'consumable' && input.lotSize != null)
+      throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
+    if (input.lotSize != null) integer(input.lotSize, 'lotSize');
+    this.requireUniqueItemName(input.name.trim());
+    const code = Number(
+      (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
+        .next_code,
+    );
+    this.db.prepare('UPDATE code_sequence SET next_code=next_code+1 WHERE singleton=1').run();
+    const id = Number(
+      this.db
+        .prepare('INSERT INTO items(code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
+        .run(code, input.name.trim(), input.kind, input.lotSize, input.locationId).lastInsertRowid,
+    );
+    this.setAliases(id, input.aliases);
+    this.db
+      .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)')
+      .run(id);
+    return this.getItem(id);
+  }
+
   private requireUniqueItemName(name: string, excludedItemId?: number): void {
     const key = normalizeItemName(name);
     const duplicate = (this.db.prepare('SELECT id,name FROM items').all() as Row[]).some(
@@ -313,13 +518,57 @@ export class InventoryService {
     if (duplicate) throw new DomainError('duplicate_item_name', 'כבר קיים פריט בשם הזה', 409);
   }
 
-  archiveItem(id: number, archived: boolean): void {
+  archiveItem(id: number, archived: boolean, replacementLocationId?: number | null): void {
+    transaction(this.db, () => this.archiveItemInTransaction(id, archived, replacementLocationId));
+  }
+
+  archiveItemCommand(input: {
+    key: string;
+    ledgerEpoch?: number;
+    itemId: number;
+    archived: boolean;
+    locationId?: number | null;
+  }): { itemId: number; archived: boolean } {
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const receipt = this.db
+        .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
+        .get(input.key) as Row | undefined;
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return JSON.parse(String(receipt.result_json)) as { itemId: number; archived: boolean };
+      }
+      this.archiveItemInTransaction(input.itemId, input.archived, input.locationId);
+      const result = { itemId: input.itemId, archived: input.archived };
+      this.db
+        .prepare(
+          'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
+        )
+        .run(input.key, hash, JSON.stringify(result));
+      return result;
+    });
+  }
+
+  private archiveItemInTransaction(
+    id: number,
+    archived: boolean,
+    replacementLocationId?: number | null,
+  ): void {
     const item = this.getItem(id);
-    if (archived && this.unresolvedForItem(id) > 0)
-      throw new DomainError('active_loan', 'Cannot archive an item with outstanding equipment');
-    if (archived && item.damaged > 0)
-      throw new DomainError('damaged_stock', 'Cannot archive an item with damaged stock');
-    this.db.prepare('UPDATE items SET archived=? WHERE id=?').run(Number(archived), id);
+    if (archived && (item.available || item.borrowed || item.lost || item.damaged))
+      throw new DomainError(
+        'nonzero_balances',
+        `לא ניתן לארכב פריט עם יתרות: זמין ${item.available}, מושאל ${item.borrowed}, אבוד ${item.lost}, פגום ${item.damaged}`,
+        409,
+      );
+    const locationId =
+      replacementLocationId === undefined ? item.locationId : replacementLocationId;
+    if (!archived) this.requireActiveLocation(locationId);
+    this.db
+      .prepare('UPDATE items SET archived=?,location_id=? WHERE id=?')
+      .run(Number(archived), locationId, id);
   }
 
   createBorrower(input: {
@@ -559,7 +808,10 @@ export class InventoryService {
       .prepare(
         `SELECT i.*,
       COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-      COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged
+      COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
+      COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
+      COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
+      COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot
       FROM items i WHERE (? OR i.archived=0) AND (
         CAST(i.code AS TEXT) LIKE ? OR i.name LIKE ? COLLATE NOCASE OR EXISTS(
           SELECT 1 FROM item_aliases a WHERE a.item_id=i.id AND a.alias LIKE ? COLLATE NOCASE)) ORDER BY i.code`,
@@ -734,6 +986,49 @@ export class InventoryService {
       if (quantity > this.getItem(itemId).damaged)
         throw new DomainError('excessive_quantity', 'Quantity exceeds damaged stock');
       return this.append(repaired ? 'repaired' : 'written_off', itemId, quantity, null, null, note);
+    });
+  }
+
+  resolveDamageCommand(input: {
+    key: string;
+    ledgerEpoch?: number;
+    itemId: number;
+    quantity: number;
+    repaired: boolean;
+    note: string;
+  }): { eventId: number } {
+    if (input.note.length > 500) throw new DomainError('invalid_note', 'הערה ארוכה מדי');
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const receipt = this.db
+        .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
+        .get(input.key) as Row | undefined;
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return JSON.parse(String(receipt.result_json)) as { eventId: number };
+      }
+      const item = this.requireItem(input.itemId);
+      integer(input.quantity);
+      if (input.quantity > item.damaged)
+        throw new DomainError('excessive_quantity', 'Quantity exceeds damaged stock');
+      const result = {
+        eventId: this.append(
+          input.repaired ? 'repaired' : 'written_off',
+          input.itemId,
+          input.quantity,
+          null,
+          null,
+          input.note,
+        ),
+      };
+      this.db
+        .prepare(
+          'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
+        )
+        .run(input.key, hash, JSON.stringify(result));
+      return result;
     });
   }
 
@@ -1229,7 +1524,10 @@ export class InventoryService {
       .prepare(
         `SELECT i.*,
       COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-      COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged FROM items i WHERE i.id=?`,
+      COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
+      COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
+      COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
+      COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot FROM items i WHERE i.id=?`,
       )
       .get(id) as Row | undefined;
     if (!row) throw new DomainError('not_found', 'Item not found', 404);
@@ -1258,11 +1556,29 @@ export class InventoryService {
         .prepare(
           `SELECT i.*,
           COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-          COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged
+          COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
+      COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
+      COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
+      COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot
           FROM items i WHERE i.kind='non_consumable' ORDER BY i.code`,
         )
         .all() as Row[]
-    ).map((row) => ({ ...this.itemFromRow(row), selectable: !row.archived }));
+    ).map((row) => {
+      const item = this.itemFromRow(row);
+      return {
+        id: item.id,
+        code: item.code,
+        name: item.name,
+        kind: item.kind,
+        lotSize: item.lotSize,
+        locationId: item.locationId,
+        archived: item.archived,
+        aliases: item.aliases,
+        available: item.available,
+        damaged: item.damaged,
+        selectable: !item.archived,
+      };
+    });
     const holdings = (
       this.db
         .prepare(
@@ -1360,6 +1676,9 @@ export class InventoryService {
     ).map((a) => String(a.alias)),
     available: Number(row.available ?? 0),
     damaged: Number(row.damaged ?? 0),
+    borrowed: Number(row.borrowed ?? 0),
+    lost: Number(row.lost ?? 0),
+    stockSnapshot: Number(row.stockSnapshot ?? 0),
   });
 
   private borrowerFromRow = (row: Row): Borrower => ({

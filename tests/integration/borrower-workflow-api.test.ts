@@ -236,9 +236,24 @@ describe('borrower workflow snapshot API', () => {
       .get(`/api/borrowers/${borrower.id}/desk-snapshot`)
       .expect(200)
       .expect(({ body }) => {
+        const view = inventory.listItems('Tent')[0]!;
         expect(body).toEqual({
           borrower,
-          inventory: [{ ...inventory.listItems('Tent')[0], selectable: true }],
+          inventory: [
+            {
+              id: view.id,
+              code: view.code,
+              name: view.name,
+              kind: view.kind,
+              lotSize: view.lotSize,
+              locationId: view.locationId,
+              archived: view.archived,
+              aliases: view.aliases,
+              available: view.available,
+              damaged: view.damaged,
+              selectable: true,
+            },
+          ],
           holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
           asOfEventId: 3,
           ledgerEpoch: 1,

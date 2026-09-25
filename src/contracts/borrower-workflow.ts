@@ -58,7 +58,7 @@ export type BorrowerSearchSnapshot = {
 
 export type BorrowerDeskSnapshot = {
   borrower: Borrower;
-  inventory: Array<Item & { selectable: boolean }>;
+  inventory: Array<Omit<Item, 'borrowed' | 'lost' | 'stockSnapshot'> & { selectable: boolean }>;
   holdings: Array<{
     itemId: number;
     returnable: number;

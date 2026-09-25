@@ -130,6 +130,12 @@ describe('complete inventory recovery', () => {
         ) VALUES (?,?,?,?,?,?,?,?)`,
       )
       .run('obsolete-recovery', 'borrower_operation', 1, 1, 'hash', 'committed', 1, '{}');
+    destinationInventory.saveInventoryLocation({
+      key: 'obsolete-inventory-1',
+      ledgerEpoch: destinationInventory.inventoryEpoch(),
+      code: 'obsolete',
+      name: 'Obsolete',
+    });
     const epochBefore = destination
       .prepare('SELECT ledger_epoch FROM inventory_replacement_guard')
       .get();
@@ -142,6 +148,11 @@ describe('complete inventory recovery', () => {
       ledger_epoch: (epochBefore as { ledger_epoch: number }).ledger_epoch + 1,
     });
     expect(destination.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
+      count: 0,
+    });
+    expect(
+      destination.prepare('SELECT COUNT(*) count FROM inventory_command_receipts').get(),
+    ).toEqual({
       count: 0,
     });
     expect(

@@ -10,7 +10,8 @@ import {
   type FormEvent,
 } from 'react';
 import { Check, ClipboardCheck, TriangleAlert, Undo2 } from 'lucide-react';
-import type { Borrower, Item } from '../domain/types';
+import type { Borrower } from '../domain/types';
+import type { BorrowerDeskSnapshot } from '../contracts/borrower-workflow';
 import { fetchBorrowerDeskSnapshot, fetchBorrowerSearch, sendFrozenBorrowerAttempt } from './api';
 import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
 import { BorrowerOperationalTables, type ReturnCondition } from './BorrowerOperationalTables';
@@ -581,7 +582,7 @@ export const BorrowerWorkflow = forwardRef<
     }
   };
 
-  const itemOptions = useMemo<ComboboxOption<Item>[]>(() => {
+  const itemOptions = useMemo<ComboboxOption<BorrowerDeskSnapshot['inventory'][number]>[]>(() => {
     if (!operation) return [];
     const query = itemSearch.trim().toLocaleLowerCase();
     return operation.snapshot.inventory

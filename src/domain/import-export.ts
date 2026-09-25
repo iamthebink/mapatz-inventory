@@ -485,6 +485,7 @@ export class InventoryTransferService {
     transaction(this.db, () => {
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
+      this.db.prepare('DELETE FROM inventory_command_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
@@ -549,6 +550,7 @@ export class InventoryTransferService {
     transaction(this.db, () => {
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
+      this.db.prepare('DELETE FROM inventory_command_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();

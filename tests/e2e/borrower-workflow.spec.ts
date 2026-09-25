@@ -14,7 +14,7 @@ test('opens the borrower desk directly through the frontdesk alias', async ({ pa
 });
 
 async function openSeededCard(page: Page, username: string) {
-  await page.goto('/inventory');
+  await page.goto('/management');
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await expect(search).toBeFocused();
@@ -113,7 +113,7 @@ test('browses, filters, and opens the responsive borrower directory without dial
   page,
   seed,
 }) => {
-  await page.goto('/inventory');
+  await page.goto('/management');
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   const create = page.getByRole('button', { name: 'יצירת שואל חדש' });
@@ -1130,32 +1130,20 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await expect(borrowerSearch).toBeFocused();
 });
 
-test('marks lost equipment without offering restoration through real admin authorization and closes on auth loss', async ({
+test('marks lost equipment at the borrower desk without offering reversal', async ({
   page,
   seed,
   openLedger,
 }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
-  const authentication = page.getByRole('dialog', { name: 'הפעלת מצב מנהל' });
-  await authentication.locator('input[name="password"]').fill('e2e-admin-password');
-  await authentication.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
-  await expect(page.getByRole('button', { name: 'סיום מצב מנהל' })).toBeVisible();
-
-  await page
-    .getByRole('navigation', { name: 'ניווט ראשי' })
-    .getByRole('link', { name: 'ניהול' })
-    .click();
-  const loanRow = page.getByRole('row', { name: new RegExp(seed.item.name) });
-  const markLost = loanRow.getByRole('button', { name: 'סמן אבוד' });
-  await expect(markLost).toBeEnabled();
-  await markLost.click();
-  let lostDialog = page.getByRole('dialog', { name: 'סימון ציוד כאבוד' });
-  await lostDialog.locator('input[name="quantity"]').fill('1');
-  await lostDialog.getByRole('button', { name: 'שמירה' }).click();
-  await expect(lostDialog).toBeHidden();
-
-  await expect(loanRow.getByRole('button', { name: 'בטל אובדן' })).toHaveCount(0);
+  await openSeededCard(page, seed.borrower.username);
+  const holding = page.getByRole('rowheader', { name: seed.item.name }).locator('..');
+  await holding.getByRole('button', { name: 'אפשרויות נוספות' }).click();
+  await page.getByRole('menuitem', { name: 'סמן כאבוד' }).click();
+  const dialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
+  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await confirmSave(page);
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
 
   const database = openLedger();
   expect(
@@ -1165,26 +1153,6 @@ test('marks lost equipment without offering restoration through real admin autho
       seed.checkoutId,
     ),
   ).toEqual([{ kind: 'marked_lost', quantity: 1 }]);
-
-  await markLost.click();
-  lostDialog = page.getByRole('dialog', { name: 'סימון ציוד כאבוד' });
-  await page.evaluate(async () => {
-    await fetch('/api/session/role', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ role: 'operator' }),
-    });
-  });
-  await lostDialog.getByRole('button', { name: 'שמירה' }).click();
-  await expect(lostDialog).toBeHidden();
-  await expect(markLost).toBeDisabled();
-  expect(
-    rows<{ count: number }>(
-      database,
-      "SELECT COUNT(*) count FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','found_returned')",
-      seed.checkoutId,
-    )[0]!.count,
-  ).toBe(1);
 });
 
 test('operator credits a previously lost unit back to usable inventory', async ({
@@ -1192,26 +1160,14 @@ test('operator credits a previously lost unit back to usable inventory', async (
   seed,
   openLedger,
 }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
-  const authentication = page.getByRole('dialog', { name: 'הפעלת מצב מנהל' });
-  await authentication.locator('input[name="password"]').fill('e2e-admin-password');
-  await authentication.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
-  await page
-    .getByRole('navigation', { name: 'ניווט ראשי' })
-    .getByRole('link', { name: 'ניהול' })
-    .click();
-  const loanRow = page.getByRole('row', { name: new RegExp(seed.item.name) });
-  await loanRow.getByRole('button', { name: 'סמן אבוד' }).click();
-  const lostDialog = page.getByRole('dialog', { name: 'סימון ציוד כאבוד' });
-  await lostDialog.getByRole('button', { name: 'שמירה' }).click();
-  await page.evaluate(async () => {
-    await fetch('/api/session/role', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ role: 'operator' }),
-    });
-  });
+  await openSeededCard(page, seed.borrower.username);
+  const holding = page.getByRole('rowheader', { name: seed.item.name }).locator('..');
+  await holding.getByRole('button', { name: 'אפשרויות נוספות' }).click();
+  await page.getByRole('menuitem', { name: 'סמן כאבוד' }).click();
+  const lostDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
+  await lostDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await lostDialog.getByRole('button', { name: 'אישור' }).click();
+  await confirmSave(page);
 
   await openSeededCard(page, seed.borrower.username);
   await expect(page.getByRole('button', { name: 'החזרת ציוד' })).toHaveCount(0);
@@ -1251,7 +1207,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   ).toBe(5);
 });
 
-test('retires legacy presentation while preserving gated lost controls and responsive accessibility', async ({
+test('retires legacy presentation while preserving borrower controls and responsive accessibility', async ({
   page,
   seed,
 }) => {
@@ -1261,9 +1217,13 @@ test('retires legacy presentation while preserving gated lost controls and respo
   await expect(navigation.getByRole('link', { name: /^השאלה$/ })).toHaveCount(0);
   await expect(navigation.getByRole('link', { name: 'החזרות' })).toHaveCount(0);
   await navigation.getByRole('link', { name: 'ניהול' }).click();
-  await expect(page.getByRole('heading', { name: 'ציוד בחוץ ואבוד' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /מלאי ומיקומים/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('heading', { name: 'ציוד בחוץ ואבוד' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'החזרה' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'סמן אבוד' }).first()).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'סמן אבוד' })).toHaveCount(0);
 
   await openSeededCard(page, seed.borrower.username);
   await stageBorrow(page, seed.item.name);

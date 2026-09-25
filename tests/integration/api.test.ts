@@ -200,6 +200,12 @@ describe('inventory API permission and edge-case matrix', () => {
     const { db, inventory, agent } = fixture();
     const oldItem = inventory.createItem({ name: 'Old', kind: 'consumable' });
     inventory.addStock(oldItem.id, 9);
+    inventory.saveInventoryLocation({
+      key: 'pre-reset-location-1',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      code: 'old-location',
+      name: 'Old location',
+    });
     const credentialsBefore = db
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
@@ -254,6 +260,9 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(204);
     const imported = inventory.listItems('', true)[0]!;
     expect(imported).toMatchObject({ code: 4, name: 'Imported', available: 6 });
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_command_receipts').get()).toEqual({
+      count: 0,
+    });
     const location = db.prepare('SELECT name FROM locations WHERE id=?').get(imported.locationId);
     expect(location).toMatchObject({ name: 'Imported Place' });
     expect(
@@ -742,9 +751,23 @@ describe('inventory API permission and edge-case matrix', () => {
     await agent
       .post(`/api/items/${item.id}/archive`)
       .send({ archived: true })
-      .expect(400)
-      .expect(({ body }) => expect(body.error).toBe('active_loan'));
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toBe('nonzero_balances'));
     inventory.returnCheckout(checkoutId, 1, 0);
+    const current = inventory.listItems(item.name)[0]!;
+    await agent
+      .put(`/api/inventory/items/${item.id}`)
+      .send({
+        key: 'archive-zero-0001',
+        ledgerEpoch: inventory.inventoryEpoch(),
+        name: item.name,
+        aliases: [],
+        lotSize: null,
+        locationId: null,
+        targetAvailable: 0,
+        stockSnapshot: current.stockSnapshot,
+      })
+      .expect(200);
     await agent.post(`/api/items/${item.id}/archive`).send({ archived: true }).expect(204);
     await agent
       .get('/api/items')
@@ -754,7 +777,207 @@ describe('inventory API permission and edge-case matrix', () => {
       .get('/api/items?all=1')
       .expect(200)
       .expect(({ body }) => expect(body[0].archived).toBe(true));
-    expect(inventory.listLedger()).toHaveLength(3);
+    expect(inventory.listLedger()).toHaveLength(4);
+    db.close();
+  });
+});
+
+describe('inventory management API', () => {
+  it('replays keyed location creation and blocks the same request after admin expiry', async () => {
+    const clock = { now: 1_000 };
+    const { db, inventory, agent } = fixture(clock);
+    const command = {
+      key: 'api-location-0001',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      code: 'A-2',
+      name: 'Second storage',
+    };
+    await agent.post('/api/inventory/locations').send(command).expect(403);
+    await role(agent, 'admin', 'admin-pass');
+    const created = await agent.post('/api/inventory/locations').send(command).expect(201);
+    await agent
+      .post('/api/inventory/locations')
+      .send(command)
+      .expect(201)
+      .expect(({ body }) => expect(body.id).toBe(created.body.id));
+    expect(inventory.listLocations(true).filter((entry) => entry.code === 'A-2')).toHaveLength(1);
+    clock.now += 600_001;
+    await agent
+      .put(`/api/inventory/locations/${created.body.id}`)
+      .send({ ...command, key: 'api-location-0002', name: 'Changed' })
+      .expect(403);
+    expect(inventory.listLocations(true).find((entry) => entry.id === created.body.id)?.name).toBe(
+      'Second storage',
+    );
+    db.close();
+  });
+
+  it('replays keyed location archive and reports its active item blockers', async () => {
+    const { db, inventory, agent } = fixture();
+    const location = inventory.createLocation('A-3', 'Third storage');
+    const item = inventory.createItem({
+      name: 'Stored item',
+      kind: 'camp_equipment',
+      locationId: Number(location.id),
+    });
+    await role(agent, 'admin', 'admin-pass');
+    const command = {
+      key: 'api-location-archive-1',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      code: 'A-3',
+      name: 'Third storage',
+      archived: true,
+    };
+    await agent
+      .put(`/api/inventory/locations/${location.id}`)
+      .send(command)
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toBe('location_in_use'));
+    inventory.archiveItem(item.id, true);
+    await agent.put(`/api/inventory/locations/${location.id}`).send(command).expect(200);
+    inventory.saveInventoryLocation({
+      key: 'location-restore-1',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      locationId: Number(location.id),
+      code: 'A-3',
+      name: 'Third storage',
+      archived: false,
+    });
+    await agent.put(`/api/inventory/locations/${location.id}`).send(command).expect(200);
+    expect(inventory.listLocations(true).find((entry) => entry.id === location.id)?.archived).toBe(
+      false,
+    );
+    db.close();
+  });
+
+  it('guards location archive against active item references and rejects operator catalog writes', async () => {
+    const { db, inventory, agent } = fixture();
+    const location = inventory.createLocation('workshop', 'Workshop');
+    const item = inventory.createItem({
+      name: 'Location blocker',
+      kind: 'camp_equipment',
+      locationId: Number(location.id),
+    });
+    const path = `/api/locations/${location.id}`;
+    await agent.put(path).send({ code: 'workshop', name: 'Workshop', archived: true }).expect(403);
+    await role(agent, 'admin', 'admin-pass');
+    await agent
+      .put(path)
+      .send({ code: 'workshop', name: 'Workshop', archived: true })
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toBe('location_in_use'));
+    expect(inventory.listLocations(true).find((entry) => entry.id === location.id)?.archived).toBe(
+      false,
+    );
+    inventory.archiveItem(item.id, true);
+    await agent.put(path).send({ code: 'workshop', name: 'Workshop', archived: true }).expect(204);
+    await agent
+      .post(`/api/items/${item.id}/archive`)
+      .send({ archived: false })
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toBe('invalid_location'));
+    await agent
+      .post(`/api/items/${item.id}/archive`)
+      .send({ archived: false, locationId: null })
+      .expect(204);
+    expect(inventory.listItems('Location blocker')[0]?.locationId).toBeNull();
+    db.close();
+  });
+  it('enforces role, stale counts, and idempotent create/count commands', async () => {
+    const { db, inventory, agent } = fixture();
+    const creation = {
+      key: 'api-create-0001',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      name: 'Workbench',
+      kind: 'camp_equipment',
+      aliases: [],
+      lotSize: null,
+      locationId: null,
+      targetAvailable: 20,
+    };
+    await agent.post('/api/inventory/items').send(creation).expect(403);
+    await role(agent, 'admin', 'admin-pass');
+    const created = await agent.post('/api/inventory/items').send(creation).expect(201);
+    await agent
+      .post('/api/inventory/items')
+      .send(creation)
+      .expect(201)
+      .expect(({ body }) => expect(body.id).toBe(created.body.id));
+    expect(inventory.listLedger()).toHaveLength(1);
+    const itemId = created.body.id as number;
+    const count = {
+      key: 'api-count-00001',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      name: 'Workbench edited',
+      aliases: [],
+      lotSize: null,
+      locationId: null,
+      targetAvailable: 17,
+      stockSnapshot: created.body.stockSnapshot,
+    };
+    inventory.addStock(itemId, 1);
+    await agent
+      .put(`/api/inventory/items/${itemId}`)
+      .send(count)
+      .expect(409)
+      .expect(({ body }) => expect(body.error).toBe('stale_stock'));
+    expect(inventory.listItems('Workbench')[0]).toMatchObject({ name: 'Workbench', available: 21 });
+    const latest = inventory.listItems('Workbench')[0]!;
+    await agent
+      .put(`/api/inventory/items/${itemId}`)
+      .send({
+        ...count,
+        key: 'metadata-00001',
+        targetAvailable: undefined,
+        stockSnapshot: undefined,
+      })
+      .expect(200);
+    expect(inventory.listItems('Workbench edited')[0]?.available).toBe(21);
+    await agent
+      .put(`/api/inventory/items/${itemId}`)
+      .send({ ...count, key: 'reviewed-00001', stockSnapshot: latest.stockSnapshot })
+      .expect(200);
+    expect(inventory.listItems('Workbench edited')[0]?.available).toBe(17);
+    expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_removed', quantity: 4 });
+    db.close();
+  });
+
+  it('forbids operator write-off after admin expiry while allowing explicit repair', async () => {
+    const clock = { now: 1_000 };
+    const { db, inventory, agent } = fixture(clock);
+    const item = inventory.createItem({ name: 'Damaged saw', kind: 'non_consumable' });
+    const borrower = inventory.createBorrower({
+      username: 'api-saw',
+      name: 'Saw user',
+      type: 'individual',
+    });
+    inventory.addStock(item.id, 2);
+    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    inventory.returnCheckout(checkout, 0, 2);
+    await role(agent, 'admin', 'admin-pass');
+    clock.now += 600_001;
+    const base = {
+      key: 'api-damage-0001',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      itemId: item.id,
+      quantity: 1,
+      note: '',
+    };
+    await agent
+      .post('/api/inventory/damage')
+      .send({ ...base, resolution: 'write_off' })
+      .expect(403);
+    expect(inventory.listItems('Damaged saw')[0]?.damaged).toBe(2);
+    await agent
+      .post('/api/inventory/damage')
+      .send({ ...base, resolution: 'repair' })
+      .expect(201);
+    await agent
+      .post('/api/inventory/damage')
+      .send({ ...base, resolution: 'repair' })
+      .expect(201);
+    expect(inventory.listItems('Damaged saw')[0]).toMatchObject({ available: 1, damaged: 1 });
+    expect(inventory.listLedger().filter((event) => event.kind === 'repaired')).toHaveLength(1);
     db.close();
   });
 });

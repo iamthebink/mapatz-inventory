@@ -24,7 +24,10 @@ export interface Item {
   archived: boolean;
   aliases: string[];
   available: number;
+  borrowed: number;
+  lost: number;
   damaged: number;
+  stockSnapshot: number;
 }
 
 export interface Borrower {

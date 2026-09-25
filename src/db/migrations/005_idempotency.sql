@@ -14,5 +14,11 @@ CREATE TABLE idempotency_receipts (
 );
 
 CREATE INDEX events_related_kind_idx ON inventory_events(related_event_id, kind);
+CREATE TABLE inventory_command_receipts (
+  key TEXT PRIMARY KEY,
+  request_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE INDEX events_borrower_item_kind_created_id_idx
 ON inventory_events(borrower_id, item_id, kind, created_at, id);
