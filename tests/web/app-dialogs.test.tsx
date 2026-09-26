@@ -107,6 +107,7 @@ function setup(
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('inventory management in App', () => {
@@ -123,22 +124,88 @@ describe('inventory management in App', () => {
       damaged: 0,
     };
     const { user } = setup('operator', '/', [hammer, tape]);
-    await user.click(await screen.findByRole('button', { name: 'ניפוק ציוד מתכלה' }));
-    const dialog = screen.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
-    await user.type(within(dialog).getByRole('combobox', { name: 'פריט מתכלה' }), 'סרט');
-    await user.click(await screen.findByRole('option', { name: /סרט/ }));
-    await user.click(within(dialog).getByRole('button', { name: 'הוספה לרשימה' }));
+    expect(
+      (await screen.findByRole('button', { name: 'השאלות והחזרות' })).getAttribute('aria-pressed'),
+    ).toBe('true');
+    await user.click(screen.getByRole('button', { name: 'ציוד מתכלה' }));
+    await user.click(
+      within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
     fireEvent.click(screen.getByRole('link', { name: 'סיכום', hidden: true }));
     expect(await screen.findByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
     expect(window.location.pathname).toBe('/');
     await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
-    expect(within(dialog).getAllByText('סרט').length).toBeGreaterThan(0);
+    expect(screen.getByText('× 1')).toBeTruthy();
     window.history.replaceState({}, '', '/summary');
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(await screen.findByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
     expect(window.location.pathname).toBe('/');
     await user.click(screen.getByRole('button', { name: 'מחיקת טיוטה' }));
     expect(window.location.pathname).toBe('/summary');
+  });
+  it('guards a dirty consumables draft when switching back to borrower work', async () => {
+    const tape: Item = {
+      ...hammer,
+      id: 20,
+      code: 120,
+      name: 'סרט',
+      kind: 'consumable',
+      available: 5,
+      borrowed: 0,
+      lost: 0,
+      damaged: 0,
+    };
+    const { user } = setup('operator', '/', [hammer, tape]);
+    await user.click(await screen.findByRole('button', { name: 'ציוד מתכלה' }));
+    await user.click(
+      within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
+    await user.click(screen.getByRole('button', { name: 'השאלות והחזרות' }));
+    expect(screen.getByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
+    expect(
+      document
+        .querySelector('[aria-controls="desk-consumables-panel"]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('true');
+    await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
+    expect(screen.getByText('× 1')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'השאלות והחזרות' }));
+    await user.click(screen.getByRole('button', { name: 'מחיקת טיוטה' }));
+    expect(
+      screen.getByRole('button', { name: 'השאלות והחזרות' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+  it('opens a restored uncertain batch in consumables and locks the view switch', async () => {
+    const saved = JSON.stringify({
+      key: '00000000-0000-4000-8000-000000000921',
+      ledgerEpoch: 1,
+      items: [{ itemId: 20, quantity: 1, note: '' }],
+    });
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => (key === 'mapatz-consumable-batch-attempt' ? saved : null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    const tape: Item = {
+      ...hammer,
+      id: 20,
+      code: 120,
+      name: 'סרט',
+      kind: 'consumable',
+      available: 5,
+      borrowed: 0,
+      lost: 0,
+      damaged: 0,
+    };
+    const { user } = setup('operator', '/', [hammer, tape]);
+    const consumables = await screen.findByRole('button', { name: 'ציוד מתכלה' });
+    expect(consumables.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'בדיקת הפעולה השמורה' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'השאלות והחזרות' }));
+    expect(consumables.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeNull();
   });
   it('keeps radio custody and count settings reachable after the merge', async () => {
     const { user } = setup('operator');

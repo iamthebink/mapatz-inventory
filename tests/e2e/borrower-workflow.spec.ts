@@ -101,6 +101,22 @@ async function confirmSave(page: Page) {
   await review.getByRole('button', { name: 'אישור ושמירה' }).click();
 }
 
+test('protects staged borrower-card work when switching to consumables', async ({ page, seed }) => {
+  await openSeededCard(page, seed.borrower.username);
+  await stageBorrow(page, seed.stockItem.name);
+  const switchToConsumables = page.locator('[aria-controls="desk-consumables-panel"]');
+  // The card modal isolates the switch from pointer input; dispatch checks the transition guard itself.
+  await switchToConsumables.dispatchEvent('click');
+  const discard = page.getByRole('alertdialog', { name: 'ביטול פעולות ממתינות?' });
+  await expect(discard).toBeVisible();
+  await discard.getByRole('button', { name: 'המשך עבודה' }).click();
+  await expect(switchToConsumables).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('dialog', { name: /כרטיס שואל/ }).getByText('השאלה ·')).toBeVisible();
+  await switchToConsumables.dispatchEvent('click');
+  await discard.getByRole('button', { name: 'מחיקת הפעולות וסגירה' }).click();
+  await expect(switchToConsumables).toHaveAttribute('aria-pressed', 'true');
+});
+
 function rows<T extends Record<string, unknown>>(
   database: DatabaseSync,
   sql: string,
@@ -277,22 +293,37 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
 
   await expect(page.getByRole('link', { name: 'ציוד מתכלה' })).toHaveCount(0);
   await page.setViewportSize({ width: 320, height: 720 });
-  await page.getByRole('button', { name: 'ניפוק ציוד מתכלה' }).click();
-  const batch = page.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
-  const bounds = await batch.boundingBox();
+  await page.getByRole('button', { name: 'ציוד מתכלה' }).click();
+  const desk = page.getByRole('region', { name: 'ציוד מתכלה' });
+  const bounds = await desk.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   for (const name of [seed.consumable.name, seed.secondConsumable.name]) {
-    const itemSearch = batch.getByRole('combobox', { name: 'פריט מתכלה' });
+    const itemSearch = desk.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' });
     await itemSearch.fill(name);
-    await page.getByRole('option', { name: new RegExp(name) }).click();
-    await batch.getByRole('button', { name: 'הוספה לרשימה' }).click();
+    await desk
+      .getByRole('row', { name: new RegExp(name) })
+      .getByRole('button', { name: 'ניפוק' })
+      .click();
+    const staging = page.getByRole('dialog', { name: `ניפוק ${name}` });
+    await expectQuantityDialogItem(staging, name);
+    await staging.getByRole('button', { name: 'הוספה לעסקה' }).click();
   }
-  await batch.getByRole('spinbutton', { name: `כמות ${seed.secondConsumable.name}` }).fill('2');
-  await batch.getByRole('button', { name: 'בדיקה ואישור' }).click();
+  await desk
+    .locator('.consumables-draft-item')
+    .filter({ hasText: seed.secondConsumable.name })
+    .getByRole('button', { name: 'עריכת כמות והערה' })
+    .click();
+  const edit = page.getByRole('dialog', { name: `עריכת כמות והערה ${seed.secondConsumable.name}` });
+  await expectQuantityDialogItem(edit, seed.secondConsumable.name);
+  await edit.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await edit.getByRole('button', { name: 'שמירת שינוי' }).click();
+  await expect(desk.getByText('סך יחידות לניפוק').locator('..')).toContainText('3');
+  await desk.getByRole('button', { name: 'בדיקה ואישור הניפוק' }).click();
   await page.getByRole('button', { name: 'אישור ניפוק' }).click();
-  await expect(batch).toBeHidden();
+  await expect(desk.locator('.consumables-draft-item')).toHaveCount(0);
 
   const database = openLedger();
   const issued = rows<{

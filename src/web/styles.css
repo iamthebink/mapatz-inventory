@@ -791,17 +791,169 @@
     display: grid;
     gap: 4px;
   }
-  .consumable-batch-dialog .borrower-review-row {
-    grid-template-columns: minmax(0, 1fr) minmax(5rem, 7rem) minmax(0, 1.5fr) auto;
-    align-items: end;
-    gap: 10px;
+  .desk-view-switch {
+    @apply mb-5 max-w-full;
   }
-  @media (max-width: 640px) {
-    .consumable-batch-dialog .borrower-review-row {
-      grid-template-columns: minmax(0, 1fr) minmax(5rem, 7rem);
+  .desk-view-switch button {
+    @apply min-w-0 px-3 sm:px-5;
+  }
+  .consumables-desk {
+    @apply grid gap-4;
+  }
+  .consumables-desk-heading h2 {
+    @apply text-xl font-bold text-ctp-text;
+  }
+  .consumables-desk-heading p {
+    @apply mt-1 text-sm text-ctp-subtext;
+  }
+  .consumables-desk-layout {
+    @apply grid items-start gap-4 lg:grid-cols-[minmax(0,1.85fr)_minmax(300px,0.85fr)];
+  }
+  .consumables-stock,
+  .consumables-pending {
+    min-width: 0;
+    @apply overflow-hidden p-0;
+  }
+  .consumables-pending {
+    @apply lg:sticky lg:top-5;
+  }
+  .consumables-card-heading {
+    @apply flex flex-wrap items-start justify-between gap-2 border-b border-ctp-surface px-5 py-4;
+  }
+  .consumables-card-heading h3 {
+    @apply text-base font-semibold;
+  }
+  .consumables-card-heading p {
+    @apply mt-1 text-xs text-ctp-subtext;
+  }
+  .consumables-card-heading > span {
+    @apply text-sm text-ctp-subtext;
+  }
+  .consumables-card-heading .consumables-count-badge {
+    @apply rounded-full bg-ctp-lavender/15 px-2.5 py-1 text-xs font-semibold text-ctp-lavender;
+  }
+  .consumables-stock-search {
+    @apply grid gap-2 px-5 py-4;
+  }
+  .consumables-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .consumables-table {
+    @apply w-full text-right text-sm;
+    table-layout: fixed;
+  }
+  .consumables-table th,
+  .consumables-table td {
+    @apply border-b border-ctp-surface px-4 py-3;
+  }
+  .consumables-table th:first-child {
+    width: 57%;
+  }
+  .consumables-table th:nth-child(2) {
+    width: 20%;
+  }
+  .consumables-table th:last-child {
+    width: 23%;
+  }
+  .consumables-table tbody th {
+    overflow-wrap: anywhere;
+  }
+  .consumables-table small {
+    @apply block text-xs font-normal text-ctp-subtext;
+  }
+  .consumables-available {
+    @apply font-semibold tabular-nums;
+  }
+  .consumables-empty {
+    @apply py-5 text-center text-sm text-ctp-subtext;
+  }
+  .consumables-draft-list {
+    @apply m-0 list-none p-0;
+  }
+  .consumables-draft-item {
+    @apply border-b border-ctp-surface px-5 py-4;
+  }
+  .consumables-draft-top {
+    @apply flex items-start justify-between gap-3;
+  }
+  .consumables-draft-top > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .consumables-draft-top small {
+    @apply mt-1 block text-xs font-normal text-ctp-subtext;
+  }
+  .consumables-quantity-chip {
+    @apply shrink-0 rounded-lg bg-ctp-base px-2 py-1 text-sm font-semibold tabular-nums;
+  }
+  .consumables-draft-actions {
+    @apply mt-2 flex gap-4;
+  }
+  .consumables-draft-actions button {
+    @apply min-h-10 text-xs font-semibold text-ctp-blue disabled:opacity-50;
+  }
+  .consumables-draft-actions button:last-child {
+    @apply text-ctp-red;
+  }
+  .consumables-pending-footer {
+    @apply grid gap-3 px-5 py-4;
+  }
+  .consumables-pending-footer p {
+    @apply flex justify-between gap-2 text-sm text-ctp-subtext;
+  }
+  .consumables-pending-footer strong {
+    @apply font-semibold text-ctp-text;
+  }
+  .consumables-pending-footer .primary-button {
+    @apply w-full;
+  }
+  .consumables-pending-footer small {
+    @apply text-xs text-ctp-subtext;
+  }
+  @media (max-width: 560px) {
+    .desk-view-switch {
+      @apply flex w-full;
     }
-    .consumable-batch-dialog .borrower-review-row > :nth-child(3) {
+    .desk-view-switch button {
+      @apply flex-1 px-2 text-xs;
+    }
+    .consumables-table thead {
+      @apply sr-only;
+    }
+    .consumables-table,
+    .consumables-table tbody,
+    .consumables-table tr,
+    .consumables-table th,
+    .consumables-table td {
+      display: block;
+      width: 100%;
+    }
+    .consumables-table tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 0.75rem;
+      @apply border-b border-ctp-surface px-4 py-3;
+    }
+    .consumables-table tbody th,
+    .consumables-table tbody td {
+      @apply border-0 p-0;
+    }
+    .consumables-table tbody th {
       grid-column: 1 / -1;
+    }
+    .consumables-table tbody td:nth-child(2) {
+      grid-column: 1;
+      @apply mt-1;
+    }
+    .consumables-table tbody td:nth-child(2)::before {
+      content: 'זמין: ';
+      @apply text-xs font-normal text-ctp-subtext;
+    }
+    .consumables-table tbody td:nth-child(3) {
+      grid-column: 2;
+      grid-row: 2;
+      @apply self-center;
     }
   }
   .field-error {

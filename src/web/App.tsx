@@ -45,7 +45,8 @@ import {
 } from './InventoryDialogs';
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
-import { ConsumableBatchDialog } from './ConsumableBatchDialog';
+import { ConsumablesDesk } from './ConsumablesDesk';
+import { hasStoredConsumableAttempt } from './consumable-attempt-storage';
 import { PeriodSummary } from './PeriodSummary';
 import { InventoryManagement } from './InventoryManagement';
 import { Radios } from './Radios';
@@ -65,6 +66,7 @@ type LedgerEvent = {
 type Session = { role: Role; deadline: number | null };
 type Tab = 'desk' | 'summary' | 'catalogs' | 'ledger' | 'radios';
 type ManagementTab = 'inventory' | 'borrowers' | 'data' | 'access';
+type DeskView = 'borrowers' | 'consumables';
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   desk: { path: '/', aliases: ['/frontdesk'] },
@@ -139,6 +141,9 @@ export function App() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [ledger, setLedger] = useState<LedgerEvent[]>([]);
   const [tab, setTab] = useState<Tab>(() => tabFromPath(window.location.pathname) ?? 'desk');
+  const [deskView, setDeskView] = useState<DeskView>(() =>
+    hasStoredConsumableAttempt() ? 'consumables' : 'borrowers',
+  );
   const [workflowStartup, setWorkflowStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [summaryReturnRevision, setSummaryReturnRevision] = useState(0);
   const [managementTab, setManagementTab] = useState<ManagementTab>('inventory');
@@ -219,6 +224,17 @@ export function App() {
     },
     [performNavigation],
   );
+
+  const selectDeskView = (nextView: DeskView) => {
+    if (nextView === deskView) return;
+    if (deskView === 'consumables') {
+      if (batchLeaveGuardRef.current && !batchLeaveGuardRef.current(() => setDeskView(nextView)))
+        return;
+      setDeskView(nextView);
+      return;
+    }
+    borrowerWorkflowRef.current?.requestNavigation(() => setDeskView(nextView));
+  };
 
   const clearImportInput = useCallback((mode: 'reset' | 'recovery') => {
     const input = mode === 'reset' ? resetFileRef.current : recoveryFileRef.current;
@@ -754,20 +770,46 @@ export function App() {
       <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {tab === 'radios' && <Radios active showToast={showToast} />}
         {tab === 'desk' && (
-          <ConsumableBatchDialog
-            items={items}
-            ledgerEpoch={inventoryEpoch}
-            refresh={refresh}
-            showToast={showToast}
-            registerLeaveGuard={registerBatchLeaveGuard}
-          />
+          <div
+            className="desk-view-switch inventory-view-switch"
+            role="group"
+            aria-label="תצוגת דלפק השאלות"
+          >
+            <button
+              type="button"
+              aria-pressed={deskView === 'borrowers'}
+              aria-controls="desk-borrowers-panel"
+              onClick={() => selectDeskView('borrowers')}
+            >
+              השאלות והחזרות
+            </button>
+            <button
+              type="button"
+              aria-pressed={deskView === 'consumables'}
+              aria-controls="desk-consumables-panel"
+              onClick={() => selectDeskView('consumables')}
+            >
+              ציוד מתכלה
+            </button>
+          </div>
+        )}
+        {tab === 'desk' && (
+          <div id="desk-consumables-panel" hidden={deskView !== 'consumables'}>
+            <ConsumablesDesk
+              items={items}
+              ledgerEpoch={inventoryEpoch}
+              refresh={refresh}
+              showToast={showToast}
+              registerLeaveGuard={registerBatchLeaveGuard}
+            />
+          </div>
         )}
         {(tab === 'desk' || tab === 'summary') && (
-          <div hidden={tab !== 'desk'}>
+          <div id="desk-borrowers-panel" hidden={tab !== 'desk' || deskView !== 'borrowers'}>
             <BorrowerWorkflow
               ref={borrowerWorkflowRef}
               showToast={showToast}
-              deskVisible={tab === 'desk'}
+              deskVisible={tab === 'desk' && deskView === 'borrowers'}
               onStartupChange={setWorkflowStartup}
             />
           </div>
