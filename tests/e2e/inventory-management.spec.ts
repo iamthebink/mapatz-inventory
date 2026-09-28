@@ -55,9 +55,12 @@ test('administrator creates, adjusts, zeros and archives an item', async ({ page
   await row.getByRole('button', { name }).click();
   dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
   await dialog.getByRole('button', { name: 'העברה לארכיון' }).click();
-  await page.getByRole('alertdialog', { name: 'לארכב את פריט ניהול בדיקה?' }).getByRole('button', {
-    name: 'ארכוב ואיפוס מלאי זמין',
-  }).click();
+  await page
+    .getByRole('alertdialog', { name: 'לארכב את פריט ניהול בדיקה?' })
+    .getByRole('button', {
+      name: 'ארכוב ואיפוס מלאי זמין',
+    })
+    .click();
   await expect(dialog).toBeHidden();
   await expect(row).toHaveCount(0);
   await page.getByRole('checkbox', { name: 'כולל ארכיון' }).check();

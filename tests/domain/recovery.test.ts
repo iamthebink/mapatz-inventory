@@ -187,7 +187,7 @@ describe('complete inventory recovery', () => {
     const tent = destinationInventory.listItems(String(source.tentCode), true)[0]!;
     destinationInventory.resolveDamage(tent.id, 1, true, 'repaired after recovery');
     expect(destinationInventory.listLoans()).toEqual([]);
-    expect(destinationInventory.listItems(String(source.waterCode), true)[0]!.available).toBe(84);
+    expect(destinationInventory.listItems(String(source.waterCode), true)[0]!.available).toBe(89);
     source.db.close();
     destination.close();
   });
@@ -222,9 +222,8 @@ describe('complete inventory recovery', () => {
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
       .getRow(2)
       .getCell(9).value = 101;
-    await expect(parseRecoveryWorkbook(await save(brokenBaseline))).rejects.toThrow(
-      /Starting Stock does not match/,
-    );
+    const independentBaseline = await parseRecoveryWorkbook(await save(brokenBaseline));
+    expect(independentBaseline.items[0]).toMatchObject({ startingStock: 101 });
 
     const brokenReference = await workbook(original);
     const eventSheet = brokenReference.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
@@ -233,7 +232,7 @@ describe('complete inventory recovery', () => {
       .find((row) => row.getCell(2).value === 'returned_damaged')!;
     checkoutRow.getCell(6).value = 999_999;
     await expect(parseRecoveryWorkbook(await save(brokenReference))).rejects.toThrow(
-      /missing or invalid checkout/,
+      /missing or mismatched checkout/,
     );
 
     const brokenChronology = await workbook(original);
@@ -245,6 +244,95 @@ describe('complete inventory recovery', () => {
       /occurs before/,
     );
     source.db.close();
+  });
+
+  it('rejects missing and inconsistent authoritative state without changing the destination', async () => {
+    const source = sourceFixture();
+    const original = await exportWorkbook(source.transfers.snapshot());
+    const destination = database('invalid-stored-state');
+    const transfers = new InventoryTransferService(destination);
+    const before = transfers.snapshot();
+    const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
+    const edits: Array<(book: ExcelJS.Workbook) => void> = [
+      (book) => {
+        book
+          .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
+          .getRow(2)
+          .getCell(11).value = null;
+      },
+      (book) => {
+        book.removeWorksheet(book.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryLoans.name)!.id);
+      },
+      (book) => {
+        book.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryLoans.name)!.getRow(2).getCell(6).value =
+          99;
+      },
+      (book) => {
+        book
+          .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
+          .getRow(3)
+          .getCell(12).value = 0;
+      },
+      (book) => {
+        book
+          .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
+          .getRow(3)
+          .getCell(15).value = 999;
+      },
+    ];
+    for (const edit of edits) {
+      const book = await workbook(original);
+      edit(book);
+      await expect(parseRecoveryWorkbook(await save(book))).rejects.toThrow();
+      expect(transfers.snapshot()).toEqual(before);
+      expect(
+        destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+      ).toEqual(epoch);
+    }
+    source.db.close();
+    destination.close();
+  });
+
+  it('rejects active recovered items at archived locations before replacing inventory', async () => {
+    const source = sourceFixture();
+    const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
+    const archivedItem = payload.items.find((item) => item.name === 'Old stock')!;
+    archivedItem.archived = false;
+
+    const destination = database('active-item-archived-location');
+    const transfers = new InventoryTransferService(destination);
+    const before = transfers.snapshot();
+    const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
+
+    expect(() => transfers.replaceWithRecovery(payload)).toThrow(/active at an archived location/);
+    expect(transfers.snapshot()).toEqual(before);
+    expect(
+      destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual(epoch);
+    source.db.close();
+    destination.close();
+  });
+
+  it('rejects an unsafe combined recovery reset total before replacing inventory', async () => {
+    const source = sourceFixture();
+    const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
+    payload.items.find((item) => item.code === source.tentCode)!.available =
+      Number.MAX_SAFE_INTEGER;
+
+    const destination = database('unsafe-recovery-reset-total');
+    const transfers = new InventoryTransferService(destination);
+    const before = transfers.snapshot();
+    const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
+
+    expect(() => transfers.replaceWithRecovery(payload)).toThrow(
+      /reset total exceeds safe integer/,
+    );
+    expect(transfers.snapshot()).toEqual(before);
+    expect(
+      destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+    ).toEqual(epoch);
+    source.db.close();
+    destination.close();
   });
 
   it('rolls back the destination when recovery commit fails', async () => {
@@ -319,7 +407,6 @@ it('round-trips mixed ordinary and found returns and rejects malformed recoverie
     { relatedEventId: payload.events[0]!.id },
     { borrowerUsername: 'retired' },
     { itemCode: source.waterCode },
-    { quantity: 2 },
     { kind: 'unmarked_lost' },
   ]) {
     const malformed = structuredClone(payload);
@@ -374,19 +461,22 @@ it('round-trips damaged lost recovery and rejects an over-recovery workbook', as
     lost: 0,
   });
 
-  const malformed = structuredClone(payload);
-  malformed.events.find((event) => event.kind === 'found_returned_damaged')!.quantity = 2;
-  expect(() => transfers.replaceWithRecovery(malformed)).toThrow(/recovers more lost stock/);
-  expect(transfers.snapshot()).toEqual(snapshot);
+  const independentlyEditedAudit = structuredClone(payload);
+  independentlyEditedAudit.events.find(
+    (event) => event.kind === 'found_returned_damaged',
+  )!.quantity = 2;
+  expect(() => transfers.replaceWithRecovery(independentlyEditedAudit)).not.toThrow();
+  expect(transfers.snapshot().items).toEqual(snapshot.items);
+  expect(transfers.snapshot().loans).toEqual(snapshot.loans);
 
   const editedWorkbook = await workbook(bytes);
   const events = editedWorkbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
   events.eachRow((row) => {
     if (row.getCell(2).value === 'found_returned_damaged') row.getCell(5).value = 2;
   });
-  await expect(parseRecoveryWorkbook(await save(editedWorkbook))).rejects.toThrow(
-    /recovers more lost stock/,
-  );
+  await expect(parseRecoveryWorkbook(await save(editedWorkbook))).resolves.toMatchObject({
+    items: expect.any(Array),
+  });
   source.db.close();
   destination.close();
 });

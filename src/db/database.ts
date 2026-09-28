@@ -46,6 +46,18 @@ export function migrate(db: InventoryDatabase): void {
       Number(row.version),
     ),
   );
+  const freshInstall = applied.size === 0;
+  if (!freshInstall) {
+    const existing = new Set(
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+      ).map((row) => row.name),
+    );
+    if (['item_state', 'loan_state', 'state_clock'].some((name) => !existing.has(name)))
+      throw new Error(
+        'Database is missing authoritative inventory state; restore a supported backup.',
+      );
+  }
   if (
     [...applied].some((version) => !migrations.some((migration) => migration.version === version))
   )
@@ -78,6 +90,61 @@ export function migrate(db: InventoryDatabase): void {
       if (migration.disableForeignKeys) db.exec('PRAGMA foreign_keys = ON');
     }
   }
+  if (freshInstall) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(readFileSync(resolve(here, 'operational-state.sql'), 'utf8'));
+      db.exec('COMMIT');
+    } catch (error) {
+      if (db.isTransaction) db.exec('ROLLBACK');
+      throw error;
+    }
+  } else {
+    if (
+      !db.prepare('SELECT 1 FROM state_clock WHERE singleton=1').get() ||
+      db
+        .prepare(
+          'SELECT 1 FROM items i LEFT JOIN item_state s ON s.item_id=i.id WHERE s.item_id IS NULL LIMIT 1',
+        )
+        .get()
+    )
+      throw new Error('Database has incomplete authoritative inventory state.');
+  }
+  const invalidState = db
+    .prepare(
+      `SELECT 1 FROM items i JOIN item_state s ON s.item_id=i.id
+    WHERE s.available < 0 OR s.borrowed < 0 OR s.damaged < 0 OR s.lost < 0
+      OR (i.kind='consumable' AND (s.borrowed<>0 OR s.damaged<>0 OR s.lost<>0))
+      OR (i.archived=1 AND (s.available<>0 OR s.borrowed<>0 OR s.damaged<>0 OR s.lost<>0))
+      OR s.borrowed <> (SELECT COALESCE(SUM(l.outstanding),0) FROM loan_state l WHERE l.item_id=i.id)
+      OR s.lost <> (SELECT COALESCE(SUM(l.lost),0) FROM loan_state l WHERE l.item_id=i.id)
+    LIMIT 1`,
+    )
+    .get();
+  const invalidLoan = db
+    .prepare(
+      `SELECT 1 FROM loan_state l JOIN borrowers b ON b.id=l.borrower_id
+    WHERE l.outstanding<0 OR l.lost<0 OR l.outstanding+l.lost>l.quantity
+      OR (b.archived=1 AND l.outstanding>0) LIMIT 1`,
+    )
+    .get();
+  const invalidLoanIdentity = db
+    .prepare(
+      `SELECT 1 FROM loan_state l LEFT JOIN inventory_events e ON e.id=l.checkout_id
+    WHERE e.id IS NULL OR e.kind<>'checked_out' OR e.item_id<>l.item_id
+      OR e.borrower_id IS NOT l.borrower_id OR e.quantity<>l.quantity LIMIT 1`,
+    )
+    .get();
+  const checkoutWithoutLoan = db
+    .prepare(
+      `SELECT 1 FROM inventory_events e LEFT JOIN loan_state l ON l.checkout_id=e.id
+    WHERE e.kind='checked_out' AND l.checkout_id IS NULL LIMIT 1`,
+    )
+    .get();
+  if (invalidState || invalidLoan)
+    throw new Error('Database has invalid authoritative inventory balances.');
+  if (invalidLoanIdentity || checkoutWithoutLoan)
+    throw new Error('Database has inconsistent checkout and loan state.');
 }
 
 export function transaction<T>(db: InventoryDatabase, operation: () => T): T {

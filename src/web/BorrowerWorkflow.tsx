@@ -816,7 +816,7 @@ export const BorrowerWorkflow = forwardRef<
       kind: 'operation',
       endpoint: `/borrowers/${operation.borrowerId}/operations`,
       subjectId: operation.borrowerId,
-      asOfEventId: operation.snapshot.asOfEventId,
+      stateRevision: operation.snapshot.stateRevision,
       ledgerEpoch: operation.snapshot.ledgerEpoch,
       intent,
       idempotencyKey,

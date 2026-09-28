@@ -25,7 +25,7 @@ function operation(key = key1): FrozenOperationAttempt {
     kind: 'operation',
     endpoint: '/borrowers/7/operations',
     subjectId: 7,
-    asOfEventId: 3,
+    stateRevision: 3,
     idempotencyKey: key,
     ledgerEpoch: 3,
     intent: 'save',
@@ -149,7 +149,7 @@ describe('frozen attempt validation and storage', () => {
         },
       ],
       holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
-      asOfEventId: 4,
+      stateRevision: 4,
       ledgerEpoch: 3,
     };
     expect(
@@ -204,7 +204,7 @@ describe('frozen attempt validation and storage', () => {
         },
       ],
       holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
-      asOfEventId: 4,
+      stateRevision: 4,
       ledgerEpoch: 3,
     };
     const conflicts = [
@@ -241,7 +241,7 @@ describe('frozen attempt validation and storage', () => {
     const invalid = [
       { ...operation(), version: 2 },
       { ...operation(), endpoint: '/borrowers/8/operations' },
-      { ...operation(), asOfEventId: -1 },
+      { ...operation(), stateRevision: -1 },
       { ...operation(), ledgerEpoch: 4 },
       { ...operation(), body: { ...operation().body, ledgerEpoch: 2 } },
       {
@@ -255,7 +255,7 @@ describe('frozen attempt validation and storage', () => {
         },
       },
       { ...creation(), subjectId: 1 },
-      { ...creation(), asOfEventId: undefined },
+      { ...creation(), stateRevision: undefined },
       { ...creation(), body: { ...creation().body, username: ' x ' } },
     ];
     for (const candidate of invalid) expect(parseFrozenAttempt(candidate)).toBeNull();
@@ -666,7 +666,7 @@ describe('frozen dispatch and recovery', () => {
         },
       ],
       holdings: [],
-      asOfEventId: 4,
+      stateRevision: 4,
       ledgerEpoch: 3,
     };
     const contradictoryOperationResults = [
@@ -708,7 +708,7 @@ describe('frozen dispatch and recovery', () => {
             availableAfterUsableReturns: 0,
           },
         ],
-        snapshot: { ...operationSnapshot, asOfEventId: 2 },
+        snapshot: { ...operationSnapshot, stateRevision: 2 },
       },
     ];
     for (const result of contradictoryOperationResults) {

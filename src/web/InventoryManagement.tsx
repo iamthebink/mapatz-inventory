@@ -246,7 +246,7 @@ export function InventoryManagement({
         ...(countChanged
           ? {
               targetAvailable: Number(draft.available),
-              stockSnapshot: item ? (reviewSnapshot ?? item.stockSnapshot) : undefined,
+              stockRevision: item ? (reviewSnapshot ?? item.stockRevision) : undefined,
               note: draft.note,
             }
           : {}),
@@ -747,7 +747,7 @@ export function InventoryManagement({
                           type="button"
                           className="secondary-button"
                           disabled={lockedDraft}
-                          onClick={() => setReviewSnapshot(currentBalances.stockSnapshot)}
+                          onClick={() => setReviewSnapshot(currentBalances.stockRevision)}
                         >
                           בדקתי את היתרות; שמור את הכמות המבוקשת
                         </button>

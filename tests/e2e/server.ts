@@ -100,18 +100,23 @@ app.post(
     const stockItemId = Number(request.params.stockItemId);
     const checkoutId = Number(request.params.checkoutId);
     const archiveItemId = Number(request.params.archiveItemId);
-    const available =
-      inventory.listItems('', true).find((item) => item.id === stockItemId)?.available ?? 0;
-    if (available > 0)
-      database
-        .prepare(
-          "INSERT INTO inventory_events(kind,item_id,quantity,note) VALUES ('stock_removed',?,?,?)",
-        )
-        .run(stockItemId, available, 'e2e stock conflict');
+    const stockItem = inventory.listItems('', true).find((item) => item.id === stockItemId);
+    if (stockItem?.available)
+      inventory.saveInventoryItem({
+        key: `e2e-stock-conflict-${stockItemId}`,
+        itemId: stockItemId,
+        name: stockItem.name,
+        aliases: stockItem.aliases,
+        lotSize: stockItem.lotSize,
+        locationId: stockItem.locationId,
+        targetAvailable: 0,
+        stockRevision: stockItem.stockRevision,
+        note: 'e2e stock conflict',
+      });
     const loan = inventory.listLoans().find((candidate) => candidate.checkoutId === checkoutId);
     if (loan?.outstanding)
       inventory.returnCheckout(checkoutId, loan.outstanding, 0, 'e2e return conflict');
-    database.prepare('UPDATE items SET archived=1 WHERE id=?').run(archiveItemId);
+    inventory.archiveItem(archiveItemId, true);
     response.status(204).end();
   },
 );
@@ -124,14 +129,18 @@ app.post(
     const archiveItemId = Number(request.params.archiveItemId);
     inventory.addStock(stockItemId, 4, 'e2e conflict resolution');
     inventory.checkout(itemId, borrowerId, 2, 'e2e conflict resolution');
-    database.prepare('UPDATE items SET archived=0 WHERE id=?').run(archiveItemId);
+    inventory.archiveItem(archiveItemId, false);
+    inventory.addStock(archiveItemId, 2, 'e2e conflict resolution');
     response.status(204).end();
   },
 );
 app.post('/__e2e__/archive-borrower/:borrowerId', (request, response) => {
-  database
-    .prepare('UPDATE borrowers SET archived=1 WHERE id=?')
-    .run(Number(request.params.borrowerId));
+  const borrowerId = Number(request.params.borrowerId);
+  for (const loan of inventory.listLoans()) {
+    if (Number(loan.borrowerId) === borrowerId && Number(loan.outstanding) > 0)
+      inventory.returnCheckout(Number(loan.checkoutId), Number(loan.outstanding), 0);
+  }
+  inventory.archiveBorrower(borrowerId, true);
   response.status(204).end();
 });
 app.post('/__e2e__/rotate-epoch', (_request, response) => {

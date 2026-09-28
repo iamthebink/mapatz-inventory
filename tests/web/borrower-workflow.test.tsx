@@ -37,12 +37,12 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function desk(asOfEventId = 1) {
+function desk(stateRevision = 1) {
   return {
     borrower,
     inventory: [item],
     holdings: [{ itemId: 11, returnable: 2, lost: 1 }],
-    asOfEventId,
+    stateRevision,
     ledgerEpoch: 3,
   };
 }

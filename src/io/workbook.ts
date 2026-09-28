@@ -76,8 +76,27 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
       item.createdAt,
       item.startingStock,
       item.baselineThroughEventId,
+      item.available,
+      item.borrowed,
+      item.damaged,
+      item.lost,
+      item.revision,
     ]),
   );
+  addSheet(
+    workbook,
+    'recoveryLoans',
+    snapshot.loans.map((loan) => [
+      loan.checkoutId,
+      loan.itemCode,
+      loan.borrowerUsername,
+      loan.quantity,
+      loan.createdAt,
+      loan.outstanding,
+      loan.lost,
+    ]),
+  );
+  addSheet(workbook, 'recoveryState', [[snapshot.stateRevision]]);
   addSheet(
     workbook,
     'recoveryBorrowers',
@@ -382,6 +401,8 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
   const itemSheet = requiredSheet(workbook, 'recoveryItems');
   const borrowerSheet = requiredSheet(workbook, 'recoveryBorrowers');
   const eventSheet = requiredSheet(workbook, 'recoveryEvents');
+  const loanSheet = requiredSheet(workbook, 'recoveryLoans');
+  const stateSheet = requiredSheet(workbook, 'recoveryState');
   const radioFleetSheet = requiredSheet(workbook, 'recoveryRadioFleet');
   const radioSheet = requiredSheet(workbook, 'recoveryRadios');
   const fleetRows = dataRows(radioFleetSheet, 1);
@@ -402,7 +423,11 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     name: requiredText(row[0], `Recovery Locations row ${index + 2} Name`),
     archived: requiredBoolean(row[1], `Recovery Locations row ${index + 2} Archived`),
   }));
-  const items = dataRows(itemSheet, 10).map((row, index) => {
+  const revisionRows = dataRows(stateSheet, 1);
+  if (revisionRows.length !== 1)
+    return importError('Recovery State must contain exactly one revision');
+  const stateRevision = integer(revisionRows[0]![0], 'Recovery State Revision', 0);
+  const items = dataRows(itemSheet, 15).map((row, index) => {
     const rowNumber = index + 2;
     const kind = requiredText(row[2], `Recovery Items row ${rowNumber} Kind`) as ItemKind;
     if (kind !== 'consumable' && kind !== 'non_consumable' && kind !== 'camp_equipment')
@@ -424,6 +449,11 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
         `Recovery Items row ${rowNumber} Baseline Through Event ID`,
         0,
       ),
+      available: integer(row[10], `Recovery Items row ${rowNumber} Available`, 0),
+      borrowed: integer(row[11], `Recovery Items row ${rowNumber} Borrowed`, 0),
+      damaged: integer(row[12], `Recovery Items row ${rowNumber} Damaged`, 0),
+      lost: integer(row[13], `Recovery Items row ${rowNumber} Lost`, 0),
+      revision: integer(row[14], `Recovery Items row ${rowNumber} Revision`, 0),
     };
   });
   const borrowers = dataRows(borrowerSheet, 6).map((row, index) => {
@@ -475,7 +505,32 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
       createdAt: timestamp(row[7], `Recovery Events row ${rowNumber} Created At`),
     };
   });
-  return validateRecoveryPayload({ locations, items, borrowers, events, radioCount, radios });
+  const loans = dataRows(loanSheet, 7).map((row, index) => {
+    const rowNumber = index + 2;
+    return {
+      checkoutId: integer(row[0], `Recovery Loans row ${rowNumber} Checkout ID`, 1),
+      itemCode: integer(row[1], `Recovery Loans row ${rowNumber} Item Code`, 1),
+      borrowerUsername: requiredText(
+        row[2],
+        `Recovery Loans row ${rowNumber} Borrower Username`,
+        40,
+      ),
+      quantity: integer(row[3], `Recovery Loans row ${rowNumber} Quantity`, 1),
+      createdAt: timestamp(row[4], `Recovery Loans row ${rowNumber} Created At`),
+      outstanding: integer(row[5], `Recovery Loans row ${rowNumber} Outstanding`, 0),
+      lost: integer(row[6], `Recovery Loans row ${rowNumber} Lost`, 0),
+    };
+  });
+  return validateRecoveryPayload({
+    locations,
+    items,
+    borrowers,
+    events,
+    loans,
+    stateRevision,
+    radioCount,
+    radios,
+  });
 }
 
 /** Standalone first-sheet import; never routes through inventory replacement. */

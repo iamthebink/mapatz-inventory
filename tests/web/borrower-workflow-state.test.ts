@@ -45,7 +45,7 @@ function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSn
       },
     ],
     holdings: [{ itemId: 11, returnable: 5, lost: 2 }],
-    asOfEventId: 8,
+    stateRevision: 8,
     ledgerEpoch: 3,
     ...overrides,
   };
@@ -411,7 +411,7 @@ describe('borrower operation state', () => {
         },
       ],
       snapshot: snapshot({
-        asOfEventId: 9,
+        stateRevision: 9,
         inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
       }),
     };
@@ -421,7 +421,7 @@ describe('borrower operation state', () => {
       result: conflict,
     });
     expect(conflicted.phase.kind).toBe('conflicted');
-    expect(conflicted.snapshot.asOfEventId).toBe(9);
+    expect(conflicted.snapshot.stateRevision).toBe(9);
     expect(conflicted.staged).toHaveLength(1);
     expect(canSave(conflicted)).toBe(false);
     expect(operationLocks(conflicted).mutation).toBe(false);
@@ -511,7 +511,7 @@ describe('borrower operation state', () => {
     state = operationReducer(state, {
       type: 'refresh-succeeded',
       refreshId: '00000000-0000-4000-8000-000000000104',
-      snapshot: snapshot({ asOfEventId: 10 }),
+      snapshot: snapshot({ stateRevision: 10 }),
     });
     expect(state).toMatchObject({
       phase: { kind: 'ready' },
@@ -543,7 +543,7 @@ describe('borrower operation state', () => {
     closed = operationReducer(closed, {
       type: 'refresh-succeeded',
       refreshId: '00000000-0000-4000-8000-000000000103',
-      snapshot: snapshot({ asOfEventId: 11 }),
+      snapshot: snapshot({ stateRevision: 11 }),
     });
     expect(closed.phase.kind).toBe('closed');
     expect(operationPresentation(closed)).toEqual({ cardOpen: false, searchEnabled: true });
@@ -568,7 +568,7 @@ describe('borrower operation state', () => {
     epochClosed = operationReducer(epochClosed, {
       type: 'refresh-succeeded',
       refreshId,
-      snapshot: snapshot({ ledgerEpoch: 4, asOfEventId: 12 }),
+      snapshot: snapshot({ ledgerEpoch: 4, stateRevision: 12 }),
     });
     expect(epochClosed.phase).toMatchObject({
       kind: 'reload-required',
@@ -580,7 +580,7 @@ describe('borrower operation state', () => {
     epochClosed = operationReducer(epochClosed, {
       type: 'reload-succeeded',
       reloadId,
-      snapshot: snapshot({ ledgerEpoch: 4, asOfEventId: 12 }),
+      snapshot: snapshot({ ledgerEpoch: 4, stateRevision: 12 }),
     });
     expect(epochClosed).toMatchObject({
       phase: { kind: 'closed' },
@@ -738,7 +738,7 @@ describe('borrower operation state', () => {
         },
       ],
       snapshot: snapshot({
-        asOfEventId: 7,
+        stateRevision: 7,
         inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
       }),
     };
@@ -769,13 +769,13 @@ describe('borrower operation state', () => {
     const stale = operationReducer(state, {
       type: 'refresh-succeeded',
       refreshId,
-      snapshot: snapshot({ asOfEventId: 8 }),
+      snapshot: snapshot({ stateRevision: 8 }),
     });
     expect(stale.phase.kind).toBe('refresh-required');
     const epochChanged = operationReducer(state, {
       type: 'refresh-succeeded',
       refreshId,
-      snapshot: snapshot({ ledgerEpoch: 4, asOfEventId: 9 }),
+      snapshot: snapshot({ ledgerEpoch: 4, stateRevision: 9 }),
     });
     expect(epochChanged.phase.kind).toBe('reload-required');
   });

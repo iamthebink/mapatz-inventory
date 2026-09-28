@@ -12,7 +12,157 @@ afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
+function checkoutDatabaseForReopen() {
+  const directory = mkdtempSync(join(tmpdir(), 'mapatz-checkout-integrity-'));
+  cleanup.push(directory);
+  const filename = join(directory, 'inventory.sqlite');
+  const db = openDatabase(filename);
+  const inventory = new InventoryService(db);
+  const borrower = inventory.createBorrower({
+    username: 'checkout-owner',
+    name: 'Checkout Owner',
+    type: 'individual',
+  });
+  const otherBorrower = inventory.createBorrower({
+    username: 'other-owner',
+    name: 'Other Owner',
+    type: 'individual',
+  });
+  const item = inventory.createItem({ name: 'Checkout integrity item', kind: 'non_consumable' });
+  inventory.addStock(item.id, 3);
+  const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+  return {
+    db,
+    filename,
+    itemId: item.id,
+    otherBorrowerId: otherBorrower.id,
+    checkoutId,
+  };
+}
+
 describe('inventory domain', () => {
+  it('rolls back an audit append when its stored-state update fails', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'Atomic state', kind: 'non_consumable' });
+    const before = {
+      item: inventory.listItems()[0],
+      events: db.prepare('SELECT COUNT(*) count FROM inventory_events').get(),
+      clock: db.prepare('SELECT revision FROM state_clock').get(),
+    };
+    db.exec(`CREATE TRIGGER fail_state_update BEFORE UPDATE ON item_state
+      BEGIN SELECT RAISE(ABORT, 'state update failed'); END`);
+    expect(() => inventory.addStock(item.id, 1)).toThrow('state update failed');
+    expect(inventory.listItems()[0]).toEqual(before.item);
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(before.events);
+    expect(db.prepare('SELECT revision FROM state_clock').get()).toEqual(before.clock);
+    db.close();
+  });
+
+  it('rejects unsafe balance arithmetic without appending an audit event', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const item = inventory.createItem({ name: 'Safe arithmetic', kind: 'non_consumable' });
+    inventory.addStock(item.id, Number.MAX_SAFE_INTEGER);
+    const before = inventory.listItems()[0];
+    const eventCount = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
+    expect(() => inventory.addStock(item.id, 1)).toThrow();
+    expect(inventory.listItems()[0]).toEqual(before);
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(eventCount);
+    db.close();
+  });
+
+  it('rejects movement that makes a non-consumable combined total unsafe atomically', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const borrower = inventory.createBorrower({
+      username: 'total-owner',
+      name: 'Total Owner',
+      type: 'individual',
+    });
+    const item = inventory.createItem({ name: 'Combined total', kind: 'non_consumable' });
+    inventory.addStock(item.id, Number.MAX_SAFE_INTEGER);
+    inventory.checkout(item.id, borrower.id, 1);
+    const before = inventory.listItems()[0];
+    const eventCount = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
+    const revision = db.prepare('SELECT revision FROM state_clock').get();
+
+    expect(() => inventory.addStock(item.id, 1)).toThrow(
+      expect.objectContaining({ code: 'excessive_quantity' }),
+    );
+    expect(inventory.listItems()[0]).toEqual(before);
+    expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(eventCount);
+    expect(db.prepare('SELECT revision FROM state_clock').get()).toEqual(revision);
+    db.close();
+  });
+
+  it('rejects a loan whose checkout audit identity changed before reopen', () => {
+    const state = checkoutDatabaseForReopen();
+    state.db
+      .prepare('UPDATE loan_state SET borrower_id=? WHERE checkout_id=?')
+      .run(state.otherBorrowerId, state.checkoutId);
+    state.db.close();
+
+    expect(() => openDatabase(state.filename)).toThrow(/inconsistent checkout and loan state/);
+  });
+
+  it('rejects a checkout event without operational loan state before reopen', () => {
+    const state = checkoutDatabaseForReopen();
+    state.db.prepare('DELETE FROM loan_state WHERE checkout_id=?').run(state.checkoutId);
+    state.db.prepare('UPDATE item_state SET borrowed=0 WHERE item_id=?').run(state.itemId);
+    state.db.close();
+
+    expect(() => openDatabase(state.filename)).toThrow(/inconsistent checkout and loan state/);
+  });
+
+  it('rejects operational aggregate corruption before reopen', () => {
+    const state = checkoutDatabaseForReopen();
+    state.db.prepare('UPDATE item_state SET borrowed=borrowed+1 WHERE item_id=?').run(state.itemId);
+    state.db.close();
+
+    expect(() => openDatabase(state.filename)).toThrow(/invalid authoritative inventory balances/);
+  });
+
+  it('uses stored balances and loan identity after restart with audit SELECTs blocked', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-stored-state-'));
+    cleanup.push(directory);
+    const filename = join(directory, 'inventory.sqlite');
+    let db = openDatabase(filename);
+    let inventory = new InventoryService(db);
+    const borrower = inventory.createBorrower({
+      username: 'test',
+      name: 'Test',
+      type: 'individual',
+    });
+    const item = inventory.createItem({ name: 'Radio case', kind: 'non_consumable' });
+    inventory.addStock(item.id, 3);
+    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+    inventory.markLost(checkoutId, 1, true);
+    db.close();
+
+    db = openDatabase(filename);
+    const guarded = new Proxy(db, {
+      get(target, property) {
+        if (property === 'prepare')
+          return (sql: string) => {
+            if (/^\s*SELECT\b/i.test(sql) && /\binventory_events\b/i.test(sql))
+              throw new Error('Operational audit SELECT blocked');
+            return target.prepare(sql);
+          };
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as typeof db;
+    inventory = new InventoryService(guarded);
+    expect(inventory.listItems()[0]).toMatchObject({ available: 1, borrowed: 1, lost: 1 });
+    expect(inventory.listLoans()[0]).toMatchObject({ checkoutId, outstanding: 1, lost: 1 });
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([
+      { itemId: item.id, returnable: 1, lost: 1 },
+    ]);
+    inventory.returnCheckout(checkoutId, 1, 0);
+    expect(() => inventory.archiveItem(item.id, true)).toThrow();
+    db.close();
+  });
   it('issues an atomic anonymous batch and replays committed and rejected outcomes', () => {
     const db = openDatabase(':memory:');
     try {
@@ -109,104 +259,24 @@ describe('inventory domain', () => {
     migrated.close();
   });
 
-  it('migrates legacy operator credentials to the admin-only credential model', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'mapatz-credentials-migration-'));
+  it('rejects an old database without authoritative state before changing its schema', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mapatz-old-state-'));
     cleanup.push(directory);
     const filename = join(directory, 'inventory.sqlite');
     const legacy = new DatabaseSync(filename);
     legacy.exec(
       readFileSync(new URL('../../src/db/migrations/001_initial.sql', import.meta.url), 'utf8'),
     );
-    legacy
-      .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
-      .run('operator', 'operator-salt', 'operator-hash');
-    legacy
-      .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
-      .run('admin', 'admin-salt', 'admin-hash');
-    legacy.prepare('INSERT INTO migrations(version) VALUES (?)').run(1);
+    legacy.prepare('INSERT INTO migrations(version) VALUES (1)').run();
     legacy.close();
 
-    const migrated = openDatabase(filename);
-    expect(migrated.prepare('SELECT role,salt,password_hash FROM credentials').all()).toEqual([
-      { role: 'admin', salt: 'admin-salt', password_hash: 'admin-hash' },
-    ]);
-    expect(() =>
-      migrated
-        .prepare('INSERT INTO credentials(role,salt,password_hash) VALUES (?,?,?)')
-        .run('operator', 'salt', 'hash'),
-    ).toThrow();
-    migrated.close();
+    expect(() => openDatabase(filename)).toThrow('missing authoritative inventory state');
+    const unchanged = new DatabaseSync(filename);
+    expect(unchanged.prepare('SELECT version FROM migrations').all()).toEqual([{ version: 1 }]);
+    unchanged.close();
   });
 
-  it('migrates version 3 inventory without changing rows or foreign-key relationships', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'mapatz-camp-equipment-migration-'));
-    cleanup.push(directory);
-    const filename = join(directory, 'inventory.sqlite');
-    const legacy = new DatabaseSync(filename);
-    legacy.exec(
-      readFileSync(new URL('../../src/db/migrations/001_initial.sql', import.meta.url), 'utf8'),
-    );
-    legacy.exec('PRAGMA foreign_keys = OFF');
-    legacy.exec(
-      readFileSync(
-        new URL('../../src/db/migrations/002_import_export.sql', import.meta.url),
-        'utf8',
-      ),
-    );
-    legacy.exec('PRAGMA foreign_keys = ON');
-    legacy.exec(
-      readFileSync(
-        new URL('../../src/db/migrations/003_admin_only_credentials.sql', import.meta.url),
-        'utf8',
-      ),
-    );
-    legacy.prepare('INSERT INTO migrations(version) VALUES (?),(?),(?)').run(1, 2, 3);
-    const locationId = Number(
-      (legacy.prepare("SELECT id FROM locations WHERE code='monster'").get() as { id: number }).id,
-    );
-    const itemId = Number(
-      legacy
-        .prepare(
-          "INSERT INTO items(code,name,kind,location_id) VALUES (100,'Existing','non_consumable',?)",
-        )
-        .run(locationId).lastInsertRowid,
-    );
-    legacy.prepare('UPDATE code_sequence SET next_code=101 WHERE singleton=1').run();
-    legacy.prepare("INSERT INTO item_aliases(item_id,alias) VALUES (?,'Preserved')").run(itemId);
-    const eventId = Number(
-      legacy
-        .prepare(
-          "INSERT INTO inventory_events(kind,item_id,quantity,note) VALUES ('stock_added',?,4,'Existing history')",
-        )
-        .run(itemId).lastInsertRowid,
-    );
-    legacy
-      .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,?,?)')
-      .run(itemId, 4, eventId);
-    legacy.close();
-
-    const migrated = openDatabase(filename);
-    expect(migrated.prepare('SELECT COUNT(*) count FROM migrations').get()).toEqual({ count: 9 });
-    expect(migrated.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-    expect(migrated.prepare('SELECT code,name,kind,location_id FROM items').all()).toEqual([
-      { code: 100, name: 'Existing', kind: 'non_consumable', location_id: locationId },
-    ]);
-    expect(migrated.prepare('SELECT item_id,alias FROM item_aliases').all()).toEqual([
-      { item_id: itemId, alias: 'Preserved' },
-    ]);
-    expect(migrated.prepare('SELECT item_id,quantity,note FROM inventory_events').all()).toEqual([
-      { item_id: itemId, quantity: 4, note: 'Existing history' },
-    ]);
-    expect(
-      migrated.prepare('SELECT item_id,quantity,through_event_id FROM inventory_baselines').all(),
-    ).toEqual([{ item_id: itemId, quantity: 4, through_event_id: eventId }]);
-    expect(
-      new InventoryService(migrated).createItem({ name: 'Bar', kind: 'camp_equipment' }).kind,
-    ).toBe('camp_equipment');
-    migrated.close();
-  });
-
-  it('migrates idempotently, seeds locations, and persists monotonic codes and event-derived state', () => {
+  it('migrates idempotently, seeds locations, and persists monotonic codes and stored state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-domain-'));
     cleanup.push(directory);
     const filename = join(directory, 'inventory.sqlite');
@@ -423,7 +493,7 @@ describe('inventory domain', () => {
       lotSize: null,
       locationId: null,
       targetAvailable: 0,
-      stockSnapshot: inventory.listItems(item.name)[0]!.stockSnapshot,
+      stockRevision: inventory.listItems(item.name)[0]!.stockRevision,
     });
     inventory.archiveItem(item.id, true);
     expect(db.prepare('SELECT archived FROM items WHERE id=?').get(item.id)).toEqual({

@@ -18,7 +18,7 @@ const hammer: Item = {
   borrowed: 2,
   lost: 1,
   damaged: 1,
-  stockSnapshot: 6,
+  stockRevision: 6,
   archived: false,
 };
 const location = { id: 31, code: 'A-1', name: 'מחסן ראשי', archived: false };
@@ -82,7 +82,7 @@ function setup(
         borrowed: 0,
         lost: 0,
         damaged: 0,
-        stockSnapshot: 7,
+        stockRevision: 7,
         archived: false,
       };
       items = [...items, created];

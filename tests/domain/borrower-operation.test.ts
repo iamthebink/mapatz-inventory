@@ -344,11 +344,11 @@ describe('atomic borrower commands', () => {
     const { db, inventory, borrower } = fixture();
     const item = inventory.createItem({ name: 'Multiple recoveries', kind: 'non_consumable' });
     inventory.addStock(item.id, 5);
-    const insert = db.prepare(
-      "INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,created_at) VALUES ('checked_out',?,?,?,'2026-01-01 00:00:00')",
-    );
-    const first = Number(insert.run(item.id, borrower.id, 2).lastInsertRowid);
-    const second = Number(insert.run(item.id, borrower.id, 3).lastInsertRowid);
+    const first = inventory.checkout(item.id, borrower.id, 2);
+    const second = inventory.checkout(item.id, borrower.id, 3);
+    db.prepare(
+      "UPDATE loan_state SET created_at='2026-01-01 00:00:00' WHERE checkout_id IN (?,?)",
+    ).run(first, second);
     inventory.markLost(first, 2, true);
     const lastLoss = inventory.markLost(second, 3, true);
     const request: BorrowerOperationRequest = {
@@ -630,16 +630,11 @@ describe('atomic borrower commands', () => {
     const { db, inventory, borrower } = fixture();
     const item = inventory.createItem({ name: 'Tie breaker', kind: 'non_consumable' });
     inventory.addStock(item.id, 2);
-    const insertCheckout = db.prepare(
-      `INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,note,created_at)
-       VALUES ('checked_out',?,?,?,?,?)`,
-    );
-    const first = Number(
-      insertCheckout.run(item.id, borrower.id, 1, 'first', '2026-01-01 00:00:00').lastInsertRowid,
-    );
-    const second = Number(
-      insertCheckout.run(item.id, borrower.id, 1, 'second', '2026-01-01 00:00:00').lastInsertRowid,
-    );
+    const first = inventory.checkout(item.id, borrower.id, 1, 'first');
+    const second = inventory.checkout(item.id, borrower.id, 1, 'second');
+    db.prepare(
+      "UPDATE loan_state SET created_at='2026-01-01 00:00:00' WHERE checkout_id IN (?,?)",
+    ).run(first, second);
     expect(second).toBeGreaterThan(first);
     const beforeEvents = Number(
       (db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as { count: number }).count,
@@ -745,7 +740,7 @@ describe('atomic borrower commands', () => {
           returnable: 1,
         },
       ],
-      snapshot: { asOfEventId: checkout, ledgerEpoch: 1 },
+      snapshot: { stateRevision: checkout, ledgerEpoch: 1 },
     });
     expect(counted.beginCount()).toBe(1);
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({ count: 2 });
@@ -765,7 +760,7 @@ describe('atomic borrower commands', () => {
       currentValidation: {
         status: 'conflicted',
         snapshot: {
-          asOfEventId: checkout,
+          stateRevision: checkout,
           holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
         },
       },
@@ -776,7 +771,7 @@ describe('atomic borrower commands', () => {
       currentValidation: {
         status: 'conflicted',
         snapshot: {
-          asOfEventId: checkout + 1,
+          stateRevision: checkout + 1,
           inventory: [expect.objectContaining({ id: item.id, available: 100 })],
           holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
         },
@@ -791,7 +786,7 @@ describe('atomic borrower commands', () => {
         status: 'now_valid',
         conflicts: [],
         snapshot: {
-          asOfEventId: checkout + 2,
+          stateRevision: checkout + 2,
           inventory: [expect.objectContaining({ id: item.id, available: 99 })],
           holdings: [{ itemId: item.id, returnable: 2, lost: 0 }],
         },

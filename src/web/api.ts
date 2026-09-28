@@ -138,7 +138,7 @@ function validOperationResult(
   key: string,
   borrowerId: number,
   request: BorrowerOperationRequest,
-  asOfEventId: number,
+  stateRevision: number,
 ): body is Record<string, unknown> & BorrowerOperationResult {
   if ('error' in body && !isString(body.error)) return false;
   if (body.idempotencyKey !== key || !isBoolean(body.replayed)) return false;
@@ -160,7 +160,7 @@ function validOperationResult(
       ]) &&
       isBorrowerDeskSnapshot(body.snapshot, borrowerId) &&
       body.snapshot.ledgerEpoch === request.ledgerEpoch &&
-      body.snapshot.asOfEventId >= asOfEventId &&
+      body.snapshot.stateRevision >= stateRevision &&
       isExactBorrowerOperationConflictSet(body.conflicts, borrowerId, request, body.snapshot)
     );
   if (body.error !== 'borrower_operation_attempt_rejected' || body.replayed !== true) return false;
@@ -180,7 +180,7 @@ function validOperationResult(
     !isObject(validation) ||
     !isBorrowerDeskSnapshot(validation.snapshot, borrowerId) ||
     validation.snapshot.ledgerEpoch !== request.ledgerEpoch ||
-    validation.snapshot.asOfEventId < asOfEventId
+    validation.snapshot.stateRevision < stateRevision
   )
     return false;
   if (validation.status === 'now_valid')
@@ -368,7 +368,7 @@ export async function classifyBorrowerOperationResponse(
     idempotencyKey: string;
     borrowerId: number;
     request: BorrowerOperationRequest;
-    asOfEventId: number;
+    stateRevision: number;
   },
 ): Promise<CommandClassification<BorrowerOperationResult>> {
   if (response.status === 401 || response.status === 403)
@@ -378,7 +378,7 @@ export async function classifyBorrowerOperationResponse(
   if (
     !isCommandUuid(context.idempotencyKey) ||
     !isSafePositive(context.borrowerId) ||
-    !isSafeNonNegative(context.asOfEventId) ||
+    !isSafeNonNegative(context.stateRevision) ||
     !isNormalizedBorrowerOperationRequest(context.request)
   )
     return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
@@ -400,7 +400,7 @@ export async function classifyBorrowerOperationResponse(
       context.idempotencyKey,
       context.borrowerId,
       context.request,
-      context.asOfEventId,
+      context.stateRevision,
     )
   )
     return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
@@ -486,7 +486,7 @@ export function sendBorrowerOperationCommand(context: {
   idempotencyKey: string;
   borrowerId: number;
   request: BorrowerOperationRequest;
-  asOfEventId: number;
+  stateRevision: number;
 }): Promise<CommandClassification<BorrowerOperationResult>> {
   return sendClassifiedCommand(
     `/borrowers/${context.borrowerId}/operations`,
@@ -621,7 +621,7 @@ export const sendFrozenBorrowerAttempt: FrozenTransport = (attempt: FrozenAttemp
         idempotencyKey: attempt.idempotencyKey,
         borrowerId: attempt.subjectId,
         request: attempt.body,
-        asOfEventId: attempt.asOfEventId,
+        stateRevision: attempt.stateRevision,
       })
     : sendBorrowerCreateCommand({
         idempotencyKey: attempt.idempotencyKey,

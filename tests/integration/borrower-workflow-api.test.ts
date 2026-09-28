@@ -347,7 +347,7 @@ describe('borrower workflow snapshot API', () => {
             },
           ],
           holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
-          asOfEventId: 3,
+          stateRevision: 3,
           ledgerEpoch: 1,
         });
       });

@@ -46,7 +46,7 @@ describe('summary card entry', () => {
         if (path.startsWith('/api/borrowers/search'))
           return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
         if (path === '/api/borrowers/7/desk-snapshot')
-          return json({ borrower, inventory: [], holdings: [], asOfEventId: 1, ledgerEpoch: 3 });
+          return json({ borrower, inventory: [], holdings: [], stateRevision: 1, ledgerEpoch: 3 });
         throw new Error(path);
       }),
     );

@@ -14,7 +14,7 @@ export type Item = {
   borrowed: number;
   lost: number;
   damaged: number;
-  stockSnapshot: number;
+  stockRevision: number;
   archived: boolean;
 };
 

@@ -88,20 +88,9 @@ describe('field-scale sample workbook', () => {
         'written_off',
       ]),
     );
-    expect(
-      snapshot.items.map((item) => ({
-        code: item.code,
-        name: item.name,
-        kind: item.kind,
-        location: item.location,
-        aliases: item.aliases,
-        lotSize: item.lotSize,
-        archived: item.archived,
-        createdAt: item.createdAt,
-        startingStock: item.startingStock,
-        baselineThroughEventId: item.baselineThroughEventId,
-      })),
-    ).toEqual(payload.items);
+    expect(snapshot.items).toMatchObject(payload.items);
+    expect(snapshot.loans).toEqual(payload.loans);
+    expect(snapshot.stateRevision).toBe(payload.stateRevision);
 
     const inventory = new InventoryService(db);
     const items = inventory.listItems('', true);
@@ -120,7 +109,7 @@ describe('field-scale sample workbook', () => {
     const payload = await parseResetWorkbook(await sampleWorkbook());
     expect(payload.locations).toHaveLength(3);
     expect(payload.items).toHaveLength(72);
-    expect(payload.items.reduce((total, item) => total + item.total, 0)).toBe(4_470);
+    expect(payload.items.reduce((total, item) => total + item.total, 0)).toBe(4_093);
 
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
@@ -130,7 +119,7 @@ describe('field-scale sample workbook', () => {
     expect(snapshot.locations).toEqual(payload.locations);
     expect(snapshot.borrowers).toEqual([]);
     expect(snapshot.items).toHaveLength(payload.items.length);
-    expect(snapshot.events).toHaveLength(payload.items.length);
+    expect(snapshot.events).toHaveLength(payload.items.filter((item) => item.total > 0).length);
     expect(snapshot.events.every((event) => event.kind === 'stock_added')).toBe(true);
     expect(snapshot.items).toEqual(
       payload.items.map(({ total, ...item }, index) => ({
@@ -138,6 +127,11 @@ describe('field-scale sample workbook', () => {
         createdAt: snapshot.items[index]!.createdAt,
         startingStock: total,
         baselineThroughEventId: snapshot.items[index]!.baselineThroughEventId,
+        available: total,
+        borrowed: 0,
+        damaged: 0,
+        lost: 0,
+        revision: 0,
         resetTotal: total,
       })),
     );

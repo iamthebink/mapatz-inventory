@@ -620,7 +620,7 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
     snapshotRequests += 1;
     if (snapshotRequests === 2) {
       const response = await route.fetch();
-      await route.fulfill({ response, json: { ...(await response.json()), asOfEventId: 0 } });
+      await route.fulfill({ response, json: { ...(await response.json()), stateRevision: 0 } });
     } else await route.continue();
   });
   await page.route(operationEndpoint, async (route) => {

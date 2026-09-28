@@ -27,7 +27,7 @@ export interface Item {
   borrowed: number;
   lost: number;
   damaged: number;
-  stockSnapshot: number;
+  stockRevision: number;
 }
 
 export interface Borrower {

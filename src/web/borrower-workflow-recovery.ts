@@ -23,7 +23,7 @@ export type FrozenOperationAttempt = FrozenBase & {
   kind: 'operation';
   endpoint: string;
   subjectId: number;
-  asOfEventId: number;
+  stateRevision: number;
   intent: 'save' | 'save-and-close';
   body: BorrowerOperationRequest;
 };
@@ -269,7 +269,7 @@ export function parseFrozenAttempt(value: unknown): FrozenAttempt | null {
       'subjectId',
       'idempotencyKey',
       'ledgerEpoch',
-      'asOfEventId',
+      'stateRevision',
       'intent',
       'body',
     ]) ||
@@ -281,7 +281,7 @@ export function parseFrozenAttempt(value: unknown): FrozenAttempt | null {
   if (value.kind === 'operation') {
     if (
       !positive(value.subjectId) ||
-      !nonNegative(value.asOfEventId) ||
+      !nonNegative(value.stateRevision) ||
       value.endpoint !== `/borrowers/${value.subjectId}/operations` ||
       !['save', 'save-and-close'].includes(String(value.intent)) ||
       !validOperationBody(value.body, value.ledgerEpoch)
@@ -293,7 +293,7 @@ export function parseFrozenAttempt(value: unknown): FrozenAttempt | null {
     value.kind !== 'create' ||
     value.endpoint !== '/borrowers' ||
     value.subjectId !== null ||
-    Object.hasOwn(value, 'asOfEventId') ||
+    Object.hasOwn(value, 'stateRevision') ||
     value.intent !== 'create' ||
     !validCreateBody(value.body, value.ledgerEpoch)
   )
@@ -556,7 +556,7 @@ function resultBelongsToAttempt(
           result.replayed === false &&
           isBorrowerDeskSnapshot(result.snapshot, attempt.subjectId) &&
           result.snapshot.ledgerEpoch === attempt.ledgerEpoch &&
-          result.snapshot.asOfEventId >= attempt.asOfEventId &&
+          result.snapshot.stateRevision >= attempt.stateRevision &&
           validOperationConflicts(attempt, result.conflicts, result.snapshot)
         );
       if (result.error === 'borrower_operation_attempt_rejected')
@@ -577,7 +577,7 @@ function resultBelongsToAttempt(
           exactKeys(result.currentValidation, ['status', 'conflicts', 'snapshot']) &&
           isBorrowerDeskSnapshot(result.currentValidation.snapshot, attempt.subjectId) &&
           result.currentValidation.snapshot.ledgerEpoch === attempt.ledgerEpoch &&
-          result.currentValidation.snapshot.asOfEventId >= attempt.asOfEventId &&
+          result.currentValidation.snapshot.stateRevision >= attempt.stateRevision &&
           (result.currentValidation.status === 'now_valid'
             ? Array.isArray(result.currentValidation.conflicts) &&
               result.currentValidation.conflicts.length === 0

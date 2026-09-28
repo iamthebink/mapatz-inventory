@@ -225,11 +225,18 @@ describe('inventory API permission and edge-case matrix', () => {
           createdAt: '2026-01-01T00:00:00.000Z',
           startingStock: 6,
           baselineThroughEventId: 0,
+          available: 6,
+          borrowed: 0,
+          damaged: 0,
+          lost: 0,
+          revision: 0,
           resetTotal: 6,
         },
       ],
       borrowers: [],
       events: [],
+      loans: [],
+      stateRevision: 0,
     });
     await agent
       .post('/api/workbook/reset')
@@ -901,7 +908,7 @@ describe('inventory management API', () => {
       lotSize: null,
       locationId: null,
       targetAvailable: 17,
-      stockSnapshot: created.body.stockSnapshot,
+      stockRevision: created.body.stockRevision,
     };
     inventory.addStock(itemId, 1);
     await agent
@@ -917,13 +924,13 @@ describe('inventory management API', () => {
         ...count,
         key: 'metadata-00001',
         targetAvailable: undefined,
-        stockSnapshot: undefined,
+        stockRevision: undefined,
       })
       .expect(200);
     expect(inventory.listItems('Workbench edited')[0]?.available).toBe(21);
     await agent
       .put(`/api/inventory/items/${itemId}`)
-      .send({ ...count, key: 'reviewed-00001', stockSnapshot: latest.stockSnapshot })
+      .send({ ...count, key: 'reviewed-00001', stockRevision: latest.stockRevision })
       .expect(200);
     expect(inventory.listItems('Workbench edited')[0]?.available).toBe(17);
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_removed', quantity: 4 });

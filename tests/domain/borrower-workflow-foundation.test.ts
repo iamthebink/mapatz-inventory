@@ -1,41 +1,13 @@
 import { foundReturned } from '../helpers/found-returned.js';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  migrate,
-  openDatabase,
-  transaction,
-  type InventoryDatabase,
-} from '../../src/db/database.js';
+import { openDatabase, transaction, type InventoryDatabase } from '../../src/db/database.js';
 import { InventoryTransferService } from '../../src/domain/import-export.js';
 import { InventoryService, normalizeBorrowerText } from '../../src/domain/inventory.js';
 
-function applyMigration(
-  db: DatabaseSync,
-  version: number,
-  filename: string,
-  disableForeignKeys = false,
-): void {
-  if (disableForeignKeys) db.exec('PRAGMA foreign_keys = OFF');
-  db.exec(readFileSync(new URL(`../../src/db/migrations/${filename}`, import.meta.url), 'utf8'));
-  db.prepare('INSERT INTO migrations(version) VALUES (?)').run(version);
-  if (disableForeignKeys) db.exec('PRAGMA foreign_keys = ON');
-}
-
-function versionFourDatabase(): DatabaseSync {
-  const db = new DatabaseSync(':memory:');
-  db.exec('PRAGMA foreign_keys = ON');
-  applyMigration(db, 1, '001_initial.sql');
-  applyMigration(db, 2, '002_import_export.sql', true);
-  applyMigration(db, 3, '003_admin_only_credentials.sql');
-  applyMigration(db, 4, '004_camp_equipment.sql', true);
-  return db;
-}
-
-function receipt(db: DatabaseSync, key: string): void {
+function receipt(db: InventoryDatabase, key: string): void {
   db.prepare(
     `INSERT INTO idempotency_receipts(
       key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
@@ -81,174 +53,6 @@ function interleaveAfterRead(
 }
 
 describe('borrower workflow persistence foundation', () => {
-  it('migrates a populated version-4 database exactly once without changing ledger projections', () => {
-    const db = versionFourDatabase();
-    const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Existing', kind: 'non_consumable' });
-    const borrower = inventory.createBorrower({
-      username: 'existing',
-      name: 'Existing Borrower',
-      type: 'individual',
-    });
-    inventory.addStock(item.id, 3);
-    inventory.checkout(item.id, borrower.id, 1);
-    const before = {
-      items: inventory.listItems('', true),
-      borrowers: inventory.listBorrowers('', true),
-      loans: inventory.listLoans(),
-      ledger: inventory.listLedger(),
-    };
-
-    migrate(db);
-    migrate(db);
-
-    expect(db.prepare('SELECT version FROM migrations ORDER BY version').all()).toEqual(
-      [1, 2, 3, 4, 5, 6, 7, 8, 9].map((version) => ({ version })),
-    );
-    expect(
-      db.prepare('SELECT enabled,ledger_epoch FROM inventory_replacement_guard').get(),
-    ).toEqual({ enabled: 0, ledger_epoch: 1 });
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name='idempotency_receipts'",
-        )
-        .get(),
-    ).toEqual({ name: 'idempotency_receipts' });
-    expect(
-      db
-        .prepare(
-          `SELECT name,type,"notnull" not_null,dflt_value,pk
-          FROM pragma_table_info('idempotency_receipts') ORDER BY cid`,
-        )
-        .all(),
-    ).toEqual([
-      { name: 'key', type: 'TEXT', not_null: 1, dflt_value: null, pk: 1 },
-      { name: 'command_kind', type: 'TEXT', not_null: 1, dflt_value: null, pk: 0 },
-      { name: 'ledger_epoch', type: 'INTEGER', not_null: 1, dflt_value: null, pk: 0 },
-      { name: 'contract_version', type: 'INTEGER', not_null: 1, dflt_value: null, pk: 0 },
-      { name: 'request_hash', type: 'TEXT', not_null: 1, dflt_value: null, pk: 0 },
-      { name: 'outcome', type: 'TEXT', not_null: 1, dflt_value: null, pk: 0 },
-      { name: 'subject_id', type: 'INTEGER', not_null: 0, dflt_value: null, pk: 0 },
-      { name: 'result_json', type: 'TEXT', not_null: 0, dflt_value: null, pk: 0 },
-      {
-        name: 'created_at',
-        type: 'TEXT',
-        not_null: 1,
-        dflt_value: 'CURRENT_TIMESTAMP',
-        pk: 0,
-      },
-    ]);
-    expect(
-      db
-        .prepare(
-          `SELECT name,type,"notnull" not_null,dflt_value,pk
-          FROM pragma_table_info('inventory_replacement_guard') WHERE name='ledger_epoch'`,
-        )
-        .get(),
-    ).toEqual({
-      name: 'ledger_epoch',
-      type: 'INTEGER',
-      not_null: 1,
-      dflt_value: '1',
-      pk: 0,
-    });
-    expect(
-      db
-        .prepare("SELECT name FROM pragma_index_list('inventory_events') ORDER BY name")
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toEqual([
-      'events_borrower_idx',
-      'events_borrower_item_kind_created_id_idx',
-      'events_item_idx',
-      'events_related_kind_idx',
-    ]);
-    expect(
-      db
-        .prepare("SELECT name FROM pragma_index_info('events_related_kind_idx') ORDER BY seqno")
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toEqual(['related_event_id', 'kind']);
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM pragma_index_info('events_borrower_item_kind_created_id_idx') ORDER BY seqno",
-        )
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toEqual(['borrower_id', 'item_id', 'kind', 'created_at', 'id']);
-    expect(
-      db
-        .prepare("SELECT name FROM pragma_table_info('inventory_events') ORDER BY cid")
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toEqual([
-      'id',
-      'kind',
-      'item_id',
-      'borrower_id',
-      'quantity',
-      'related_event_id',
-      'note',
-      'created_at',
-    ]);
-    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-    expect(() =>
-      db
-        .prepare(
-          `INSERT INTO idempotency_receipts(
-            key,command_kind,ledger_epoch,contract_version,request_hash,outcome
-          ) VALUES (NULL,'borrower_operation',1,1,'hash','committed')`,
-        )
-        .run(),
-    ).toThrow();
-    expect({
-      items: inventory.listItems('', true),
-      borrowers: inventory.listBorrowers('', true),
-      loans: inventory.listLoans(),
-      ledger: inventory.listLedger(),
-    }).toEqual(before);
-    db.close();
-  });
-
-  it('rolls back every version-5 change and leaves transaction state clear after migration failure', () => {
-    const db = versionFourDatabase();
-    const inventory = new InventoryService(db);
-    const existing = inventory.createItem({ name: 'Preserved', kind: 'consumable' });
-    inventory.addStock(existing.id, 2);
-    db.exec('CREATE INDEX events_borrower_item_kind_created_id_idx ON items(name)');
-
-    expect(() => migrate(db)).toThrow(/events_borrower_item_kind_created_id_idx already exists/);
-
-    expect(db.isTransaction).toBe(false);
-    expect(
-      db
-        .prepare("SELECT name FROM pragma_table_info('inventory_replacement_guard') ORDER BY cid")
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toEqual(['singleton', 'enabled']);
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name='idempotency_receipts'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='index' AND name='events_related_kind_idx'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(db.prepare('SELECT version FROM migrations ORDER BY version').all()).toEqual(
-      [1, 2, 3, 4].map((version) => ({ version })),
-    );
-    expect(inventory.listItems('', true)[0]).toMatchObject({ name: 'Preserved', available: 2 });
-    db.close();
-  });
-
   it('normalizes search centrally and separates deterministic exact archived matches', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
@@ -414,7 +218,7 @@ describe('borrower workflow persistence foundation', () => {
       borrower,
       inventory: [expect.objectContaining({ id: item.id, code: item.code, available: 1 })],
       holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
-      asOfEventId: 2,
+      stateRevision: 2,
       ledgerEpoch: 1,
     });
     expect(writer.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get()).toEqual({
@@ -477,7 +281,7 @@ describe('borrower workflow persistence foundation', () => {
       { itemId: lostOnly.id, returnable: 0, lost: 2 },
     ]);
     expect(snapshot.inventory.find((item) => item.id === first.id)).toMatchObject({ damaged: 1 });
-    expect(snapshot.asOfEventId).toBe(watermark);
+    expect(snapshot.stateRevision).toBe(watermark);
     expect(snapshot.ledgerEpoch).toBe(1);
     expect(db.isTransaction).toBe(false);
     expect(() => inventory.getBorrowerDeskSnapshot(999_999)).toThrow(
@@ -528,74 +332,6 @@ describe('borrower workflow persistence foundation', () => {
     ).toThrow(expect.objectContaining({ code: 'internal_error' }));
     expect(inventory.listItems('', true)).toEqual([expect.objectContaining({ available: 2 })]);
     expect(db.isTransaction).toBe(false);
-    db.close();
-  });
-});
-
-describe('found-returned migration', () => {
-  it('rejects ambiguous legacy history transactionally and preserves schema and ledger', () => {
-    const db = versionFourDatabase();
-    applyMigration(db, 5, '005_idempotency.sql');
-    const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Legacy', kind: 'non_consumable' });
-    const borrower = inventory.createBorrower({
-      username: 'legacy',
-      name: 'Legacy',
-      type: 'other',
-    });
-    inventory.addStock(item.id, 2);
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
-    inventory.markLost(checkout, 1, true);
-    db.prepare(
-      "INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,related_event_id) VALUES ('unmarked_lost',?,?,1,?)",
-    ).run(item.id, borrower.id, checkout);
-    const before = db.prepare('SELECT * FROM inventory_events').all();
-    const schema = db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all();
-    expect(() => migrate(db)).toThrow(/legacy unmarked_lost history is ambiguous/);
-    expect(db.prepare('SELECT * FROM inventory_events').all()).toEqual(before);
-    expect(db.prepare('SELECT type,name,sql FROM sqlite_master ORDER BY name').all()).toEqual(
-      schema,
-    );
-    expect(db.isTransaction).toBe(false);
-    expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
-    expect(() => db.exec('UPDATE inventory_events SET quantity=2')).toThrow(/immutable/);
-    db.close();
-  });
-
-  it('upgrades valid history with all indexes, references and immutability intact', () => {
-    const db = versionFourDatabase();
-    applyMigration(db, 5, '005_idempotency.sql');
-    const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Valid', kind: 'non_consumable' });
-    const borrower = inventory.createBorrower({ username: 'valid', name: 'Valid', type: 'other' });
-    inventory.addStock(item.id, 2);
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
-    inventory.markLost(checkout, 1, true);
-    const before = inventory.listLedger();
-    const indexes = db
-      .prepare(
-        "SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='inventory_events' ORDER BY name",
-      )
-      .all();
-    migrate(db);
-    expect(inventory.listLedger()).toEqual(before);
-    expect(
-      db
-        .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='inventory_events' ORDER BY name",
-        )
-        .all(),
-    ).toEqual(indexes);
-    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-    foundReturned(inventory, checkout, 1);
-    expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 1, lost: 0 });
-    expect(() => db.exec('UPDATE inventory_events SET quantity=2')).toThrow(/immutable/);
-    expect(() => db.exec('DELETE FROM inventory_events')).toThrow(/immutable/);
-    expect(() =>
-      db
-        .prepare("INSERT INTO inventory_events(kind,item_id,quantity) VALUES ('unmarked_lost',?,1)")
-        .run(item.id),
-    ).toThrow(/CHECK/);
     db.close();
   });
 });

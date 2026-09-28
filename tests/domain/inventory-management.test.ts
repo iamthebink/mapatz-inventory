@@ -63,7 +63,7 @@ describe('inventory management commands', () => {
       key: 'count-down-0001',
       name: 'Hammer one',
       targetAvailable: 17,
-      stockSnapshot: snapshot.stockSnapshot,
+      stockRevision: snapshot.stockRevision,
     });
     expect(reduced.available).toBe(17);
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_removed', quantity: 3 });
@@ -72,7 +72,7 @@ describe('inventory management commands', () => {
       key: 'count-up-00001',
       name: 'Hammer two',
       targetAvailable: 25,
-      stockSnapshot: reduced.stockSnapshot,
+      stockRevision: reduced.stockRevision,
     });
     expect(increased.available).toBe(25);
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_added', quantity: 8 });
@@ -84,7 +84,7 @@ describe('inventory management commands', () => {
         key: 'stale-count-01',
         name: 'Unsaved name',
         targetAvailable: 17,
-        stockSnapshot: increased.stockSnapshot,
+        stockRevision: increased.stockRevision,
       }),
     ).toThrow(expect.objectContaining({ code: 'stale_stock' }));
     expect(inventory.listItems('Hammer two')[0]).toMatchObject({
@@ -103,7 +103,7 @@ describe('inventory management commands', () => {
         key: 'invalid-count-1',
         name: 'Bad',
         targetAvailable: -1,
-        stockSnapshot: 0,
+        stockRevision: 0,
       }),
     ).toThrow();
     expect(inventory.listItems('Hammer three')[0]?.name).toBe('Hammer three');
@@ -130,7 +130,7 @@ describe('inventory management commands', () => {
         lotSize: null,
         locationId: null,
         targetAvailable: 17,
-        stockSnapshot: snapshot.stockSnapshot,
+        stockRevision: snapshot.stockRevision,
       }),
     ).toThrow(expect.objectContaining({ code: 'stale_stock' }));
     expect(inventory.listItems('Checkout race')[0]).toMatchObject({
@@ -142,6 +142,40 @@ describe('inventory management commands', () => {
       'checked_out',
       'stock_added',
     ]);
+    db.close();
+  });
+
+  it('invalidates an observed revision even when stock returns to its old quantity', () => {
+    const { db, inventory } = setup();
+    const item = inventory.createItem({ name: 'Revision cycle', kind: 'non_consumable' });
+    inventory.addStock(item.id, 5);
+    const observed = inventory.listItems('Revision cycle')[0]!;
+    inventory.addStock(item.id, 1);
+    const increased = inventory.listItems('Revision cycle')[0]!;
+    inventory.saveInventoryItem({
+      key: 'revision-cycle-1',
+      itemId: item.id,
+      name: item.name,
+      aliases: [],
+      lotSize: null,
+      locationId: null,
+      targetAvailable: 5,
+      stockRevision: increased.stockRevision,
+    });
+    expect(inventory.listItems('Revision cycle')[0]).toMatchObject({ available: 5 });
+    expect(() =>
+      inventory.saveInventoryItem({
+        key: 'revision-cycle-stale',
+        itemId: item.id,
+        name: 'Uncommitted rename',
+        aliases: [],
+        lotSize: null,
+        locationId: null,
+        targetAvailable: 4,
+        stockRevision: observed.stockRevision,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'stale_stock' }));
+    expect(inventory.listItems('Revision cycle')[0]).toMatchObject({ available: 5 });
     db.close();
   });
 
@@ -158,7 +192,7 @@ describe('inventory management commands', () => {
       lotSize: null,
       locationId: null,
       targetAvailable: 25,
-      stockSnapshot: snapshot.stockSnapshot,
+      stockRevision: snapshot.stockRevision,
     });
     expect(inventory.listItems('Count up')[0]?.available).toBe(25);
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_added', quantity: 5 });

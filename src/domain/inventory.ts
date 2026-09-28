@@ -33,13 +33,8 @@ import {
 
 type Row = Record<string, any>;
 
-const eventEffect = `CASE kind
-  WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity WHEN 'repaired' THEN quantity
-  WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
-const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'found_returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
-const borrowedEffect = `CASE kind WHEN 'checked_out' THEN quantity WHEN 'returned_usable' THEN -quantity WHEN 'returned_damaged' THEN -quantity WHEN 'marked_lost' THEN -quantity ELSE 0 END`;
-const lostEffect = `CASE kind WHEN 'marked_lost' THEN quantity WHEN 'found_returned' THEN -quantity WHEN 'found_returned_damaged' THEN -quantity ELSE 0 END`;
 const maxAliases = 20;
+const itemStateColumns = `s.available,s.borrowed,s.damaged,s.lost,s.revision stockRevision`;
 
 type CommandKind = 'borrower_operation' | 'borrower_create';
 type Receipt = {
@@ -102,7 +97,7 @@ export class InventoryService {
       let returned = 0;
       for (const borrower of plan.preview.affected) {
         for (const loan of borrower.loans) {
-          this.append(
+          this.move(
             'returned_usable',
             loan.itemId,
             loan.quantity,
@@ -374,6 +369,7 @@ export class InventoryService {
           'INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)',
         )
         .run(id);
+      this.initializeItemState(id);
       return this.getItem(id);
     });
   }
@@ -415,7 +411,7 @@ export class InventoryService {
     lotSize: number | null;
     locationId: number | null;
     targetAvailable?: number;
-    stockSnapshot?: number;
+    stockRevision?: number;
     note?: string;
   }): Item {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
@@ -454,7 +450,7 @@ export class InventoryService {
       }
       const current = this.getItem(item.id);
       if (input.targetAvailable !== undefined) {
-        if (input.itemId !== undefined && input.stockSnapshot !== current.stockSnapshot)
+        if (input.itemId !== undefined && input.stockRevision !== current.stockRevision)
           throw new DomainError(
             'stale_stock',
             'המלאי השתנה מאז פתיחת הפריט. יש לבדוק את היתרות ולשלוח שוב.',
@@ -462,7 +458,7 @@ export class InventoryService {
           );
         const delta = input.targetAvailable - current.available;
         if (delta !== 0)
-          this.append(
+          this.move(
             delta > 0 ? 'stock_added' : 'stock_removed',
             item.id,
             Math.abs(delta),
@@ -507,6 +503,7 @@ export class InventoryService {
     this.db
       .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)')
       .run(id);
+    this.initializeItemState(id);
     return this.getItem(id);
   }
 
@@ -567,7 +564,7 @@ export class InventoryService {
       replacementLocationId === undefined ? item.locationId : replacementLocationId;
     if (!archived) this.requireActiveLocation(locationId);
     if (archived && item.available > 0)
-      this.append('stock_removed', id, item.available, null, null, 'ארכוב פריט');
+      this.move('stock_removed', id, item.available, null, null, 'ארכוב פריט');
     this.db
       .prepare('UPDATE items SET archived=?,location_id=? WHERE id=?')
       .run(Number(archived), locationId, id);
@@ -684,10 +681,10 @@ export class InventoryService {
       }
       for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
         for (const part of group.borrow ?? [])
-          this.append('checked_out', group.itemId, part.quantity, borrowerId, null, part.note);
+          this.move('checked_out', group.itemId, part.quantity, borrowerId, null, part.note);
       for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
         for (const part of group.issue ?? [])
-          this.append('issued', group.itemId, part.quantity, null, null, part.note);
+          this.move('issued', group.itemId, part.quantity, null, null, part.note);
 
       const result: BorrowerOperationResult = {
         outcome: 'committed',
@@ -811,13 +808,8 @@ export class InventoryService {
     const fragment = `%${search.trim()}%`;
     const rows = this.db
       .prepare(
-        `SELECT i.*,
-      COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-      COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
-      COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
-      COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
-      COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot
-      FROM items i WHERE (? OR i.archived=0) AND (
+        `SELECT i.*,${itemStateColumns}
+      FROM items i LEFT JOIN item_state s ON s.item_id=i.id WHERE (? OR i.archived=0) AND (
         CAST(i.code AS TEXT) LIKE ? OR i.name LIKE ? COLLATE NOCASE OR EXISTS(
           SELECT 1 FROM item_aliases a WHERE a.item_id=i.id AND a.alias LIKE ? COLLATE NOCASE)) ORDER BY i.code`,
       )
@@ -895,8 +887,10 @@ export class InventoryService {
   }
 
   addStock(itemId: number, quantity: number, note = ''): number {
-    this.requireItem(itemId);
-    return this.append('stock_added', itemId, integer(quantity), null, null, note);
+    return transaction(this.db, () => {
+      this.requireItem(itemId);
+      return this.move('stock_added', itemId, integer(quantity), null, null, note);
+    });
   }
 
   issue(itemId: number, quantity: number, note = ''): number {
@@ -905,7 +899,7 @@ export class InventoryService {
       if (item.kind !== 'consumable')
         throw new DomainError('wrong_item_kind', 'Only consumables can be issued');
       this.requireAvailable(itemId, quantity);
-      return this.append('issued', itemId, quantity, null, null, note);
+      return this.move('issued', itemId, quantity, null, null, note);
     });
   }
 
@@ -976,7 +970,7 @@ export class InventoryService {
       }
       if (conflicts.length === 0)
         for (const part of input.items)
-          this.append('issued', part.itemId, part.quantity, null, null, part.note);
+          this.move('issued', part.itemId, part.quantity, null, null, part.note);
       const result = {
         outcome: conflicts.length ? ('rejected' as const) : ('committed' as const),
         idempotencyKey: input.key,
@@ -999,7 +993,7 @@ export class InventoryService {
         throw new DomainError('wrong_item_kind', 'Only non-consumables can be checked out');
       this.requireBorrower(borrowerId);
       this.requireAvailable(itemId, quantity);
-      return this.append('checked_out', itemId, quantity, borrowerId, null, note);
+      return this.move('checked_out', itemId, quantity, borrowerId, null, note);
     });
   }
 
@@ -1022,7 +1016,7 @@ export class InventoryService {
       const ids: number[] = [];
       if (usable)
         ids.push(
-          this.append(
+          this.move(
             'returned_usable',
             checkout.item_id,
             usable,
@@ -1033,7 +1027,7 @@ export class InventoryService {
         );
       if (damaged)
         ids.push(
-          this.append(
+          this.move(
             'returned_damaged',
             checkout.item_id,
             damaged,
@@ -1057,7 +1051,7 @@ export class InventoryService {
       integer(quantity);
       if (quantity > this.outstanding(checkoutId))
         throw new DomainError('excessive_quantity', 'Quantity exceeds eligible checkout quantity');
-      return this.append(
+      return this.move(
         'marked_lost',
         checkout.item_id,
         quantity,
@@ -1073,7 +1067,7 @@ export class InventoryService {
       integer(quantity);
       if (quantity > this.getItem(itemId).damaged)
         throw new DomainError('excessive_quantity', 'Quantity exceeds damaged stock');
-      return this.append(repaired ? 'repaired' : 'written_off', itemId, quantity, null, null, note);
+      return this.move(repaired ? 'repaired' : 'written_off', itemId, quantity, null, null, note);
     });
   }
 
@@ -1102,7 +1096,7 @@ export class InventoryService {
       if (input.quantity > item.damaged)
         throw new DomainError('excessive_quantity', 'Quantity exceeds damaged stock');
       const result = {
-        eventId: this.append(
+        eventId: this.move(
           input.repaired ? 'repaired' : 'written_off',
           input.itemId,
           input.quantity,
@@ -1123,14 +1117,11 @@ export class InventoryService {
   listLoans(): Row[] {
     return this.db
       .prepare(
-        `SELECT e.id checkoutId,e.item_id itemId,i.code,i.name itemName,
-      e.borrower_id borrowerId,b.name borrowerName,e.quantity,
-      e.quantity-COALESCE(SUM(CASE WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity ELSE 0 END),0) outstanding,
-      COALESCE(SUM(CASE WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind IN ('found_returned','found_returned_damaged') THEN -x.quantity ELSE 0 END),0) lost,
-      e.created_at createdAt
-      FROM inventory_events e JOIN items i ON i.id=e.item_id JOIN borrowers b ON b.id=e.borrower_id
-      LEFT JOIN inventory_events x ON x.related_event_id=e.id WHERE e.kind='checked_out'
-      GROUP BY e.id HAVING outstanding > 0 OR lost > 0 ORDER BY e.id DESC`,
+        `SELECT l.checkout_id checkoutId,l.item_id itemId,i.code,i.name itemName,
+      l.borrower_id borrowerId,b.name borrowerName,l.quantity,l.outstanding,l.lost,
+      l.created_at createdAt
+      FROM loan_state l JOIN items i ON i.id=l.item_id JOIN borrowers b ON b.id=l.borrower_id
+      WHERE l.outstanding > 0 OR l.lost > 0 ORDER BY l.checkout_id DESC`,
       )
       .all();
   }
@@ -1490,12 +1481,9 @@ export class InventoryService {
     return (
       this.db
         .prepare(
-          `SELECT e.id,
-          e.quantity-COALESCE(SUM(CASE
-            WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity ELSE 0 END),0) remaining
-          FROM inventory_events e LEFT JOIN inventory_events x ON x.related_event_id=e.id
-          WHERE e.kind='checked_out' AND e.borrower_id=? AND e.item_id=?
-          GROUP BY e.id HAVING remaining > 0 ORDER BY e.created_at,e.id`,
+          `SELECT checkout_id id,outstanding remaining FROM loan_state
+          WHERE borrower_id=? AND item_id=? AND outstanding>0
+          ORDER BY created_at,checkout_id`,
         )
         .all(borrowerId, itemId) as Row[]
     ).map((row) => ({ id: Number(row.id), remaining: Number(row.remaining) }));
@@ -1508,11 +1496,9 @@ export class InventoryService {
     return (
       this.db
         .prepare(
-          `SELECT e.id,COALESCE(SUM(CASE
-            WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind IN ('found_returned','found_returned_damaged') THEN -x.quantity ELSE 0 END),0) remaining
-          FROM inventory_events e LEFT JOIN inventory_events x ON x.related_event_id=e.id
-          WHERE e.kind='checked_out' AND e.borrower_id=? AND e.item_id=?
-          GROUP BY e.id HAVING remaining > 0 ORDER BY e.created_at,e.id`,
+          `SELECT checkout_id id,lost remaining FROM loan_state
+          WHERE borrower_id=? AND item_id=? AND lost>0
+          ORDER BY created_at,checkout_id`,
         )
         .all(borrowerId, itemId) as Row[]
     ).map((row) => ({ id: Number(row.id), remaining: Number(row.remaining) }));
@@ -1531,7 +1517,7 @@ export class InventoryService {
       if (remaining === 0) break;
       const allocated = Math.min(remaining, checkout.remaining);
       if (allocated === 0) continue;
-      this.append(kind, itemId, allocated, borrowerId, checkout.id, note);
+      this.move(kind, itemId, allocated, borrowerId, checkout.id, note);
       checkout.remaining -= allocated;
       remaining -= allocated;
     }
@@ -1551,7 +1537,7 @@ export class InventoryService {
       if (remaining === 0) break;
       const allocated = Math.min(remaining, checkout.remaining);
       if (allocated === 0) continue;
-      this.append(
+      this.move(
         condition === 'usable' ? 'found_returned' : 'found_returned_damaged',
         itemId,
         allocated,
@@ -1578,7 +1564,7 @@ export class InventoryService {
       if (remaining === 0) break;
       const allocated = Math.min(remaining, checkout.remaining);
       if (allocated === 0) continue;
-      this.append('marked_lost', itemId, allocated, borrowerId, checkout.id, note);
+      this.move('marked_lost', itemId, allocated, borrowerId, checkout.id, note);
       checkout.remaining -= allocated;
       remaining -= allocated;
     }
@@ -1594,6 +1580,119 @@ export class InventoryService {
     this.db.prepare('DELETE FROM item_aliases WHERE item_id=?').run(itemId);
     const insert = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
     for (const alias of [...new Set(normalized)]) insert.run(itemId, alias);
+  }
+
+  private initializeItemState(itemId: number): void {
+    this.db.prepare('INSERT INTO item_state(item_id) VALUES (?)').run(itemId);
+  }
+
+  private move(
+    kind: EventKind,
+    itemId: number,
+    quantity: number,
+    borrowerId: number | null,
+    relatedId: number | null,
+    note: string,
+  ): number {
+    integer(quantity);
+    const state = this.db
+      .prepare(
+        'SELECT s.*,i.kind FROM item_state s JOIN items i ON i.id=s.item_id WHERE s.item_id=?',
+      )
+      .get(itemId) as Row | undefined;
+    if (!state) throw new DomainError('integrity_error', 'Item state is missing', 500);
+    const next = {
+      available: Number(state.available),
+      borrowed: Number(state.borrowed),
+      damaged: Number(state.damaged),
+      lost: Number(state.lost),
+    };
+    const delta: Record<EventKind, Partial<typeof next>> = {
+      stock_added: { available: quantity },
+      stock_removed: { available: -quantity },
+      issued: { available: -quantity },
+      checked_out: { available: -quantity, borrowed: quantity },
+      returned_usable: { borrowed: -quantity, available: quantity },
+      returned_damaged: { borrowed: -quantity, damaged: quantity },
+      marked_lost: { borrowed: -quantity, lost: quantity },
+      found_returned: { lost: -quantity, available: quantity },
+      found_returned_damaged: { lost: -quantity, damaged: quantity },
+      repaired: { damaged: -quantity, available: quantity },
+      written_off: { damaged: -quantity },
+    };
+    for (const [field, change] of Object.entries(delta[kind]) as Array<
+      [keyof typeof next, number]
+    >) {
+      const value = next[field] + change;
+      if (!Number.isSafeInteger(value) || value < 0)
+        throw new DomainError(
+          'excessive_quantity',
+          'Movement exceeds a stored balance or safe integer range',
+        );
+      next[field] = value;
+    }
+    if (
+      state.kind === 'non_consumable' &&
+      !Number.isSafeInteger(next.available + next.borrowed + next.damaged + next.lost)
+    )
+      throw new DomainError(
+        'excessive_quantity',
+        'Movement exceeds a stored balance or safe integer range',
+      );
+    let loan: Row | undefined;
+    if (relatedId !== null) {
+      loan = this.db.prepare('SELECT * FROM loan_state WHERE checkout_id=?').get(relatedId) as
+        Row | undefined;
+      if (!loan || Number(loan.item_id) !== itemId || Number(loan.borrower_id) !== borrowerId)
+        throw new DomainError(
+          'integrity_error',
+          'Related checkout state is missing or mismatched',
+          500,
+        );
+      const source =
+        kind === 'found_returned' || kind === 'found_returned_damaged' ? 'lost' : 'outstanding';
+      if (quantity > Number(loan[source]))
+        throw new DomainError('excessive_quantity', 'Movement exceeds checkout balance');
+    }
+    const eventId = this.append(kind, itemId, quantity, borrowerId, relatedId, note);
+    if (kind === 'checked_out') {
+      if (borrowerId === null || relatedId !== null)
+        throw new DomainError('integrity_error', 'Invalid checkout identity', 500);
+      this.db
+        .prepare(
+          `INSERT INTO loan_state(checkout_id,item_id,borrower_id,quantity,created_at,outstanding,lost)
+        VALUES (?,?,?,?,CURRENT_TIMESTAMP,?,0)`,
+        )
+        .run(eventId, itemId, borrowerId, quantity, quantity);
+    } else if (loan) {
+      const outstanding =
+        Number(loan.outstanding) +
+        (kind === 'returned_usable' || kind === 'returned_damaged' || kind === 'marked_lost'
+          ? -quantity
+          : 0);
+      const lost =
+        Number(loan.lost) +
+        (kind === 'marked_lost'
+          ? quantity
+          : kind === 'found_returned' || kind === 'found_returned_damaged'
+            ? -quantity
+            : 0);
+      this.db
+        .prepare('UPDATE loan_state SET outstanding=?,lost=? WHERE checkout_id=?')
+        .run(outstanding, lost, relatedId);
+    }
+    const clock = this.db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get() as
+      Row | undefined;
+    if (!clock || !Number.isSafeInteger(Number(clock.revision) + 1))
+      throw new DomainError('integrity_error', 'State revision is missing or exhausted', 500);
+    const revision = Number(clock.revision) + 1;
+    this.db.prepare('UPDATE state_clock SET revision=? WHERE singleton=1').run(revision);
+    this.db
+      .prepare(
+        `UPDATE item_state SET available=?,borrowed=?,damaged=?,lost=?,revision=? WHERE item_id=?`,
+      )
+      .run(next.available, next.borrowed, next.damaged, next.lost, revision, itemId);
+    return eventId;
   }
 
   private append(
@@ -1629,12 +1728,8 @@ export class InventoryService {
   private getItem(id: number): Item {
     const row = this.db
       .prepare(
-        `SELECT i.*,
-      COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-      COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
-      COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
-      COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
-      COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot FROM items i WHERE i.id=?`,
+        `SELECT i.*,${itemStateColumns} FROM items i
+      LEFT JOIN item_state s ON s.item_id=i.id WHERE i.id=?`,
       )
       .get(id) as Row | undefined;
     if (!row) throw new DomainError('not_found', 'Item not found', 404);
@@ -1661,13 +1756,9 @@ export class InventoryService {
     const inventory = (
       this.db
         .prepare(
-          `SELECT i.*,
-          COALESCE((SELECT SUM(${eventEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-          COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
-      COALESCE((SELECT SUM(${borrowedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) borrowed,
-      COALESCE((SELECT SUM(${lostEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) lost,
-      COALESCE((SELECT MAX(e.id) FROM inventory_events e WHERE e.item_id=i.id),0) stockSnapshot
-          FROM items i WHERE i.kind IN ('non_consumable','consumable') ORDER BY i.code`,
+          `SELECT i.*,${itemStateColumns} FROM items i
+          LEFT JOIN item_state s ON s.item_id=i.id
+          WHERE i.kind IN ('non_consumable','consumable') ORDER BY i.code`,
         )
         .all() as Row[]
     ).map((row) => {
@@ -1689,17 +1780,11 @@ export class InventoryService {
     const holdings = (
       this.db
         .prepare(
-          `SELECT e.item_id item_id,
-          SUM(e.quantity-COALESCE((SELECT SUM(CASE
-            WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity ELSE 0 END)
-          FROM inventory_events x WHERE x.related_event_id=e.id),0)) returnable,
-          SUM(COALESCE((SELECT SUM(CASE
-            WHEN x.kind='marked_lost' THEN x.quantity WHEN x.kind IN ('found_returned','found_returned_damaged') THEN -x.quantity ELSE 0 END)
-          FROM inventory_events x WHERE x.related_event_id=e.id),0)) lost
-          FROM inventory_events e JOIN items i ON i.id=e.item_id
-          WHERE e.kind='checked_out' AND e.borrower_id=?
-          GROUP BY e.item_id
-          HAVING returnable > 0 OR lost > 0
+          `SELECT l.item_id item_id,SUM(l.outstanding) returnable,SUM(l.lost) lost
+          FROM loan_state l JOIN items i ON i.id=l.item_id
+          WHERE l.borrower_id=?
+          GROUP BY l.item_id
+          HAVING SUM(l.outstanding) > 0 OR SUM(l.lost) > 0
           ORDER BY i.code`,
         )
         .all(borrowerId) as Row[]
@@ -1709,13 +1794,13 @@ export class InventoryService {
       lost: Number(row.lost),
     }));
     const watermark = this.db
-      .prepare('SELECT COALESCE(MAX(id),0) value FROM inventory_events')
+      .prepare('SELECT revision value FROM state_clock WHERE singleton=1')
       .get() as Row;
     return {
       borrower,
       inventory,
       holdings,
-      asOfEventId: Number(watermark.value),
+      stateRevision: Number(watermark.value),
       ledgerEpoch: this.ledgerEpochInTransaction(),
     };
   }
@@ -1729,41 +1814,26 @@ export class InventoryService {
 
   private requireCheckout(id: number): Row {
     const row = this.db
-      .prepare("SELECT * FROM inventory_events WHERE id=? AND kind='checked_out'")
+      .prepare('SELECT item_id,borrower_id,outstanding,lost FROM loan_state WHERE checkout_id=?')
       .get(id) as Row | undefined;
     if (!row) throw new DomainError('not_found', 'Checkout not found', 404);
     return row;
   }
 
   private outstanding(id: number): number {
-    const row = this.db
-      .prepare(
-        `SELECT e.quantity-COALESCE(SUM(CASE
-      WHEN x.kind IN ('returned_usable','returned_damaged','marked_lost') THEN x.quantity ELSE 0 END),0) value
-      FROM inventory_events e LEFT JOIN inventory_events x ON x.related_event_id=e.id WHERE e.id=? GROUP BY e.id`,
-      )
-      .get(id) as Row;
-    return Number(row.value);
+    return Number(this.requireCheckout(id).outstanding);
   }
 
   private unresolvedForItem(id: number): number {
     const row = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(e.quantity-COALESCE((SELECT SUM(x.quantity) FROM inventory_events x
-      WHERE x.related_event_id=e.id AND x.kind IN ('returned_usable','returned_damaged','found_returned','found_returned_damaged')),0)),0) value
-      FROM inventory_events e WHERE e.kind='checked_out' AND e.item_id=?`,
-      )
+      .prepare('SELECT COALESCE(SUM(outstanding+lost),0) value FROM loan_state WHERE item_id=?')
       .get(id) as Row;
     return Number(row.value);
   }
 
   private unresolvedForBorrower(id: number): number {
     const row = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(e.quantity-COALESCE((SELECT SUM(x.quantity) FROM inventory_events x
-      WHERE x.related_event_id=e.id AND x.kind IN ('returned_usable','returned_damaged','found_returned','found_returned_damaged')),0)),0) value
-      FROM inventory_events e WHERE e.kind='checked_out' AND e.borrower_id=?`,
-      )
+      .prepare('SELECT COALESCE(SUM(outstanding+lost),0) value FROM loan_state WHERE borrower_id=?')
       .get(id) as Row;
     return Number(row.value);
   }
@@ -1781,12 +1851,18 @@ export class InventoryService {
         .prepare('SELECT alias FROM item_aliases WHERE item_id=? ORDER BY alias')
         .all(row.id) as Row[]
     ).map((a) => String(a.alias)),
-    available: Number(row.available ?? 0),
-    damaged: Number(row.damaged ?? 0),
-    borrowed: Number(row.borrowed ?? 0),
-    lost: Number(row.lost ?? 0),
-    stockSnapshot: Number(row.stockSnapshot ?? 0),
+    available: this.requiredStateValue(row.available),
+    damaged: this.requiredStateValue(row.damaged),
+    borrowed: this.requiredStateValue(row.borrowed),
+    lost: this.requiredStateValue(row.lost),
+    stockRevision: this.requiredStateValue(row.stockRevision),
   });
+
+  private requiredStateValue(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+      throw new DomainError('integrity_error', 'Item state is missing or invalid', 500);
+    return value;
+  }
 
   private borrowerFromRow = (row: Row): Borrower => ({
     id: Number(row.id),

@@ -45,7 +45,7 @@ type RefreshRequiredPhase = {
   intent: SaveIntent;
   attemptKey: string;
   dispatchEpoch: number;
-  preDispatchEventId: number;
+  preDispatchRevision: number;
   refreshId?: string;
 };
 type ReloadRequiredPhase = {
@@ -149,12 +149,12 @@ export function isBorrowerDeskSnapshot(
 ): value is BorrowerDeskSnapshot {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['borrower', 'inventory', 'holdings', 'asOfEventId', 'ledgerEpoch']) ||
+    !hasExactKeys(value, ['borrower', 'inventory', 'holdings', 'stateRevision', 'ledgerEpoch']) ||
     !isBorrower(value.borrower)
   )
     return false;
   if (expectedBorrowerId !== undefined && value.borrower.id !== expectedBorrowerId) return false;
-  if (!isSafeNonNegative(value.asOfEventId) || !isSafePositive(value.ledgerEpoch)) return false;
+  if (!isSafeNonNegative(value.stateRevision) || !isSafePositive(value.ledgerEpoch)) return false;
   if (!Array.isArray(value.inventory) || !Array.isArray(value.holdings)) return false;
 
   const itemIds = new Set<number>();
@@ -226,7 +226,7 @@ function cloneSnapshot(snapshot: BorrowerDeskSnapshot): BorrowerDeskSnapshot {
     borrower: cloneBorrower(snapshot.borrower),
     inventory: snapshot.inventory.map((item) => ({ ...item, aliases: [...item.aliases] })),
     holdings: snapshot.holdings.map((holding) => ({ ...holding })),
-    asOfEventId: snapshot.asOfEventId,
+    stateRevision: snapshot.stateRevision,
     ledgerEpoch: snapshot.ledgerEpoch,
   };
 }
@@ -697,7 +697,7 @@ function withoutRefreshIdentity(phase: RefreshRequiredPhase): RefreshRequiredPha
     intent: phase.intent,
     attemptKey: phase.attemptKey,
     dispatchEpoch: phase.dispatchEpoch,
-    preDispatchEventId: phase.preDispatchEventId,
+    preDispatchRevision: phase.preDispatchRevision,
   };
 }
 
@@ -708,7 +708,7 @@ function acceptableConflictSnapshot(
   return (
     isBorrowerDeskSnapshot(snapshot, state.borrowerId) &&
     snapshot.ledgerEpoch === state.snapshot.ledgerEpoch &&
-    snapshot.asOfEventId >= state.snapshot.asOfEventId
+    snapshot.stateRevision >= state.snapshot.stateRevision
   );
 }
 
@@ -1073,7 +1073,7 @@ export function operationReducer(state: OperationState, action: OperationAction)
           intent: phase.intent,
           attemptKey: phase.attemptKey,
           dispatchEpoch: state.snapshot.ledgerEpoch,
-          preDispatchEventId: state.snapshot.asOfEventId,
+          preDispatchRevision: state.snapshot.stateRevision,
         },
         unverifiedProjection: projectedItems(state),
         feedback: null,
@@ -1147,7 +1147,7 @@ export function operationReducer(state: OperationState, action: OperationAction)
     if (
       !isBorrowerDeskSnapshot(action.snapshot, state.borrowerId) ||
       action.snapshot.ledgerEpoch !== state.phase.dispatchEpoch ||
-      action.snapshot.asOfEventId <= state.phase.preDispatchEventId
+      action.snapshot.stateRevision <= state.phase.preDispatchRevision
     )
       return {
         ...state,
@@ -1183,7 +1183,7 @@ export function operationReducer(state: OperationState, action: OperationAction)
         intent: state.phase.intent,
         attemptKey: state.phase.attemptKey,
         dispatchEpoch: state.phase.dispatchEpoch,
-        preDispatchEventId: state.phase.preDispatchEventId,
+        preDispatchRevision: state.phase.preDispatchRevision,
       },
       feedback: { kind: 'warning', code: 'refresh_required', message: 'Refresh required' },
       focus: state.phase.intent === 'save' ? 'retry-refresh' : 'borrower-search',

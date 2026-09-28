@@ -1,5 +1,5 @@
 import type { InventoryDatabase } from '../db/database.js';
-import { transaction } from '../db/database.js';
+import { readTransaction, transaction } from '../db/database.js';
 import { normalizeItemName } from './item-name.js';
 import { DomainError, type BorrowerType, type EventKind, type ItemKind } from './types.js';
 import type { Radio } from './types.js';
@@ -23,7 +23,22 @@ export interface TransferItem {
   createdAt: string;
   startingStock: number;
   baselineThroughEventId: number;
+  available: number;
+  borrowed: number;
+  damaged: number;
+  lost: number;
+  revision: number;
   resetTotal: number;
+}
+
+export interface TransferLoan {
+  checkoutId: number;
+  itemCode: number;
+  borrowerUsername: string;
+  quantity: number;
+  createdAt: string;
+  outstanding: number;
+  lost: number;
 }
 
 export interface TransferBorrower {
@@ -51,6 +66,8 @@ export interface InventoryTransferSnapshot {
   items: TransferItem[];
   borrowers: TransferBorrower[];
   events: TransferEvent[];
+  loans: TransferLoan[];
+  stateRevision: number;
   radioCount: number;
   radios: Radio[];
 }
@@ -78,6 +95,8 @@ export interface RecoveryPayload {
   items: RecoveryItem[];
   borrowers: TransferBorrower[];
   events: TransferEvent[];
+  loans: TransferLoan[];
+  stateRevision: number;
   radioCount: number;
   radios: Radio[];
 }
@@ -102,24 +121,13 @@ export interface ConsumablesUsageReportRow {
 export function unresolvedDamageReport(
   snapshot: InventoryTransferSnapshot,
 ): UnresolvedDamageReportRow[] {
-  const quantities = new Map<number, number>();
-  for (const event of snapshot.events) {
-    const change =
-      event.kind === 'returned_damaged' || event.kind === 'found_returned_damaged'
-        ? event.quantity
-        : event.kind === 'repaired' || event.kind === 'written_off'
-          ? -event.quantity
-          : 0;
-    if (change !== 0)
-      quantities.set(event.itemCode, (quantities.get(event.itemCode) ?? 0) + change);
-  }
   return snapshot.items
-    .filter((item) => item.kind === 'non_consumable' && (quantities.get(item.code) ?? 0) > 0)
+    .filter((item) => item.kind === 'non_consumable' && item.damaged > 0)
     .map((item) => ({
       itemCode: item.code,
       itemName: item.name,
       location: item.location,
-      unresolvedDamagedQuantity: quantities.get(item.code)!,
+      unresolvedDamagedQuantity: item.damaged,
     }));
 }
 
@@ -143,25 +151,10 @@ export function consumablesUsageReport(
         startOfCycleStock: item.startingStock,
         addedDuringCycle,
         usage,
-        left: item.resetTotal,
+        left: item.available,
       };
     });
 }
-
-type RecoveryItemState = {
-  available: number;
-  damaged: number;
-  checkouts: Map<number, RecoveryCheckoutState>;
-  baselineVerified: boolean;
-};
-
-type RecoveryCheckoutState = {
-  itemCode: number;
-  borrowerUsername: string;
-  quantity: number;
-  returned: number;
-  lost: number;
-};
 
 function invalidWorkbook(message: string): never {
   throw new DomainError('invalid_workbook', message);
@@ -193,6 +186,10 @@ function normalizeRecoveryTimestamps(payload: RecoveryPayload): RecoveryPayload 
       ...event,
       createdAt: canonicalUtcTimestamp(event.createdAt),
     })),
+    loans: payload.loans.map((loan) => ({
+      ...loan,
+      createdAt: canonicalUtcTimestamp(loan.createdAt),
+    })),
   };
 }
 
@@ -200,16 +197,24 @@ function utcTimestamp(value: string): number {
   return Date.parse(`${value.replace(' ', 'T')}Z`);
 }
 
-function recoveryTotal(state: RecoveryItemState): number {
-  let checkedOut = 0;
-  for (const checkout of state.checkouts.values())
-    checkedOut += checkout.quantity - checkout.returned;
-  return state.available + state.damaged + checkedOut;
-}
-
 export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPayload {
+  if (
+    !payload ||
+    !Array.isArray(payload.locations) ||
+    !Array.isArray(payload.items) ||
+    !Array.isArray(payload.borrowers) ||
+    !Array.isArray(payload.events) ||
+    !Array.isArray(payload.loans) ||
+    !Number.isSafeInteger(payload.stateRevision) ||
+    payload.stateRevision < 0
+  )
+    invalidWorkbook('Recovery is missing authoritative state or required tables');
   payload = normalizeRecoveryTimestamps(payload);
   validateRadioFleet(payload.radioCount, payload.radios);
+  const safe = (value: number, label: string, positive = false): void => {
+    if (!Number.isSafeInteger(value) || value < (positive ? 1 : 0))
+      invalidWorkbook(`${label} must be a ${positive ? 'positive' : 'nonnegative'} safe integer`);
+  };
   const locations = new Map<string, TransferLocation>();
   for (const location of payload.locations) {
     const key = location.name.toLocaleLowerCase();
@@ -217,36 +222,54 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery Locations contains duplicate name "${location.name}"`);
     locations.set(key, location);
   }
-
   const items = new Map<number, RecoveryItem>();
-  const itemNames = new Map<string, RecoveryItem>();
-  const states = new Map<number, RecoveryItemState>();
+  const itemNames = new Set<string>();
   for (const item of payload.items) {
+    safe(item.code, 'Item Code', true);
+    for (const field of [
+      'available',
+      'borrowed',
+      'damaged',
+      'lost',
+      'revision',
+      'startingStock',
+      'baselineThroughEventId',
+    ] as const)
+      safe(item[field], `Recovery item ${item.code} ${field}`);
+    if (item.revision > payload.stateRevision)
+      invalidWorkbook(`Recovery item ${item.code} revision exceeds the state revision`);
     if (items.has(item.code))
       invalidWorkbook(`Recovery Items contains duplicate Item Code ${item.code}`);
     const nameKey = normalizeItemName(item.name);
     if (itemNames.has(nameKey))
       invalidWorkbook(`Recovery Items contains duplicate Name "${item.name}"`);
-    if (item.location != null && !locations.has(item.location.toLocaleLowerCase()))
+    const location =
+      item.location == null ? undefined : locations.get(item.location.toLocaleLowerCase());
+    if (item.location != null && !location)
       invalidWorkbook(`Recovery item ${item.code} references unknown Location "${item.location}"`);
+    if (!item.archived && location?.archived)
+      invalidWorkbook(`Recovery item ${item.code} is active at an archived location`);
+    const resetTotal =
+      item.kind === 'consumable'
+        ? item.available
+        : item.available + item.borrowed + item.damaged + item.lost;
+    if (!Number.isSafeInteger(resetTotal))
+      invalidWorkbook(`Recovery item ${item.code} reset total exceeds safe integer range`);
     if (item.kind !== 'consumable' && item.lotSize != null)
       invalidWorkbook(`Recovery item ${item.code} defines a Lot Size but is not consumable`);
-    if (item.startingStock < 0)
-      invalidWorkbook(`Recovery item ${item.code} Starting Stock must be nonnegative`);
+    if (
+      item.kind === 'consumable' &&
+      (item.borrowed !== 0 || item.damaged !== 0 || item.lost !== 0)
+    )
+      invalidWorkbook(`Recovery consumable ${item.code} has unsupported balances`);
+    if (
+      item.archived &&
+      (item.available !== 0 || item.borrowed !== 0 || item.damaged !== 0 || item.lost !== 0)
+    )
+      invalidWorkbook(`Recovery item ${item.code} is archived with unresolved inventory state`);
     items.set(item.code, item);
-    itemNames.set(nameKey, item);
-    states.set(item.code, {
-      available: 0,
-      damaged: 0,
-      checkouts: new Map(),
-      baselineVerified: item.baselineThroughEventId === 0 && item.startingStock === 0,
-    });
-    if (item.baselineThroughEventId === 0 && item.startingStock !== 0)
-      invalidWorkbook(
-        `Recovery item ${item.code} has Starting Stock ${item.startingStock} without a baseline event`,
-      );
+    itemNames.add(nameKey);
   }
-
   const borrowers = new Map<string, TransferBorrower>();
   for (const borrower of payload.borrowers) {
     const key = borrower.username.toLocaleLowerCase();
@@ -254,13 +277,36 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery Borrowers contains duplicate Username "${borrower.username}"`);
     borrowers.set(key, borrower);
   }
-
+  const eventKinds = new Set<EventKind>([
+    'stock_added',
+    'stock_removed',
+    'issued',
+    'checked_out',
+    'returned_usable',
+    'returned_damaged',
+    'marked_lost',
+    'found_returned',
+    'found_returned_damaged',
+    'repaired',
+    'written_off',
+  ]);
+  const relatedKinds = new Set<EventKind>([
+    'returned_usable',
+    'returned_damaged',
+    'marked_lost',
+    'found_returned',
+    'found_returned_damaged',
+  ]);
   const events = new Map<number, TransferEvent>();
   let previousId = 0;
   let previousTimestamp = Number.NEGATIVE_INFINITY;
   for (const event of payload.events) {
+    safe(event.id, 'Recovery Event ID', true);
+    safe(event.quantity, `Recovery event ${event.id} Quantity`, true);
+    if (!eventKinds.has(event.kind))
+      invalidWorkbook(`Recovery event ${event.id} has unsupported Kind`);
     if (event.id <= previousId)
-      invalidWorkbook(`Recovery Events must be ordered by strictly increasing Event ID`);
+      invalidWorkbook('Recovery Events must be ordered by strictly increasing Event ID');
     const timestamp = utcTimestamp(event.createdAt);
     if (timestamp < previousTimestamp)
       invalidWorkbook(`Recovery event ${event.id} occurs before the preceding event timestamp`);
@@ -273,7 +319,6 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(
         `Recovery event ${event.id} occurs before item ${event.itemCode} was created`,
       );
-    const state = states.get(event.itemCode)!;
     const borrower =
       event.borrowerUsername == null
         ? null
@@ -284,129 +329,96 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       );
     if (borrower && timestamp < utcTimestamp(borrower.createdAt))
       invalidWorkbook(`Recovery event ${event.id} occurs before its borrower was created`);
-
-    if (event.kind === 'stock_added') {
-      if (event.borrowerUsername != null || event.relatedEventId != null)
-        invalidWorkbook(`Recovery stock event ${event.id} cannot reference a borrower or event`);
-      state.available += event.quantity;
-    } else if (event.kind === 'stock_removed' || event.kind === 'issued') {
-      if (event.borrowerUsername != null || event.relatedEventId != null)
-        invalidWorkbook(`Recovery stock event ${event.id} cannot reference a borrower or event`);
-      if (event.kind === 'issued' && item.kind !== 'consumable')
-        invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
-      if (event.quantity > state.available)
-        invalidWorkbook(`Recovery event ${event.id} would make available stock negative`);
-      state.available -= event.quantity;
-    } else if (event.kind === 'checked_out') {
-      if (item.kind !== 'non_consumable')
-        invalidWorkbook(`Recovery event ${event.id} checks out an item that is not borrowable`);
-      if (!borrower || event.relatedEventId != null)
-        invalidWorkbook(`Recovery checkout ${event.id} requires a borrower and no related event`);
-      if (event.quantity > state.available)
-        invalidWorkbook(`Recovery checkout ${event.id} would make available stock negative`);
-      state.available -= event.quantity;
-      state.checkouts.set(event.id, {
-        itemCode: event.itemCode,
-        borrowerUsername: borrower.username,
-        quantity: event.quantity,
-        returned: 0,
-        lost: 0,
-      });
-    } else if (
-      event.kind === 'returned_usable' ||
-      event.kind === 'returned_damaged' ||
-      event.kind === 'marked_lost' ||
-      event.kind === 'found_returned' ||
-      event.kind === 'found_returned_damaged'
-    ) {
-      if (event.relatedEventId == null)
-        invalidWorkbook(`Recovery event ${event.id} requires a related checkout`);
-      const checkoutEvent = events.get(event.relatedEventId);
-      const checkout = state.checkouts.get(event.relatedEventId);
-      if (!checkoutEvent || checkoutEvent.kind !== 'checked_out' || !checkout)
-        invalidWorkbook(`Recovery event ${event.id} references a missing or invalid checkout`);
-      if (
-        event.itemCode !== checkout.itemCode ||
-        event.borrowerUsername?.toLocaleLowerCase() !==
-          checkout.borrowerUsername.toLocaleLowerCase()
-      )
-        invalidWorkbook(`Recovery event ${event.id} does not match its checkout item and borrower`);
-      const outstanding = checkout.quantity - checkout.returned - checkout.lost;
-      if (event.kind === 'found_returned' || event.kind === 'found_returned_damaged') {
-        if (event.quantity > checkout.lost)
-          invalidWorkbook(`Recovery event ${event.id} recovers more lost stock than exists`);
-        checkout.lost -= event.quantity;
-        checkout.returned += event.quantity;
-        if (event.kind === 'found_returned') state.available += event.quantity;
-        else state.damaged += event.quantity;
-      } else if (event.kind === 'marked_lost') {
-        if (event.quantity > outstanding)
-          invalidWorkbook(`Recovery event ${event.id} marks more stock lost than is outstanding`);
-        checkout.lost += event.quantity;
-      } else {
-        if (event.quantity > outstanding)
-          invalidWorkbook(`Recovery event ${event.id} returns more stock than is outstanding`);
-        checkout.returned += event.quantity;
-        if (event.kind === 'returned_usable') state.available += event.quantity;
-        else state.damaged += event.quantity;
-      }
-    } else {
-      if (event.kind !== 'repaired' && event.kind !== 'written_off')
-        invalidWorkbook(`Recovery event ${event.id} has unsupported Kind "${event.kind}"`);
-      if (event.borrowerUsername != null || event.relatedEventId != null)
-        invalidWorkbook(`Recovery damage event ${event.id} cannot reference a borrower or event`);
-      if (event.quantity > state.damaged)
-        invalidWorkbook(`Recovery event ${event.id} resolves more damaged stock than exists`);
-      state.damaged -= event.quantity;
-      if (event.kind === 'repaired') state.available += event.quantity;
-    }
-    events.set(event.id, event);
-    if (item.baselineThroughEventId === event.id) {
-      if (recoveryTotal(state) !== item.startingStock)
+    if (event.kind === 'checked_out') {
+      if (item.kind !== 'non_consumable' || !borrower || event.relatedEventId != null)
         invalidWorkbook(
-          `Recovery item ${item.code} Starting Stock does not match state at its baseline event`,
+          `Recovery checkout ${event.id} has invalid item, borrower, or related event`,
         );
-      state.baselineVerified = true;
-    }
+    } else if (relatedKinds.has(event.kind)) {
+      const related = event.relatedEventId == null ? undefined : events.get(event.relatedEventId);
+      if (
+        !related ||
+        related.kind !== 'checked_out' ||
+        related.itemCode !== event.itemCode ||
+        related.borrowerUsername?.toLocaleLowerCase() !==
+          event.borrowerUsername?.toLocaleLowerCase()
+      )
+        invalidWorkbook(`Recovery event ${event.id} references a missing or mismatched checkout`);
+    } else if (event.borrowerUsername != null || event.relatedEventId != null)
+      invalidWorkbook(`Recovery event ${event.id} cannot reference a borrower or checkout`);
+    if (event.kind === 'issued' && item.kind !== 'consumable')
+      invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
+    events.set(event.id, event);
   }
-
-  for (const item of payload.items) {
-    const state = states.get(item.code)!;
-    if (!state.baselineVerified)
+  for (const item of payload.items)
+    if (
+      item.baselineThroughEventId !== 0 &&
+      events.get(item.baselineThroughEventId)?.itemCode !== item.code
+    )
       invalidWorkbook(
         `Recovery item ${item.code} references missing Baseline Through Event ID ${item.baselineThroughEventId}`,
       );
-    const unresolved = [...state.checkouts.values()].filter(
-      (checkout) => checkout.quantity - checkout.returned > 0,
-    );
-    if (item.archived && (state.damaged > 0 || unresolved.length > 0))
-      invalidWorkbook(`Recovery item ${item.code} is archived with unresolved inventory state`);
-  }
-  for (const borrower of payload.borrowers) {
-    if (!borrower.archived) continue;
-    const unresolved = [...states.values()].some((state) =>
-      [...state.checkouts.values()].some(
-        (checkout) =>
-          checkout.borrowerUsername.toLocaleLowerCase() === borrower.username.toLocaleLowerCase() &&
-          // Imports may archive borrowers with losses, but never with returnable stock.
-          checkout.quantity - checkout.returned - checkout.lost > 0,
-      ),
-    );
-    if (unresolved)
+
+  const loans = new Set<number>();
+  const totals = new Map<number, { borrowed: number; lost: number }>();
+  for (const loan of payload.loans) {
+    safe(loan.checkoutId, 'Recovery Loan Checkout ID', true);
+    safe(loan.itemCode, `Recovery loan ${loan.checkoutId} Item Code`, true);
+    safe(loan.quantity, `Recovery loan ${loan.checkoutId} Quantity`, true);
+    safe(loan.outstanding, `Recovery loan ${loan.checkoutId} Outstanding`);
+    safe(loan.lost, `Recovery loan ${loan.checkoutId} Lost`);
+    if (loans.has(loan.checkoutId))
+      invalidWorkbook(`Recovery Loans contains duplicate checkout ${loan.checkoutId}`);
+    loans.add(loan.checkoutId);
+    const item = items.get(loan.itemCode);
+    const borrower = borrowers.get(loan.borrowerUsername.toLocaleLowerCase());
+    const checkout = events.get(loan.checkoutId);
+    if (
+      !item ||
+      !borrower ||
+      !checkout ||
+      checkout.kind !== 'checked_out' ||
+      checkout.itemCode !== loan.itemCode ||
+      checkout.borrowerUsername?.toLocaleLowerCase() !==
+        loan.borrowerUsername.toLocaleLowerCase() ||
+      checkout.quantity !== loan.quantity
+    )
+      invalidWorkbook(`Recovery loan ${loan.checkoutId} has an invalid checkout identity`);
+    if (
+      utcTimestamp(loan.createdAt) < utcTimestamp(item.createdAt) ||
+      utcTimestamp(loan.createdAt) < utcTimestamp(borrower.createdAt)
+    )
+      invalidWorkbook(`Recovery loan ${loan.checkoutId} precedes its item or borrower`);
+    if (loan.outstanding + loan.lost > loan.quantity)
+      invalidWorkbook(`Recovery loan ${loan.checkoutId} exceeds its original quantity`);
+    if (borrower.archived && loan.outstanding > 0)
       invalidWorkbook(`Recovery borrower "${borrower.username}" is archived with unresolved loans`);
+    const aggregate = totals.get(loan.itemCode) ?? { borrowed: 0, lost: 0 };
+    aggregate.borrowed += loan.outstanding;
+    aggregate.lost += loan.lost;
+    if (!Number.isSafeInteger(aggregate.borrowed) || !Number.isSafeInteger(aggregate.lost))
+      invalidWorkbook(`Recovery item ${loan.itemCode} loan totals exceed safe integer range`);
+    totals.set(loan.itemCode, aggregate);
+  }
+  for (const event of payload.events)
+    if (event.kind === 'checked_out' && !loans.has(event.id))
+      invalidWorkbook(`Recovery checkout ${event.id} has no operational loan state`);
+  for (const item of payload.items) {
+    const aggregate = totals.get(item.code) ?? { borrowed: 0, lost: 0 };
+    if (item.borrowed !== aggregate.borrowed || item.lost !== aggregate.lost)
+      invalidWorkbook(`Recovery item ${item.code} balances do not match operational loans`);
   }
   return payload;
 }
-
-const availableEffect = `CASE kind
-  WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity WHEN 'repaired' THEN quantity
-  WHEN 'stock_removed' THEN -quantity WHEN 'issued' THEN -quantity WHEN 'checked_out' THEN -quantity ELSE 0 END`;
-const damagedEffect = `CASE kind WHEN 'returned_damaged' THEN quantity WHEN 'found_returned_damaged' THEN quantity WHEN 'repaired' THEN -quantity WHEN 'written_off' THEN -quantity ELSE 0 END`;
 
 export class InventoryTransferService {
   constructor(private readonly db: InventoryDatabase) {}
 
   snapshot(): InventoryTransferSnapshot {
+    return readTransaction(this.db, () => this.snapshotInTransaction());
+  }
+
+  private snapshotInTransaction(): InventoryTransferSnapshot {
     const locations = (
       this.db
         .prepare('SELECT name, archived FROM locations ORDER BY name COLLATE NOCASE')
@@ -422,27 +434,41 @@ export class InventoryTransferService {
     const items = (
       this.db
         .prepare(
-          `SELECT i.*, l.name location_name, COALESCE(b.quantity, 0) starting_stock,
-          COALESCE(b.through_event_id, 0) baseline_through_event_id,
-          COALESCE((SELECT SUM(${availableEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) available,
-          COALESCE((SELECT SUM(${damagedEffect}) FROM inventory_events e WHERE e.item_id=i.id),0) damaged,
-          COALESCE((SELECT SUM(e.quantity-COALESCE((SELECT SUM(CASE x.kind
-            WHEN 'returned_usable' THEN x.quantity WHEN 'returned_damaged' THEN x.quantity
-            WHEN 'marked_lost' THEN x.quantity ELSE 0 END)
-          FROM inventory_events x WHERE x.related_event_id=e.id),0))
-          FROM inventory_events e WHERE e.item_id=i.id AND e.kind='checked_out'),0) outstanding,
-          COALESCE((SELECT SUM(CASE e.kind WHEN 'marked_lost' THEN e.quantity WHEN 'found_returned' THEN -e.quantity WHEN 'found_returned_damaged' THEN -e.quantity ELSE 0 END)
-          FROM inventory_events e WHERE e.item_id=i.id),0) lost
+          `SELECT i.*, l.name location_name,b.quantity starting_stock,
+          b.through_event_id baseline_through_event_id,
+          s.available,s.borrowed,s.damaged,s.lost,s.revision
           FROM items i LEFT JOIN locations l ON l.id=i.location_id
-          LEFT JOIN inventory_baselines b ON b.item_id=i.id ORDER BY i.code`,
+          LEFT JOIN inventory_baselines b ON b.item_id=i.id
+          LEFT JOIN item_state s ON s.item_id=i.id ORDER BY i.code`,
         )
         .all() as Row[]
     ).map((row) => {
+      for (const field of [
+        'available',
+        'borrowed',
+        'damaged',
+        'lost',
+        'revision',
+        'starting_stock',
+        'baseline_through_event_id',
+      ])
+        if (
+          typeof row[field] !== 'number' ||
+          !Number.isSafeInteger(row[field]) ||
+          Number(row[field]) < 0
+        )
+          throw new DomainError(
+            'integrity_error',
+            `Missing or invalid ${field} for item ${row.code}`,
+            500,
+          );
       const available = Number(row.available);
       const resetTotal =
         row.kind === 'consumable'
           ? available
-          : available + Number(row.damaged) + Number(row.outstanding) + Number(row.lost);
+          : available + Number(row.borrowed) + Number(row.damaged) + Number(row.lost);
+      if (!Number.isSafeInteger(resetTotal))
+        throw new DomainError('integrity_error', 'Reset total exceeds safe integer range', 500);
       return {
         code: Number(row.code),
         name: String(row.name),
@@ -454,6 +480,11 @@ export class InventoryTransferService {
         createdAt: String(row.created_at),
         startingStock: Number(row.starting_stock),
         baselineThroughEventId: Number(row.baseline_through_event_id),
+        available,
+        borrowed: Number(row.borrowed),
+        damaged: Number(row.damaged),
+        lost: Number(row.lost),
+        revision: Number(row.revision),
         resetTotal,
       };
     });
@@ -485,16 +516,52 @@ export class InventoryTransferService {
       note: String(row.note),
       createdAt: String(row.created_at),
     }));
+    const loans = (
+      this.db
+        .prepare(
+          `SELECT l.checkout_id,i.code item_code,b.username borrower_username,
+        l.quantity,l.created_at,l.outstanding,l.lost
+        FROM loan_state l JOIN items i ON i.id=l.item_id
+        JOIN borrowers b ON b.id=l.borrower_id ORDER BY l.checkout_id`,
+        )
+        .all() as Row[]
+    ).map((row) => ({
+      checkoutId: Number(row.checkout_id),
+      itemCode: Number(row.item_code),
+      borrowerUsername: String(row.borrower_username),
+      quantity: Number(row.quantity),
+      createdAt: String(row.created_at),
+      outstanding: Number(row.outstanding),
+      lost: Number(row.lost),
+    }));
+    const clock = this.db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get() as
+      Row | undefined;
+    if (!clock || typeof clock.revision !== 'number' || !Number.isSafeInteger(clock.revision))
+      throw new DomainError('integrity_error', 'State revision is missing or invalid', 500);
     const fleet = new RadioService(this.db).fleet();
-    return { locations, items, borrowers, events, radioCount: fleet.count, radios: fleet.radios };
+    return {
+      locations,
+      items,
+      borrowers,
+      events,
+      loans,
+      stateRevision: Number(clock.revision),
+      radioCount: fleet.count,
+      radios: fleet.radios,
+    };
   }
 
   replaceWithReset(payload: ResetPayload): void {
+    for (const item of payload.items)
+      if (!Number.isSafeInteger(item.total) || item.total < 0 || (item.archived && item.total > 0))
+        invalidWorkbook(`Reset item ${item.code} has invalid total or archived stock`);
     transaction(this.db, () => {
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('DELETE FROM inventory_command_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
+      this.db.prepare('DELETE FROM loan_state').run();
+      this.db.prepare('DELETE FROM item_state').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
       this.db.prepare('DELETE FROM item_aliases').run();
@@ -525,6 +592,7 @@ export class InventoryTransferService {
       const insertBaseline = this.db.prepare(
         'INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,?,?)',
       );
+      const insertState = this.db.prepare('INSERT INTO item_state(item_id,available) VALUES (?,?)');
       for (const item of payload.items) {
         const result = insertItem.run(
           item.code,
@@ -535,6 +603,7 @@ export class InventoryTransferService {
           Number(item.archived),
         );
         const itemId = Number(result.lastInsertRowid);
+        insertState.run(itemId, item.total);
         for (const alias of item.aliases) insertAlias.run(itemId, alias);
         const baselineEventId =
           item.total === 0
@@ -542,6 +611,7 @@ export class InventoryTransferService {
             : Number(insertEvent.run(itemId, item.total, 'Reset baseline import').lastInsertRowid);
         insertBaseline.run(itemId, item.total, baselineEventId);
       }
+      this.db.prepare('UPDATE state_clock SET revision=0 WHERE singleton=1').run();
       const highestGeneratedRangeCode = payload.items.reduce(
         (highest, item) => (item.code >= 100 ? Math.max(highest, item.code) : highest),
         99,
@@ -561,6 +631,8 @@ export class InventoryTransferService {
       this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('DELETE FROM inventory_command_receipts').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
+      this.db.prepare('DELETE FROM loan_state').run();
+      this.db.prepare('DELETE FROM item_state').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
       this.db.prepare('DELETE FROM item_aliases').run();
@@ -587,6 +659,9 @@ export class InventoryTransferService {
         VALUES (?,?,?,?,?,?,?)`,
       );
       const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
+      const insertState = this.db
+        .prepare(`INSERT INTO item_state(item_id,available,borrowed,damaged,lost,revision)
+        VALUES (?,?,?,?,?,?)`);
       for (const item of payload.items) {
         const result = insertItem.run(
           item.code,
@@ -599,6 +674,14 @@ export class InventoryTransferService {
         );
         const itemId = Number(result.lastInsertRowid);
         itemIds.set(item.code, itemId);
+        insertState.run(
+          itemId,
+          item.available,
+          item.borrowed,
+          item.damaged,
+          item.lost,
+          item.revision,
+        );
         for (const alias of item.aliases) insertAlias.run(itemId, alias);
       }
 
@@ -637,6 +720,22 @@ export class InventoryTransferService {
           event.createdAt,
         );
       }
+      const insertLoan = this.db.prepare(`INSERT INTO loan_state(
+        checkout_id,item_id,borrower_id,quantity,created_at,outstanding,lost
+      ) VALUES (?,?,?,?,?,?,?)`);
+      for (const loan of payload.loans)
+        insertLoan.run(
+          loan.checkoutId,
+          itemIds.get(loan.itemCode)!,
+          borrowerIds.get(loan.borrowerUsername.toLocaleLowerCase())!,
+          loan.quantity,
+          loan.createdAt,
+          loan.outstanding,
+          loan.lost,
+        );
+      this.db
+        .prepare('UPDATE state_clock SET revision=? WHERE singleton=1')
+        .run(payload.stateRevision);
       const insertBaseline = this.db.prepare(
         `INSERT INTO inventory_baselines(item_id,quantity,through_event_id,established_at)
         VALUES (?,?,?,?)`,

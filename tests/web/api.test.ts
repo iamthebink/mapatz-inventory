@@ -26,7 +26,7 @@ const operationContext = {
   idempotencyKey: key,
   borrowerId: 7,
   request: operationRequest,
-  asOfEventId: 3,
+  stateRevision: 3,
 };
 
 const createRequest: BorrowerCreateRequest = {
@@ -64,7 +64,7 @@ function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
       },
     ],
     holdings: [{ itemId: 11, returnable: 1, lost: 0 }],
-    asOfEventId: 4,
+    stateRevision: 4,
     ledgerEpoch: 3,
   };
 }
@@ -81,7 +81,7 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'ambiguous', reason: 'server' });
     expect(
@@ -89,7 +89,7 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'ambiguous', reason: 'unparseable' });
     expect(
@@ -105,7 +105,7 @@ describe('command response classification', () => {
           idempotencyKey: key,
           borrowerId: 7,
           request: operationRequest,
-          asOfEventId: 3,
+          stateRevision: 3,
         }),
       ),
     ).toEqual({ kind: 'ambiguous', reason: 'network' });
@@ -151,7 +151,7 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toEqual({ kind: 'authorization', status: 401 });
   });
@@ -183,7 +183,7 @@ describe('command response classification', () => {
           idempotencyKey: key,
           borrowerId: 7,
           request: operationRequest,
-          asOfEventId: 3,
+          stateRevision: 3,
         }),
       ).toMatchObject({ kind: 'ambiguous' });
     }
@@ -220,13 +220,13 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'definitive' });
     expect(
       await classifyBorrowerOperationResponse(json(409, first), {
         ...operationContext,
-        asOfEventId: 5,
+        stateRevision: 5,
       }),
     ).toMatchObject({ kind: 'ambiguous' });
     expect(
@@ -240,7 +240,7 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'ambiguous' });
 
@@ -257,13 +257,13 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'definitive' });
     expect(
       await classifyBorrowerOperationResponse(json(409, replay), {
         ...operationContext,
-        asOfEventId: 5,
+        stateRevision: 5,
       }),
     ).toMatchObject({ kind: 'ambiguous' });
   });
@@ -310,7 +310,7 @@ describe('command response classification', () => {
       requested: 2,
       availableAfterUsableReturns: 0,
     };
-    const context = { idempotencyKey: key, borrowerId: 7, request, asOfEventId: 3 };
+    const context = { idempotencyKey: key, borrowerId: 7, request, stateRevision: 3 };
     expect(
       await classifyBorrowerOperationResponse(
         json(409, { ...base, conflicts: [returnConflict, secondBorrowConflict] }),
@@ -499,7 +499,7 @@ describe('command response classification', () => {
         idempotencyKey: key,
         borrowerId: 7,
         request: operationRequest,
-        asOfEventId: 3,
+        stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'ambiguous' });
     expect(
@@ -584,7 +584,7 @@ describe('borrower workflow transport', () => {
         .mockResolvedValueOnce(json(200, { ledgerEpoch: 3, active: [] })),
     );
     await expect(fetchBorrowerSearch('Or')).resolves.toMatchObject({ ledgerEpoch: 3 });
-    await expect(fetchBorrowerDeskSnapshot(7)).resolves.toMatchObject({ asOfEventId: 4 });
+    await expect(fetchBorrowerDeskSnapshot(7)).resolves.toMatchObject({ stateRevision: 4 });
     await expect(fetchBorrowerSearch('bad')).rejects.toMatchObject({
       code: 'invalid_server_truth',
     });

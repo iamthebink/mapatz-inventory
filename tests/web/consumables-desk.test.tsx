@@ -20,7 +20,7 @@ const item = (id: number, name: string, available = 5): Item => ({
   damaged: 0,
   borrowed: 0,
   lost: 0,
-  stockSnapshot: 1,
+  stockRevision: 1,
 });
 const stock = [item(1, 'סרט'), item(2, 'אזיקונים'), item(3, 'כפפות', 0)];
 const storageKey = 'mapatz-consumable-batch-attempt';

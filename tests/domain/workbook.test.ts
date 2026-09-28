@@ -34,6 +34,8 @@ const emptySnapshot: InventoryTransferSnapshot = {
   items: [],
   borrowers: [],
   events: [],
+  loans: [],
+  stateRevision: 0,
 };
 
 describe('inventory XLSX workbook', () => {
@@ -54,6 +56,11 @@ describe('inventory XLSX workbook', () => {
           createdAt: '2026-09-20T17:00:00+03:00',
           startingStock: 0,
           baselineThroughEventId: 0,
+          available: 0,
+          borrowed: 3,
+          damaged: 0,
+          lost: 0,
+          revision: 3,
           resetTotal: 0,
         },
       ],
@@ -99,6 +106,27 @@ describe('inventory XLSX workbook', () => {
           createdAt: '2026-09-21T00:00:00+03:00',
         },
       ],
+      loans: [
+        {
+          checkoutId: 2,
+          itemCode: 100,
+          borrowerUsername: 'boundary',
+          quantity: 1,
+          createdAt: '2026-09-20T23:59:59.999+03:00',
+          outstanding: 1,
+          lost: 0,
+        },
+        {
+          checkoutId: 3,
+          itemCode: 100,
+          borrowerUsername: 'boundary',
+          quantity: 2,
+          createdAt: '2026-09-21T00:00:00+03:00',
+          outstanding: 2,
+          lost: 0,
+        },
+      ],
+      stateRevision: 3,
     });
     const recovery = await parseRecoveryWorkbook(exported);
     const db = openDatabase(':memory:');
@@ -165,7 +193,7 @@ describe('inventory XLSX workbook', () => {
           aliases: ['Table'],
           lotSize: null,
           archived: false,
-          total: 5,
+          total: 6,
         },
       ],
     });
@@ -188,7 +216,7 @@ describe('inventory XLSX workbook', () => {
       .getRow(2)
       .getCell(2).value = 'checked_out';
     await expect(parseRecoveryWorkbook(await save(impossibleCheckout))).rejects.toThrow(
-      /not borrowable/,
+      /invalid item, borrower, or related event/,
     );
     const invalidLot = await load(exported);
     invalidLot
@@ -289,7 +317,7 @@ describe('inventory XLSX workbook', () => {
     expect(snapshot).not.toHaveProperty('receipts');
     expect(snapshot.items.find((item) => item.code === 7)).toMatchObject({
       startingStock: 100,
-      resetTotal: 85,
+      resetTotal: 90,
     });
     expect(snapshot.items.find((item) => item.code === 101)).toMatchObject({ resetTotal: 10 });
     expect(snapshot.events.map((event) => event.kind)).toEqual([
@@ -330,7 +358,7 @@ describe('inventory XLSX workbook', () => {
       '["Water"]',
       12,
       false,
-      85,
+      90,
     ]);
     const serialized = workbook.worksheets
       .flatMap((sheet) => sheet.getSheetValues())

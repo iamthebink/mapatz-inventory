@@ -464,7 +464,7 @@ export function apiRouter(
       lotSize: positive.nullable(),
       locationId: positive.nullable(),
       targetAvailable: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
-      stockSnapshot: z.number().int().min(0).optional(),
+      stockRevision: z.number().int().min(0).optional(),
       note: z.string().max(500).optional(),
     })
     .strict();

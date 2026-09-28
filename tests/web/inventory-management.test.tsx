@@ -18,7 +18,7 @@ const item: Item = {
   borrowed: 0,
   lost: 0,
   damaged: 4,
-  stockSnapshot: 7,
+  stockRevision: 7,
   archived: false,
 };
 const respond = (body: unknown, status = 200) =>
@@ -234,7 +234,7 @@ describe('inventory management UI', () => {
     await user.click(screen.getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]?.path).toBe('/api/inventory/items/1');
-    expect(calls[0]?.body).toMatchObject({ targetAvailable: 17, stockSnapshot: 7, name: 'Hammer' });
+    expect(calls[0]?.body).toMatchObject({ targetAvailable: 17, stockRevision: 7, name: 'Hammer' });
     await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce());
   });
 
@@ -324,10 +324,10 @@ describe('inventory management UI', () => {
     const saves: Record<string, unknown>[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       if (String(url) === '/api/items?all=1')
-        return respond([{ ...item, available: 18, stockSnapshot: 8 }]);
+        return respond([{ ...item, available: 18, stockRevision: 8 }]);
       saves.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       if (saves.length === 1) return respond({ error: 'stale_stock', message: 'stale' }, 409);
-      return respond({ ...item, available: 17, stockSnapshot: 9 });
+      return respond({ ...item, available: 17, stockRevision: 9 });
     });
     const user = userEvent.setup();
     view();
@@ -340,7 +340,7 @@ describe('inventory management UI', () => {
     await user.click(screen.getByRole('button', { name: /בדקתי את היתרות/ }));
     await user.click(screen.getByRole('button', { name: 'שמירה' }));
     await waitFor(() => expect(saves).toHaveLength(2));
-    expect(saves[1]).toMatchObject({ targetAvailable: 17, stockSnapshot: 8 });
+    expect(saves[1]).toMatchObject({ targetAvailable: 17, stockRevision: 8 });
   });
 
   it('keeps count saving blocked if the conflict balance fetch fails', async () => {

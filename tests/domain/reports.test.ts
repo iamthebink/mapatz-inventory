@@ -214,7 +214,7 @@ describe('inventory workbook reports', () => {
         startOfCycleStock: 100,
         addedDuringCycle: 20,
         usage: 30,
-        left: 85,
+        left: 90,
       },
       {
         itemCode: 101,
@@ -246,7 +246,7 @@ describe('inventory workbook reports', () => {
       100,
       20,
       30,
-      85,
+      90,
     ]);
     expect(reportSheet.rowCount).toBe(4);
 
@@ -263,10 +263,10 @@ describe('inventory workbook reports', () => {
     expect(consumablesUsageReport(resetTransfers.snapshot())).toEqual([
       expect.objectContaining({
         itemCode: 100,
-        startOfCycleStock: 85,
+        startOfCycleStock: 90,
         addedDuringCycle: 0,
         usage: 0,
-        left: 85,
+        left: 90,
       }),
       expect.objectContaining({
         itemCode: 101,
