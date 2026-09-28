@@ -1176,7 +1176,7 @@ export function InventoryManagement({
         <Dialog
           title={`למחוק את ${deleteConfirm.name} לצמיתות?`}
           description="המחיקה תסיר את הפריט ואת ההיסטוריה שלו, כולל אזכורים בהיסטוריית שואלים ובדוחות. לא ניתן לשחזר דרך המערכת."
-          level="root"
+          level={editor ? 'subordinate' : 'root'}
           role="alertdialog"
           variant="destructive"
           busy={pending}
