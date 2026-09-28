@@ -4,6 +4,15 @@ import { DataTable, type TableColumn } from './DataTable';
 import { Dialog } from './Dialog';
 import type { Item, Location } from './InventoryDialogs';
 import type { ToastTone } from './Toast';
+import {
+  MANAGEMENT_ATTEMPT_STORAGE_KEY,
+  clearFrozenManagementAttempt,
+  persistFrozenManagementAttempt,
+  readFrozenManagementAttempt,
+  readFrozenManagementAttempts,
+  safeWindowStorage,
+  type FrozenManagementAttempt,
+} from './borrower-workflow-recovery.js';
 
 type Editor =
   { kind: 'item'; item: Item | null } | { kind: 'damage'; item: Item } | { kind: 'locations' };
@@ -76,8 +85,16 @@ export function InventoryManagement({
   const [dirty, setDirty] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState<Item | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<Item | null>(null);
+  const [locationRetirement, setLocationRetirement] = useState<{
+    location: Location;
+    action: 'archive' | 'delete';
+  } | null>(null);
+  const [replacementLocationId, setReplacementLocationId] = useState('');
   const [pending, setPending] = useState(false);
-  const [unresolved, setUnresolved] = useState<Attempt | null>(null);
+  const [unresolved, setUnresolved] = useState<Attempt | null>(() =>
+    readFrozenManagementAttempt(safeWindowStorage()),
+  );
   const [refreshRecovery, setRefreshRecovery] = useState(false);
   const [recoveryDescription, setRecoveryDescription] = useState('');
   const [reviewSnapshot, setReviewSnapshot] = useState<number | null>(null);
@@ -104,14 +121,19 @@ export function InventoryManagement({
     return () => registerLeaveGuard(null);
   }, [dirty, editor, refreshRecovery, registerLeaveGuard, unresolved]);
 
+  useEffect(() => {
+    if (!deleteConfirm) return;
+    const current = items.find((item) => item.id === deleteConfirm.id);
+    if (current !== deleteConfirm) setDeleteConfirm(current ?? null);
+  }, [deleteConfirm, items]);
+
   function open(next: Editor) {
+    if (pendingRef.current || unresolved || refreshRecovery) return;
     triggerRef.current = document.activeElement as HTMLElement;
     setEditor(next);
     setEditorEpoch(ledgerEpoch);
     setLocationEdit(null);
     setDirty(false);
-    setUnresolved(null);
-    setRefreshRecovery(false);
     setRecoveryDescription('');
     setReviewSnapshot(null);
     setReviewRequired(false);
@@ -140,7 +162,7 @@ export function InventoryManagement({
     pendingNavigationRef.current = null;
     if (next) queueMicrotask(next);
   }
-  async function refreshAfterCommit(description = recoveryDescription) {
+  async function refreshAfterCommit(description = recoveryDescription, recoveryCleared = true) {
     if (refreshPendingRef.current) return;
     refreshPendingRef.current = true;
     setPending(true);
@@ -148,11 +170,18 @@ export function InventoryManagement({
       await onRefresh();
       setRefreshRecovery(false);
       setRecoveryDescription('');
-      setUnresolved(null);
       setDirty(false);
       setLocationEdit(null);
       setEditor(null);
-      showToast('המלאי עודכן', 'השינוי נשמר בהצלחה', 'success');
+      setDeleteConfirm(null);
+      setLocationRetirement(null);
+      showToast(
+        recoveryCleared ? 'המלאי עודכן' : 'השינוי נשמר',
+        recoveryCleared
+          ? 'השינוי נשמר בהצלחה'
+          : 'לא ניתן לנקות את ניסיון השחזור. יש לבדוק שוב את אותה פעולה לפני שינוי נוסף.',
+        recoveryCleared ? 'success' : 'warning',
+      );
     } catch (error) {
       setRefreshRecovery(true);
       setRecoveryDescription(description);
@@ -168,15 +197,64 @@ export function InventoryManagement({
   }
   async function send(attempt: Attempt) {
     if (pendingRef.current || refreshRecovery || (unresolved && unresolved !== attempt)) return;
+    const storage = safeWindowStorage();
+    if (!storage) {
+      showToast('לא ניתן לשמור את הפעולה', 'אחסון הדפדפן אינו זמין כרגע', 'error');
+      return;
+    }
+    const frozen: FrozenManagementAttempt = {
+      version: 1,
+      key: String(attempt.body.key ?? ''),
+      path: attempt.path,
+      method: attempt.method,
+      body: attempt.body,
+      ...(attempt.description ? { description: attempt.description } : {}),
+    };
+    const otherAttempt = readFrozenManagementAttempts(storage).find(
+      (saved) => saved.key !== frozen.key,
+    );
+    const retryingCurrentAttempt = String(unresolved?.body.key ?? '') === frozen.key;
+    if (otherAttempt && !retryingCurrentAttempt) {
+      setUnresolved(otherAttempt);
+      showToast(
+        'פעולה קודמת ממתינה לבדיקה',
+        'יש לבדוק תחילה את אותה פעולה לפני שליחת שינוי נוסף',
+        'warning',
+      );
+      return;
+    }
+    if (!persistFrozenManagementAttempt(storage, frozen)) {
+      showToast('לא ניתן לשמור את הפעולה', 'בדוק את שטח האחסון בדפדפן לפני שליחה', 'error');
+      return;
+    }
+    const clearAttempt = (): boolean => {
+      const cleared = clearFrozenManagementAttempt(
+        safeWindowStorage(),
+        MANAGEMENT_ATTEMPT_STORAGE_KEY,
+        frozen.key,
+      );
+      if (cleared) setUnresolved(readFrozenManagementAttempt(safeWindowStorage()));
+      else setUnresolved(attempt);
+      return cleared;
+    };
     pendingRef.current = true;
     setPending(true);
     try {
       await api(attempt.path, { method: attempt.method, body: JSON.stringify(attempt.body) });
-      setUnresolved(null);
-      await refreshAfterCommit(attempt.description);
+      const recoveryCleared = clearAttempt();
+      setDeleteConfirm(null);
+      setLocationRetirement(null);
+      await refreshAfterCommit(attempt.description, recoveryCleared);
     } catch (error) {
       if (error instanceof ApiError && error.code === 'stale_stock' && editor?.kind === 'item') {
-        setUnresolved(null);
+        if (!clearAttempt()) {
+          showToast(
+            'הפעולה נדחתה',
+            'אחסון השחזור אינו זמין. יש לבדוק שוב את אותה פעולה לפני שינוי נוסף.',
+            'warning',
+          );
+          return;
+        }
         setReviewRequired(true);
         setCurrentBalances(null);
         setReviewSnapshot(null);
@@ -188,10 +266,30 @@ export function InventoryManagement({
         }
         showToast('המלאי השתנה', 'יש לבדוק את היתרות העדכניות לפני שמירת הכמות', 'warning');
       } else if (error instanceof ApiError && error.status < 500) {
-        setUnresolved(null);
-        showToast('השמירה נדחתה', error.message, 'error');
+        clearAttempt();
+        if (error.code === 'confirmation_changed') {
+          setDeleteConfirm(null);
+          setLocationRetirement(null);
+          try {
+            await onRefresh();
+          } catch {
+            showToast('רענון נכשל', 'יש לרענן את הנתונים לפני אישור מחדש', 'error');
+          }
+          showToast('נדרשת בדיקה מחדש', error.message, 'warning');
+        } else {
+          if (error.code === 'deletion_ineligible') {
+            try {
+              await onRefresh();
+            } catch {
+              /* The blocking balances are still reported by the command. */
+            }
+          }
+          showToast('השמירה נדחתה', error.message, 'error');
+        }
       } else {
         setUnresolved(attempt);
+        setDeleteConfirm(null);
+        setLocationRetirement(null);
         showToast(
           'תוצאת הפעולה אינה ידועה',
           'יש לבדוק שוב את אותה פעולה לפני שינוי נוסף',
@@ -299,6 +397,23 @@ export function InventoryManagement({
       },
     });
   }
+  function deleteItem(item: Item) {
+    if (!admin || ledgerEpoch === null || pendingRef.current || unresolved || refreshRecovery)
+      return;
+    void send({
+      path: `/inventory/items/${item.id}/delete`,
+      method: 'POST',
+      body: {
+        key: crypto.randomUUID(),
+        ledgerEpoch,
+        expectedStockRevision: item.stockRevision,
+        expectedCode: item.code,
+        expectedName: item.name,
+        expectedLocationId: item.locationId,
+      },
+      description: `מחיקת פריט: ${item.name}`,
+    });
+  }
   function editLocation(location: Location | 'new') {
     open({ kind: 'locations' });
     setLocationEdit(location);
@@ -329,7 +444,7 @@ export function InventoryManagement({
       },
     });
   }
-  function archiveLocation(location: Location) {
+  function restoreLocation(location: Location) {
     if (!admin || ledgerEpoch === null || pendingRef.current || unresolved || refreshRecovery)
       return;
     void send({
@@ -340,10 +455,39 @@ export function InventoryManagement({
         ledgerEpoch,
         name: location.name,
         code: location.code,
-        archived: !location.archived,
+        archived: false,
       },
-      description: `${location.archived ? 'שחזור' : 'ארכוב'}: ${location.name}`,
+      description: `שחזור מיקום: ${location.name}`,
     });
+  }
+  function retireLocation(location: Location, action: 'archive' | 'delete') {
+    setReplacementLocationId('');
+    setLocationRetirement({ location, action });
+  }
+  function confirmLocationRetirement() {
+    if (!locationRetirement || ledgerEpoch === null || pendingRef.current) return;
+    const { location, action } = locationRetirement;
+    const affected = items
+      .filter((item) => item.locationId === location.id)
+      .map((item) => item.id)
+      .sort((left, right) => left - right);
+    void send({
+      path: `/inventory/locations/${location.id}/retire`,
+      method: 'POST',
+      body: {
+        key: crypto.randomUUID(),
+        ledgerEpoch,
+        action,
+        expectedCode: location.code,
+        expectedName: location.name,
+        ...(affected.length && replacementLocationId
+          ? { replacementLocationId: Number(replacementLocationId) }
+          : {}),
+        expectedItemIds: affected,
+      },
+      description: `${action === 'archive' ? 'ארכוב' : 'מחיקת'} מיקום: ${location.name}`,
+    });
+    setLocationRetirement(null);
   }
   const filtered = useMemo(
     () =>
@@ -416,18 +560,38 @@ export function InventoryManagement({
       key: 'action',
       label: 'פעולה',
       render: (item) => (
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={item.archived || item.damaged === 0}
-          onClick={() => open({ kind: 'damage', item })}
-        >
-          טיפול בפגומים
-        </button>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={
+              item.archived || item.damaged === 0 || pending || !!unresolved || refreshRecovery
+            }
+            onClick={() => open({ kind: 'damage', item })}
+          >
+            טיפול בפגומים
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={!admin || pending || !!unresolved || refreshRecovery}
+            onClick={() => setDeleteConfirm(item)}
+          >
+            מחיקה
+          </button>
+        </div>
       ),
     },
   ];
   const selected = editor?.kind === 'item' ? editor.item : null;
+  const confirmedLocationItems = locationRetirement
+    ? items.filter((item) => item.locationId === locationRetirement.location.id)
+    : [];
+  const activeRetirementDestinations = locationRetirement
+    ? locations.filter(
+        (location) => !location.archived && location.id !== locationRetirement.location.id,
+      )
+    : [];
   const lockedDraft = pending || !!unresolved || refreshRecovery;
   const field = (key: keyof Draft, label: string, disabled = false) => (
     <label className="field-label">
@@ -491,6 +655,34 @@ export function InventoryManagement({
           </button>
         )}
       </div>
+      {!editor && unresolved && (
+        <div className="inventory-location-recovery" role="status">
+          <span>{unresolved.description ?? 'פעולה בניהול מלאי'}: תוצאת הפעולה אינה ידועה</span>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={pending}
+            onClick={() => void send(unresolved)}
+          >
+            בדוק שוב את אותה פעולה
+          </button>
+        </div>
+      )}
+      {!editor && refreshRecovery && (
+        <div className="inventory-location-recovery" role="status">
+          <span>
+            {recoveryDescription ? `${recoveryDescription} נשמר; ` : ''}רענון הנתונים נכשל
+          </span>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={pending}
+            onClick={() => void refreshAfterCommit()}
+          >
+            רענון נתונים
+          </button>
+        </div>
+      )}
       <div id="inventory-view-panel" aria-label="טבלת מלאי" hidden={view !== 'inventory'}>
         <DataTable
           rows={filtered}
@@ -584,9 +776,21 @@ export function InventoryManagement({
                         type="button"
                         className="secondary-button"
                         disabled={!admin || pending || !!unresolved || refreshRecovery}
-                        onClick={() => archiveLocation(location)}
+                        onClick={() =>
+                          location.archived
+                            ? restoreLocation(location)
+                            : retireLocation(location, 'archive')
+                        }
                       >
                         {location.archived ? 'שחזור' : 'ארכוב'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={!admin || pending || !!unresolved || refreshRecovery}
+                        onClick={() => retireLocation(location, 'delete')}
+                      >
+                        מחיקה
                       </button>
                     </div>
                   </td>
@@ -597,34 +801,6 @@ export function InventoryManagement({
         </div>
         {filteredLocations.length === 0 && (
           <p className="inventory-locations-empty">לא נמצאו מיקומים</p>
-        )}
-        {!editor && unresolved && (
-          <div className="inventory-location-recovery">
-            <span>{unresolved.description ?? 'פעולה במיקום'}: תוצאת הפעולה אינה ידועה</span>
-            <button
-              className="primary-button"
-              type="button"
-              disabled={pending}
-              onClick={() => void send(unresolved)}
-            >
-              בדוק שוב את אותה פעולה
-            </button>
-          </div>
-        )}
-        {!editor && refreshRecovery && (
-          <div className="inventory-location-recovery">
-            <span>
-              {recoveryDescription ? `${recoveryDescription} נשמר; ` : ''}רענון הנתונים נכשל
-            </span>
-            <button
-              className="primary-button"
-              type="button"
-              disabled={pending}
-              onClick={() => void refreshAfterCommit()}
-            >
-              רענון נתונים
-            </button>
-          </div>
         )}
       </div>
       {editor && (
@@ -809,6 +985,16 @@ export function InventoryManagement({
                     {selected.archived ? 'שחזור פריט' : 'העברה לארכיון'}
                   </button>
                 )}
+                {selected && (
+                  <button
+                    type="button"
+                    className="danger-button"
+                    disabled={!admin || pending || !!unresolved || refreshRecovery}
+                    onClick={() => setDeleteConfirm(selected)}
+                  >
+                    מחיקה לצמיתות
+                  </button>
+                )}
                 <button type="button" className="secondary-button" onClick={close}>
                   ביטול
                 </button>
@@ -982,6 +1168,122 @@ export function InventoryManagement({
               }}
             >
               ארכוב ואיפוס מלאי זמין
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {deleteConfirm && (
+        <Dialog
+          title={`למחוק את ${deleteConfirm.name} לצמיתות?`}
+          description="המחיקה תסיר את הפריט ואת ההיסטוריה שלו, כולל אזכורים בהיסטוריית שואלים ובדוחות. לא ניתן לשחזר דרך המערכת."
+          level="root"
+          role="alertdialog"
+          variant="destructive"
+          busy={pending}
+          dismissible={!pending}
+          onClose={() => setDeleteConfirm(null)}
+          returnFocusFallbackRef={fallbackRef}
+        >
+          <div className="dialog-fields">
+            <p>
+              קוד {deleteConfirm.code} · זמין למחיקה: {deleteConfirm.available}
+            </p>
+            {(deleteConfirm.borrowed || deleteConfirm.damaged || deleteConfirm.lost) > 0 && (
+              <p role="alert">
+                המחיקה חסומה: מושאל {deleteConfirm.borrowed}, פגום {deleteConfirm.damaged}, אבוד{' '}
+                {deleteConfirm.lost}.
+              </p>
+            )}
+          </div>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={pending}
+              onClick={() => setDeleteConfirm(null)}
+            >
+              ביטול
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              disabled={
+                !admin ||
+                pending ||
+                !!unresolved ||
+                refreshRecovery ||
+                Boolean(deleteConfirm.borrowed || deleteConfirm.damaged || deleteConfirm.lost)
+              }
+              onClick={() => deleteItem(deleteConfirm)}
+            >
+              מחיקה לצמיתות
+            </button>
+          </div>
+        </Dialog>
+      )}
+      {locationRetirement && (
+        <Dialog
+          title={
+            locationRetirement.action === 'archive'
+              ? `לארכב את ${locationRetirement.location.name}?`
+              : `למחוק את ${locationRetirement.location.name}?`
+          }
+          description={
+            confirmedLocationItems.length > 0
+              ? `כל ${confirmedLocationItems.length} הפריטים, כולל פריטים שבארכיון, יועברו למיקום הפעיל שתבחר. הפעולה תתבצע יחד עם ${locationRetirement.action === 'archive' ? 'ארכוב' : 'מחיקת'} המיקום.`
+              : `המיקום ריק. ${locationRetirement.action === 'archive' ? 'הוא יועבר לארכיון.' : 'הוא יימחק לצמיתות.'}`
+          }
+          level="root"
+          role="alertdialog"
+          variant="destructive"
+          busy={pending}
+          dismissible={!pending}
+          onClose={() => setLocationRetirement(null)}
+          returnFocusFallbackRef={fallbackRef}
+        >
+          {confirmedLocationItems.length > 0 && (
+            <label className="field-label">
+              להעביר את כל הפריטים אל
+              <select
+                className="input-field"
+                value={replacementLocationId}
+                disabled={pending || !!unresolved || refreshRecovery}
+                onChange={(event) => setReplacementLocationId(event.target.value)}
+              >
+                <option value="">בחירת מיקום פעיל</option>
+                {activeRetirementDestinations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {confirmedLocationItems.length > 0 && activeRetirementDestinations.length === 0 && (
+            <p role="alert">אין מיקום פעיל אחר. יש ליצור או להפעיל מיקום לפני הפרישה.</p>
+          )}
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={pending}
+              onClick={() => setLocationRetirement(null)}
+            >
+              ביטול
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              disabled={
+                !admin ||
+                pending ||
+                !!unresolved ||
+                refreshRecovery ||
+                (confirmedLocationItems.length > 0 && !replacementLocationId)
+              }
+              onClick={confirmLocationRetirement}
+            >
+              {locationRetirement.action === 'archive' ? 'ארכוב והעברה' : 'מחיקה והעברה'}
             </button>
           </div>
         </Dialog>

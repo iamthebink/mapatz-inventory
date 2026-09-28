@@ -7,6 +7,12 @@ import type {
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
+import {
+  allocateIdentity,
+  getIdentityHighWater,
+  identityHighWaterReceiptKey,
+  persistIdentityHighWater,
+} from '../db/identity-high-water.js';
 import { normalizeItemName } from './item-name.js';
 import { periodBounds } from './period-summary.js';
 import type { PeriodSummary } from '../contracts/period-summary.js';
@@ -35,6 +41,7 @@ type Row = Record<string, any>;
 
 const maxAliases = 20;
 const itemStateColumns = `s.available,s.borrowed,s.damaged,s.lost,s.revision stockRevision`;
+const staleIdentityReceipt = '{"staleIdentity":true}';
 
 type CommandKind = 'borrower_operation' | 'borrower_create';
 type Receipt = {
@@ -70,6 +77,13 @@ function integer(value: number, label = 'quantity'): number {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new DomainError('invalid_quantity', `${label} must be a positive integer`);
   return value;
+}
+
+function chunked<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size)
+    chunks.push(values.slice(index, index + size));
+  return chunks;
 }
 
 export class InventoryService {
@@ -237,19 +251,23 @@ export class InventoryService {
   }
 
   createLocation(code: string, name: string): Row {
-    const result = this.db
-      .prepare('INSERT INTO locations(code,name) VALUES (?,?)')
-      .run(code.trim(), name.trim());
-    return this.db
-      .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
-      .get(result.lastInsertRowid) as Row;
+    const create = () => {
+      const id = allocateIdentity(this.db, 'location');
+      this.db
+        .prepare('INSERT INTO locations(id,code,name) VALUES (?,?,?)')
+        .run(id, code.trim(), name.trim());
+      return this.db
+        .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
+        .get(id) as Row;
+    };
+    return this.db.isTransaction ? create() : transaction(this.db, create);
   }
 
   updateLocation(id: number, input: { code: string; name: string; archived?: boolean }): void {
     transaction(this.db, () => {
       if (input.archived) {
         const blockers = this.db
-          .prepare('SELECT code,name FROM items WHERE location_id=? AND archived=0 ORDER BY code')
+          .prepare('SELECT code,name FROM items WHERE location_id=? ORDER BY code')
           .all(id) as Row[];
         if (blockers.length)
           throw new DomainError(
@@ -280,6 +298,7 @@ export class InventoryService {
   }): Row {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
       this.requireInventoryEpoch(input.ledgerEpoch);
       const receipt = this.db
         .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
@@ -287,7 +306,7 @@ export class InventoryService {
       if (receipt) {
         if (receipt.request_hash !== hash)
           throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
-        return JSON.parse(String(receipt.result_json)) as Row;
+        return this.decodeCommandReceipt<Row>(receipt);
       }
       const code = input.code.trim();
       const name = input.name.trim();
@@ -295,17 +314,17 @@ export class InventoryService {
         throw new DomainError('invalid_location', 'יש להזין שם וקוד תקינים');
       let locationId = input.locationId;
       if (locationId === undefined) {
-        locationId = Number(
-          this.db.prepare('INSERT INTO locations(code,name) VALUES (?,?)').run(code, name)
-            .lastInsertRowid,
-        );
+        locationId = allocateIdentity(this.db, 'location');
+        this.db
+          .prepare('INSERT INTO locations(id,code,name) VALUES (?,?,?)')
+          .run(locationId, code, name);
       } else {
         const current = this.db.prepare('SELECT id FROM locations WHERE id=?').get(locationId) as
           Row | undefined;
         if (!current) throw new DomainError('not_found', 'Location not found', 404);
         if (input.archived) {
           const blockers = this.db
-            .prepare('SELECT code,name FROM items WHERE location_id=? AND archived=0 ORDER BY code')
+            .prepare('SELECT code,name FROM items WHERE location_id=? ORDER BY code')
             .all(locationId) as Row[];
           if (blockers.length)
             throw new DomainError(
@@ -328,6 +347,88 @@ export class InventoryService {
         )
         .run(input.key, hash, JSON.stringify(response));
       return response;
+    });
+  }
+
+  retireLocationCommand(input: {
+    key: string;
+    ledgerEpoch: number;
+    locationId: number;
+    action: 'archive' | 'delete';
+    replacementLocationId?: number;
+    expectedItemIds: number[];
+    expectedCode: string;
+    expectedName: string;
+  }): { action: 'archive' | 'delete'; locationId: number; movedItemIds: number[] } {
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
+      const receipt = this.findInventoryCommandReceipt(input.key);
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return this.decodeCommandReceipt<{
+          action: 'archive' | 'delete';
+          locationId: number;
+          movedItemIds: number[];
+        }>(receipt);
+      }
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const location = this.db
+        .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
+        .get(input.locationId) as Row | undefined;
+      if (!location) throw new DomainError('not_found', 'Location not found', 404);
+      if (location.code !== input.expectedCode || location.name !== input.expectedName)
+        throw new DomainError('confirmation_changed', 'פרטי המיקום השתנו; יש לבדוק ולאשר שוב', 409);
+      if (input.action === 'archive' && location.archived)
+        throw new DomainError('location_already_archived', 'המיקום כבר בארכיון', 409);
+      const itemIds = (
+        this.db
+          .prepare('SELECT id FROM items WHERE location_id=? ORDER BY id')
+          .all(input.locationId) as Row[]
+      ).map((row) => Number(row.id));
+      if (!sameNumberList(itemIds, input.expectedItemIds))
+        throw new DomainError(
+          'confirmation_changed',
+          'תכולת המיקום השתנתה; יש לבדוק ולאשר שוב',
+          409,
+        );
+      if (itemIds.length > 0) {
+        const destinationId = input.replacementLocationId;
+        if (destinationId === undefined)
+          throw new DomainError('destination_required', 'יש לבחור מיקום פעיל להעברת הפריטים', 409);
+        if (destinationId === input.locationId)
+          throw new DomainError('invalid_destination', 'יש לבחור מיקום אחר', 409);
+        this.requireActiveLocation(destinationId);
+      } else if (input.replacementLocationId !== undefined) {
+        if (input.replacementLocationId === input.locationId)
+          throw new DomainError('invalid_destination', 'יש לבחור מיקום אחר', 409);
+        this.requireActiveLocation(input.replacementLocationId);
+      }
+
+      this.persistCurrentIdentityHighWater();
+      const nextRevision = this.bumpStateRevision();
+      if (itemIds.length > 0)
+        this.db
+          .prepare('UPDATE items SET location_id=? WHERE location_id=?')
+          .run(input.replacementLocationId!, input.locationId);
+      if (input.action === 'archive')
+        this.db.prepare('UPDATE locations SET archived=1 WHERE id=?').run(input.locationId);
+      else this.db.prepare('DELETE FROM locations WHERE id=?').run(input.locationId);
+      this.scrubInventoryCommandReceipts(
+        (value) =>
+          this.isLocationReceiptFor(value, input.locationId) ||
+          itemIds.some((id) => this.isItemReceiptFor(value, id)),
+      );
+      for (const itemIdChunk of chunked(itemIds, 900))
+        this.db
+          .prepare(
+            `UPDATE item_state SET revision=? WHERE item_id IN (${placeholders(itemIdChunk.length)})`,
+          )
+          .run(nextRevision, ...itemIdChunk);
+      const result = { action: input.action, locationId: input.locationId, movedItemIds: itemIds };
+      this.insertInventoryCommandReceipt(input.key, hash, result);
+      return result;
     });
   }
 
@@ -359,10 +460,10 @@ export class InventoryService {
           .next_code,
       );
       this.db.prepare('UPDATE code_sequence SET next_code=next_code+1 WHERE singleton=1').run();
-      const result = this.db
-        .prepare('INSERT INTO items(code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
-        .run(code, name, input.kind, input.lotSize ?? null, input.locationId ?? null);
-      const id = Number(result.lastInsertRowid);
+      const id = allocateIdentity(this.db, 'item');
+      this.db
+        .prepare('INSERT INTO items(id,code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?,?)')
+        .run(id, code, name, input.kind, input.lotSize ?? null, input.locationId ?? null);
       this.setAliases(id, input.aliases ?? []);
       this.db
         .prepare(
@@ -416,6 +517,7 @@ export class InventoryService {
   }): Item {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
       this.requireInventoryEpoch(input.ledgerEpoch);
       const receipt = this.db
         .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
@@ -423,7 +525,7 @@ export class InventoryService {
       if (receipt) {
         if (receipt.request_hash !== hash)
           throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
-        return JSON.parse(String(receipt.result_json)) as Item;
+        return this.decodeCommandReceipt<Item>(receipt);
       }
       this.requireActiveLocation(input.locationId);
       if (
@@ -494,11 +596,10 @@ export class InventoryService {
         .next_code,
     );
     this.db.prepare('UPDATE code_sequence SET next_code=next_code+1 WHERE singleton=1').run();
-    const id = Number(
-      this.db
-        .prepare('INSERT INTO items(code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
-        .run(code, input.name.trim(), input.kind, input.lotSize, input.locationId).lastInsertRowid,
-    );
+    const id = allocateIdentity(this.db, 'item');
+    this.db
+      .prepare('INSERT INTO items(id,code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?,?)')
+      .run(id, code, input.name.trim(), input.kind, input.lotSize, input.locationId);
     this.setAliases(id, input.aliases);
     this.db
       .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)')
@@ -528,6 +629,7 @@ export class InventoryService {
   }): { itemId: number; archived: boolean } {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
       this.requireInventoryEpoch(input.ledgerEpoch);
       const receipt = this.db
         .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
@@ -535,7 +637,7 @@ export class InventoryService {
       if (receipt) {
         if (receipt.request_hash !== hash)
           throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
-        return JSON.parse(String(receipt.result_json)) as { itemId: number; archived: boolean };
+        return this.decodeCommandReceipt<{ itemId: number; archived: boolean }>(receipt);
       }
       this.archiveItemInTransaction(input.itemId, input.archived, input.locationId);
       const result = { itemId: input.itemId, archived: input.archived };
@@ -544,6 +646,173 @@ export class InventoryService {
           'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
         )
         .run(input.key, hash, JSON.stringify(result));
+      return result;
+    });
+  }
+
+  deleteItemCommand(input: {
+    key: string;
+    ledgerEpoch: number;
+    itemId: number;
+    expectedStockRevision: number;
+    expectedCode: number;
+    expectedName: string;
+    expectedLocationId: number | null;
+  }): { outcome: 'committed'; action: 'delete_item'; itemId: number } {
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
+      const receipt = this.findInventoryCommandReceipt(input.key);
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return this.decodeCommandReceipt<{
+          outcome: 'committed';
+          action: 'delete_item';
+          itemId: number;
+        }>(receipt);
+      }
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const item = this.getItem(input.itemId);
+      if (
+        item.code !== input.expectedCode ||
+        item.name !== input.expectedName ||
+        item.locationId !== input.expectedLocationId
+      )
+        throw new DomainError('confirmation_changed', 'פרטי הפריט השתנו; יש לבדוק ולאשר שוב', 409);
+      if (item.borrowed || item.damaged || item.lost)
+        throw new DomainError(
+          'deletion_ineligible',
+          `לא ניתן למחוק: מושאל ${item.borrowed}, פגום ${item.damaged}, אבוד ${item.lost}`,
+          409,
+        );
+      if (item.stockRevision !== input.expectedStockRevision)
+        throw new DomainError('confirmation_changed', 'יתרות הפריט השתנו; יש לבדוק ולאשר שוב', 409);
+      const eventIds = (
+        this.db
+          .prepare('SELECT id FROM inventory_events WHERE item_id=?')
+          .all(input.itemId) as Row[]
+      ).map((row) => Number(row.id));
+      this.persistCurrentIdentityHighWater();
+      this.withLedgerDeletionGuard(() => {
+        this.db.prepare('DELETE FROM loan_state WHERE item_id=?').run(input.itemId);
+        this.deleteEventIds(eventIds);
+        this.db.prepare('DELETE FROM items WHERE id=?').run(input.itemId);
+        this.scrubInventoryCommandReceipts(
+          (value) =>
+            this.isItemReceiptFor(value, input.itemId) ||
+            (typeof value.eventId === 'number' && eventIds.includes(value.eventId)),
+        );
+      });
+      this.bumpStateRevision();
+      const result = { outcome: 'committed', action: 'delete_item', itemId: input.itemId } as const;
+      this.insertInventoryCommandReceipt(input.key, hash, result);
+      return result;
+    });
+  }
+
+  borrowerDeletionStatus(id: number): {
+    borrower: Borrower;
+    outstanding: number;
+    lost: number;
+    stateRevision: number;
+  } {
+    return readTransaction(this.db, () => {
+      const borrower = this.getBorrower(id);
+      const balances = this.db
+        .prepare(
+          'SELECT COALESCE(SUM(outstanding),0) outstanding,COALESCE(SUM(lost),0) lost FROM loan_state WHERE borrower_id=?',
+        )
+        .get(id) as Row;
+      const revision = this.db
+        .prepare('SELECT revision FROM state_clock WHERE singleton=1')
+        .get() as Row;
+      return {
+        borrower,
+        outstanding: Number(balances.outstanding),
+        lost: Number(balances.lost),
+        stateRevision: Number(revision.revision),
+      };
+    });
+  }
+
+  deleteBorrowerCommand(input: {
+    key: string;
+    ledgerEpoch: number;
+    borrowerId: number;
+    expectedStateRevision: number;
+    expectedOutstanding: number;
+    expectedLost: number;
+    expectedName: string;
+    expectedUsername: string;
+  }): { outcome: 'committed'; action: 'delete_borrower'; borrowerId: number } {
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
+      const receipt = this.findInventoryCommandReceipt(input.key);
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return this.decodeCommandReceipt<{
+          outcome: 'committed';
+          action: 'delete_borrower';
+          borrowerId: number;
+        }>(receipt);
+      }
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const borrower = this.getBorrower(input.borrowerId);
+      if (borrower.name !== input.expectedName || borrower.username !== input.expectedUsername)
+        throw new DomainError('confirmation_changed', 'פרטי השואל השתנו; יש לבדוק ולאשר שוב', 409);
+      const balances = this.db
+        .prepare(
+          'SELECT COALESCE(SUM(outstanding),0) outstanding,COALESCE(SUM(lost),0) lost FROM loan_state WHERE borrower_id=?',
+        )
+        .get(input.borrowerId) as Row;
+      const outstanding = Number(balances.outstanding);
+      const lost = Number(balances.lost);
+      const revision = Number(
+        (this.db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get() as Row)
+          .revision,
+      );
+      if (outstanding || lost)
+        throw new DomainError(
+          'deletion_ineligible',
+          `לא ניתן למחוק שואל עם יתרות: מושאל ${outstanding}, אבוד ${lost}`,
+          409,
+        );
+      if (
+        revision !== input.expectedStateRevision ||
+        outstanding !== input.expectedOutstanding ||
+        lost !== input.expectedLost
+      )
+        throw new DomainError('confirmation_changed', 'יתרות השואל השתנו; יש לבדוק ולאשר שוב', 409);
+      const eventIds = (
+        this.db
+          .prepare('SELECT id FROM inventory_events WHERE borrower_id=?')
+          .all(input.borrowerId) as Row[]
+      ).map((row) => Number(row.id));
+      this.persistCurrentIdentityHighWater();
+      this.withLedgerDeletionGuard(() => {
+        this.db.prepare('DELETE FROM loan_state WHERE borrower_id=?').run(input.borrowerId);
+        this.deleteEventIds(eventIds);
+        this.db.prepare('DELETE FROM borrowers WHERE id=?').run(input.borrowerId);
+        this.scrubInventoryCommandReceipts(
+          (value) =>
+            this.isBorrowerReceiptFor(value, input.borrowerId) ||
+            (typeof value.eventId === 'number' && eventIds.includes(value.eventId)),
+        );
+        this.db
+          .prepare('UPDATE idempotency_receipts SET result_json=? WHERE subject_id=?')
+          .run(staleIdentityReceipt, input.borrowerId);
+      });
+      this.scrubBorrowerReceipts(input.borrowerId);
+      this.bumpStateRevision();
+      const result = {
+        outcome: 'committed',
+        action: 'delete_borrower',
+        borrowerId: input.borrowerId,
+      } as const;
+      this.insertInventoryCommandReceipt(input.key, hash, result);
       return result;
     });
   }
@@ -576,10 +845,14 @@ export class InventoryService {
     contact?: string;
     type: BorrowerType;
   }): Borrower {
-    const result = this.db
-      .prepare('INSERT INTO borrowers(username,name,contact,type) VALUES (?,?,?,?)')
-      .run(input.username.trim(), input.name.trim(), input.contact ?? '', input.type);
-    return this.getBorrower(Number(result.lastInsertRowid));
+    const create = () => {
+      const id = allocateIdentity(this.db, 'borrower');
+      this.db
+        .prepare('INSERT INTO borrowers(id,username,name,contact,type) VALUES (?,?,?,?,?)')
+        .run(id, input.username.trim(), input.name.trim(), input.contact ?? '', input.type);
+      return this.getBorrower(id);
+    };
+    return this.db.isTransaction ? create() : transaction(this.db, create);
   }
 
   commitBorrowerOperations(
@@ -601,6 +874,8 @@ export class InventoryService {
           requestHash,
         );
         if (mismatch) return mismatch;
+        if (receipt.result_json === staleIdentityReceipt)
+          return this.staleIdentityProtocolError(idempotencyKey);
         if (receipt.outcome === 'committed')
           return {
             ...(JSON.parse(receipt.result_json ?? '{}') as BorrowerOperationResult),
@@ -722,6 +997,8 @@ export class InventoryService {
           requestHash,
         );
         if (mismatch) return mismatch;
+        if (receipt.result_json === staleIdentityReceipt)
+          return this.staleIdentityProtocolError(idempotencyKey);
         if (receipt.outcome === 'committed')
           return {
             ...(JSON.parse(receipt.result_json ?? '{}') as BorrowerCreateResult),
@@ -763,10 +1040,11 @@ export class InventoryService {
         return result;
       }
 
-      const inserted = this.db
-        .prepare('INSERT INTO borrowers(username,name,contact,type) VALUES (?,?,?,?)')
-        .run(request.username, request.name, request.contact, request.type);
-      const borrower = this.getBorrower(Number(inserted.lastInsertRowid));
+      const borrowerId = allocateIdentity(this.db, 'borrower');
+      this.db
+        .prepare('INSERT INTO borrowers(id,username,name,contact,type) VALUES (?,?,?,?,?)')
+        .run(borrowerId, request.username, request.name, request.contact, request.type);
+      const borrower = this.getBorrower(borrowerId);
       const result: BorrowerCreateResult = {
         outcome: 'committed',
         idempotencyKey,
@@ -932,6 +1210,7 @@ export class InventoryService {
       throw new DomainError('validation_error', 'Invalid consumable batch');
     const hash = createHash('sha256').update(stableJson(input)).digest('hex');
     return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
       const receipt = this.db
         .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
         .get(input.key) as Row | undefined;
@@ -939,9 +1218,7 @@ export class InventoryService {
         if (receipt.request_hash !== hash)
           throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
         return {
-          ...(JSON.parse(String(receipt.result_json)) as ReturnType<
-            InventoryService['issueBatch']
-          >),
+          ...this.decodeCommandReceipt<ReturnType<InventoryService['issueBatch']>>(receipt),
           replayed: true,
         };
       }
@@ -1082,6 +1359,7 @@ export class InventoryService {
     if (input.note.length > 500) throw new DomainError('invalid_note', 'הערה ארוכה מדי');
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
       this.requireInventoryEpoch(input.ledgerEpoch);
       const receipt = this.db
         .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
@@ -1089,7 +1367,7 @@ export class InventoryService {
       if (receipt) {
         if (receipt.request_hash !== hash)
           throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
-        return JSON.parse(String(receipt.result_json)) as { eventId: number };
+        return this.decodeCommandReceipt<{ eventId: number }>(receipt);
       }
       const item = this.requireItem(input.itemId);
       integer(input.quantity);
@@ -1703,13 +1981,159 @@ export class InventoryService {
     relatedId: number | null,
     note: string,
   ): number {
-    const result = this.db
+    const id = allocateIdentity(this.db, 'event');
+    this.db
       .prepare(
-        `INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,related_event_id,note)
-      VALUES (?,?,?,?,?,?)`,
+        `INSERT INTO inventory_events(id,kind,item_id,borrower_id,quantity,related_event_id,note)
+      VALUES (?,?,?,?,?,?,?)`,
       )
-      .run(kind, itemId, borrowerId, integer(quantity), relatedId, note);
-    return Number(result.lastInsertRowid);
+      .run(id, kind, itemId, borrowerId, integer(quantity), relatedId, note);
+    return id;
+  }
+
+  private findInventoryCommandReceipt(key: string): Row | undefined {
+    this.requireBusinessCommandKey(key);
+    return this.db
+      .prepare('SELECT request_hash,result_json FROM inventory_command_receipts WHERE key=?')
+      .get(key) as Row | undefined;
+  }
+
+  private insertInventoryCommandReceipt(key: string, hash: string, result: unknown): void {
+    this.requireBusinessCommandKey(key);
+    this.db
+      .prepare(
+        'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
+      )
+      .run(key, hash, JSON.stringify(result));
+  }
+
+  private decodeCommandReceipt<Result>(receipt: Row): Result {
+    let value: unknown;
+    try {
+      value = JSON.parse(String(receipt.result_json));
+    } catch {
+      throw new DomainError('integrity_error', 'Stored command receipt is invalid', 500);
+    }
+    if (isRecord(value) && value.staleIdentity === true)
+      throw new DomainError('stale_identity', 'הפעולה המקורית מתייחסת לרשומה שנמחקה', 409);
+    return value as Result;
+  }
+
+  private staleIdentityProtocolError(idempotencyKey: string): CommandProtocolError {
+    return {
+      error: 'idempotency_key_reused',
+      message: 'The original command refers to a deleted borrower or inventory record',
+      outcome: 'protocol_error',
+      idempotencyKey,
+    };
+  }
+
+  private persistCurrentIdentityHighWater(): void {
+    persistIdentityHighWater(this.db, getIdentityHighWater(this.db));
+  }
+
+  private bumpStateRevision(): number {
+    const row = this.db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get() as
+      Row | undefined;
+    const current = Number(row?.revision);
+    if (!row || !Number.isSafeInteger(current + 1))
+      throw new DomainError('integrity_error', 'State revision is missing or exhausted', 500);
+    const revision = current + 1;
+    this.db.prepare('UPDATE state_clock SET revision=? WHERE singleton=1').run(revision);
+    return revision;
+  }
+
+  private withLedgerDeletionGuard(operation: () => void): void {
+    const guard = this.db
+      .prepare('SELECT enabled FROM inventory_replacement_guard WHERE singleton=1')
+      .get() as Row | undefined;
+    if (!guard || Number(guard.enabled) !== 0)
+      throw new DomainError('integrity_error', 'Ledger deletion guard is unavailable', 500);
+    this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
+    try {
+      operation();
+    } finally {
+      this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
+    }
+  }
+
+  private deleteEventIds(eventIds: number[]): void {
+    if (eventIds.length === 0) return;
+    for (const eventIdChunk of chunked(eventIds, 900)) {
+      const ids = placeholders(eventIdChunk.length);
+      this.db
+        .prepare(
+          `UPDATE inventory_events SET related_event_id=NULL WHERE related_event_id IN (${ids})`,
+        )
+        .run(...eventIdChunk);
+      this.db.prepare(`DELETE FROM inventory_events WHERE id IN (${ids})`).run(...eventIdChunk);
+    }
+  }
+
+  private requireBusinessCommandKey(key: string): void {
+    if (key === identityHighWaterReceiptKey)
+      throw new DomainError('idempotency_conflict', 'מפתח הפעולה שמור למערכת', 409);
+  }
+
+  private scrubInventoryCommandReceipts(
+    matches: (value: Record<string, unknown>) => boolean,
+  ): void {
+    const receipts = this.db
+      .prepare('SELECT key,result_json FROM inventory_command_receipts')
+      .all() as Row[];
+    const update = this.db.prepare(
+      'UPDATE inventory_command_receipts SET result_json=? WHERE key=?',
+    );
+    for (const receipt of receipts) {
+      if (receipt.key === identityHighWaterReceiptKey) continue;
+      let value: unknown;
+      try {
+        value = JSON.parse(String(receipt.result_json));
+      } catch {
+        continue;
+      }
+      if (isRecord(value) && matches(value)) update.run(staleIdentityReceipt, receipt.key);
+    }
+  }
+
+  private scrubBorrowerReceipts(borrowerId: number): void {
+    const receipts = this.db
+      .prepare('SELECT key,subject_id,result_json FROM idempotency_receipts')
+      .all() as Row[];
+    const update = this.db.prepare('UPDATE idempotency_receipts SET result_json=? WHERE key=?');
+    for (const receipt of receipts) {
+      let containsBorrower = Number(receipt.subject_id) === borrowerId;
+      if (!containsBorrower && receipt.result_json != null) {
+        try {
+          const value: unknown = JSON.parse(String(receipt.result_json));
+          containsBorrower =
+            isRecord(value) && isRecord(value.borrower) && value.borrower.id === borrowerId;
+        } catch {
+          /* Invalid cached data is not a deletion target. */
+        }
+      }
+      if (containsBorrower) update.run(staleIdentityReceipt, receipt.key);
+    }
+  }
+
+  private isItemReceiptFor(value: Record<string, unknown>, itemId: number): boolean {
+    return (
+      value.itemId === itemId ||
+      (value.id === itemId && typeof value.code === 'number' && typeof value.kind === 'string')
+    );
+  }
+
+  private isBorrowerReceiptFor(value: Record<string, unknown>, borrowerId: number): boolean {
+    return (
+      value.borrowerId === borrowerId ||
+      (isRecord(value.borrower) && value.borrower.id === borrowerId)
+    );
+  }
+
+  private isLocationReceiptFor(value: Record<string, unknown>, locationId: number): boolean {
+    return (
+      value.id === locationId && typeof value.code === 'string' && typeof value.name === 'string'
+    );
   }
 
   private requireAvailable(itemId: number, quantity: number): void {
@@ -1872,4 +2296,19 @@ export class InventoryService {
     type: row.type,
     archived: Boolean(row.archived),
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function placeholders(count: number): string {
+  if (!Number.isSafeInteger(count) || count <= 0) throw new Error('Invalid SQL placeholder count');
+  return Array.from({ length: count }, () => '?').join(',');
+}
+
+function sameNumberList(left: number[], right: number[]): boolean {
+  if (!Array.isArray(right) || left.length !== right.length) return false;
+  const normalized = [...right].sort((a, b) => a - b);
+  return left.every((value, index) => value === normalized[index]);
 }

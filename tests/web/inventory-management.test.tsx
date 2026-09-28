@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DialogStackProvider } from '../../src/web/Dialog';
 import { InventoryManagement } from '../../src/web/InventoryManagement';
 import type { Item, Location } from '../../src/web/InventoryDialogs';
+import { installWindowStorage } from '../helpers/window-storage.js';
 
 const item: Item = {
   id: 1,
@@ -26,8 +27,21 @@ const respond = (body: unknown, status = 200) =>
 const showToast = vi.fn();
 const onRefresh = vi.fn(async () => undefined);
 const registerLeaveGuard = vi.fn();
-const view = (admin = true, items: Item[] = [item], locations: Location[] = []) =>
-  render(
+const view = (
+  admin = true,
+  items: Item[] = [item],
+  locations: Location[] = [],
+  storageUnavailable = false,
+) => {
+  installWindowStorage(true);
+  if (storageUnavailable)
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('storage access denied');
+      },
+    });
+  return render(
     <DialogStackProvider>
       <InventoryManagement
         items={items}
@@ -40,6 +54,7 @@ const view = (admin = true, items: Item[] = [item], locations: Location[] = []) 
       />
     </DialogStackProvider>,
   );
+};
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -49,6 +64,27 @@ afterEach(() => {
 });
 
 describe('inventory management UI', () => {
+  it('does not dispatch a management command when the browser storage getter throws', async () => {
+    const eligible = { ...item, available: 0, damaged: 0 };
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const user = userEvent.setup();
+    view(true, [eligible], [], true);
+    await user.click(
+      within(screen.getByRole('row', { name: /Hammer/ })).getByRole('button', {
+        name: 'מחיקה',
+      }),
+    );
+    await screen.findByRole('alertdialog', { name: 'למחוק את Hammer לצמיתות?' });
+    await user.click(screen.getByRole('button', { name: 'מחיקה לצמיתות' }));
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(
+      'לא ניתן לשמור את הפעולה',
+      'אחסון הדפדפן אינו זמין כרגע',
+      'error',
+    );
+  });
+
   it('uses the previous blue, mauve and green badges for item types', () => {
     view(true, [
       { ...item, id: 1, kind: 'consumable', name: 'Consumable' },
@@ -173,7 +209,10 @@ describe('inventory management UI', () => {
     view(true, [item], [{ id: 31, code: 'A-1', name: 'Main store', archived: false }]);
     await user.click(screen.getByRole('button', { name: 'מיקומים' }));
     await user.click(screen.getByRole('button', { name: 'ארכוב' }));
+    await user.click(screen.getByRole('button', { name: 'ארכוב והעברה' }));
     expect(screen.getByRole('button', { name: 'מלאי' }).hasAttribute('disabled')).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'מלאי' }));
+    expect(screen.getByText(/ארכוב מיקום: Main store: תוצאת הפעולה אינה ידועה/)).toBeTruthy();
     await user.click(await screen.findByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]).toEqual(bodies[0]);
@@ -192,7 +231,8 @@ describe('inventory management UI', () => {
     view(true, [item], [{ id: 31, code: 'A-1', name: 'Main store', archived: false }]);
     await user.click(screen.getByRole('button', { name: 'מיקומים' }));
     await user.click(screen.getByRole('button', { name: 'ארכוב' }));
-    expect(await screen.findByText(/ארכוב: Main store/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'ארכוב והעברה' }));
+    expect(await screen.findByText(/ארכוב מיקום: Main store/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
     expect(await screen.findByRole('button', { name: 'רענון נתונים' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'בדוק שוב את אותה פעולה' })).toBeNull();
@@ -254,6 +294,121 @@ describe('inventory management UI', () => {
     await user.click(screen.getByRole('button', { name: 'ארכוב ואיפוס מלאי זמין' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({ archived: true });
+  });
+
+  it('requires explicit confirmation to delete active items and allows cancellation for archived items', async () => {
+    const active: Item = {
+      ...item,
+      name: 'Active deletion candidate',
+      available: 3,
+      damaged: 0,
+    };
+    const archived: Item = {
+      ...item,
+      id: 2,
+      name: 'Archived deletion candidate',
+      available: 0,
+      archived: true,
+      damaged: 0,
+    };
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(respond({ outcome: 'committed', action: 'delete_item', itemId: 1 }));
+    const user = userEvent.setup();
+    view(true, [active, archived]);
+
+    const activeRow = screen.getByRole('row', { name: /Active deletion candidate/ });
+    await user.click(
+      within(screen.getByRole('row', { name: /Active deletion candidate/ })).getByRole('button', {
+        name: 'מחיקה',
+      }),
+    );
+    expect(
+      await screen.findByRole('alertdialog', {
+        name: 'למחוק את Active deletion candidate לצמיתות?',
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText(/היסטוריית שואלים ובדוחות/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    expect(fetch).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('checkbox', { name: 'כולל ארכיון' }));
+    const archivedRow = screen.getByRole('row', { name: /Archived deletion candidate/ });
+    await user.click(within(archivedRow).getByRole('button', { name: 'מחיקה' }));
+    expect(
+      await screen.findByRole('alertdialog', {
+        name: 'למחוק את Archived deletion candidate לצמיתות?',
+      }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    expect(fetch).not.toHaveBeenCalled();
+
+    await user.click(within(activeRow).getByRole('button', { name: 'מחיקה' }));
+    await user.click(screen.getByRole('button', { name: 'מחיקה לצמיתות' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/inventory/items/1/delete');
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      ledgerEpoch: 1,
+      expectedStockRevision: active.stockRevision,
+      expectedCode: active.code,
+      expectedName: active.name,
+      expectedLocationId: active.locationId,
+    });
+  });
+
+  it('names the destination and includes archived contents before retiring a location', async () => {
+    const source: Location = { id: 31, code: 'A-1', name: 'Main store', archived: false };
+    const destination: Location = {
+      id: 32,
+      code: 'A-2',
+      name: 'Reserve store',
+      archived: false,
+    };
+    const active: Item = { ...item, id: 1, name: 'Active stock', locationId: source.id };
+    const archived: Item = {
+      ...item,
+      id: 2,
+      name: 'Archived stock',
+      locationId: source.id,
+      archived: true,
+      available: 0,
+      damaged: 0,
+    };
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        respond({ action: 'archive', locationId: source.id, movedItemIds: [1, 2] }),
+      );
+    const user = userEvent.setup();
+    view(true, [active, archived], [source, destination]);
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+
+    const openRetirement = async () => {
+      await user.click(
+        within(screen.getByRole('row', { name: /Main store/ })).getByRole('button', {
+          name: 'ארכוב',
+        }),
+      );
+    };
+    await openRetirement();
+    expect(await screen.findByRole('alertdialog', { name: 'לארכב את Main store?' })).toBeTruthy();
+    expect(screen.getByText(/כל 2 הפריטים, כולל פריטים שבארכיון/)).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Reserve store' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    expect(fetch).not.toHaveBeenCalled();
+
+    await openRetirement();
+    await user.selectOptions(screen.getByLabelText('להעביר את כל הפריטים אל'), '32');
+    await user.click(screen.getByRole('button', { name: 'ארכוב והעברה' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/inventory/locations/31/retire');
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      action: 'archive',
+      replacementLocationId: 32,
+      expectedItemIds: [1, 2],
+      expectedCode: source.code,
+      expectedName: source.name,
+    });
   });
 
   it('lets operators inspect and restore damage while disabling catalog mutations and write-off', async () => {

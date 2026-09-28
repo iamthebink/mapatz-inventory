@@ -37,6 +37,14 @@ export type FrozenCreateAttempt = FrozenBase & {
 };
 
 export type FrozenAttempt = FrozenOperationAttempt | FrozenCreateAttempt;
+export type FrozenManagementAttempt = {
+  version: 1;
+  key: string;
+  path: string;
+  method: 'POST' | 'PUT';
+  body: Record<string, unknown>;
+  description?: string;
+};
 export type FrozenResult<A extends FrozenAttempt> = A extends FrozenOperationAttempt
   ? BorrowerOperationResult
   : BorrowerCreateResult;
@@ -66,6 +74,19 @@ export type FrozenDispatchResult<A extends FrozenAttempt = FrozenAttempt> =
 export type StorageLike = Pick<Storage, 'length' | 'key' | 'getItem' | 'setItem' | 'removeItem'>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const MANAGEMENT_ATTEMPT_STORAGE_KEY = 'mapatz:inventory-management-attempt:v1';
+export const BORROWER_DELETION_STORAGE_KEY = 'mapatz:borrower-deletion-attempt:v1';
+export function safeWindowStorage(): StorageLike | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function keyedManagementAttemptStorageKey(storageKey: string, key: string): string {
+  return `${storageKey}:${key}`;
+}
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const positive = (value: unknown): value is number =>
@@ -74,6 +95,108 @@ const nonNegative = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
 const exactKeys = (value: Record<string, unknown>, allowed: string[]): boolean =>
   Object.keys(value).every((key) => allowed.includes(key));
+
+export function parseFrozenManagementAttempt(value: unknown): FrozenManagementAttempt | null {
+  if (
+    !isObject(value) ||
+    !exactKeys(value, ['version', 'key', 'path', 'method', 'body', 'description']) ||
+    value.version !== 1 ||
+    typeof value.key !== 'string' ||
+    !UUID.test(value.key) ||
+    typeof value.path !== 'string' ||
+    !(
+      /^\/inventory\/[a-z0-9/-]+$/i.test(value.path) ||
+      /^\/borrowers\/[1-9]\d*\/delete$/i.test(value.path)
+    ) ||
+    (value.method !== 'POST' && value.method !== 'PUT') ||
+    !isObject(value.body) ||
+    value.body.key !== value.key ||
+    !positive(value.body.ledgerEpoch) ||
+    (value.description !== undefined && typeof value.description !== 'string')
+  )
+    return null;
+  return value as FrozenManagementAttempt;
+}
+
+export function readFrozenManagementAttempt(
+  storage: StorageLike | null,
+  storageKey = MANAGEMENT_ATTEMPT_STORAGE_KEY,
+): FrozenManagementAttempt | null {
+  return readFrozenManagementAttempts(storage, storageKey)[0] ?? null;
+}
+
+export function readFrozenManagementAttempts(
+  storage: StorageLike | null,
+  storageKey = MANAGEMENT_ATTEMPT_STORAGE_KEY,
+): FrozenManagementAttempt[] {
+  if (!storage) return [];
+  try {
+    const attempts: FrozenManagementAttempt[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const candidateKey = storage.key(index);
+      if (candidateKey !== storageKey && !(candidateKey?.startsWith(`${storageKey}:`) ?? false))
+        continue;
+      const serializedAttempt = storage.getItem(candidateKey!);
+      if (serializedAttempt == null) continue;
+      const attempt = parseFrozenManagementAttempt(JSON.parse(serializedAttempt));
+      if (!attempt) continue;
+      if (
+        candidateKey !== storageKey &&
+        candidateKey !== keyedManagementAttemptStorageKey(storageKey, attempt.key)
+      )
+        continue;
+      if (!attempts.some((saved) => saved.key === attempt.key)) attempts.push(attempt);
+    }
+    return attempts;
+  } catch {
+    return [];
+  }
+}
+
+export function persistFrozenManagementAttempt(
+  storage: StorageLike | null,
+  attempt: FrozenManagementAttempt,
+  storageKey = MANAGEMENT_ATTEMPT_STORAGE_KEY,
+): boolean {
+  const validated = parseFrozenManagementAttempt(attempt);
+  if (!storage || !validated) return false;
+  const keyedStorageKey = keyedManagementAttemptStorageKey(storageKey, validated.key);
+  try {
+    const serialized = JSON.stringify(validated);
+    storage.setItem(keyedStorageKey, serialized);
+    return storage.getItem(keyedStorageKey) === serialized;
+  } catch {
+    return false;
+  }
+}
+
+export function clearFrozenManagementAttempt(
+  storage: StorageLike | null,
+  storageKey = MANAGEMENT_ATTEMPT_STORAGE_KEY,
+  attemptKey?: string,
+): boolean {
+  if (!storage) return false;
+  const targetKey = attemptKey
+    ? keyedManagementAttemptStorageKey(storageKey, attemptKey)
+    : storageKey;
+  try {
+    storage.removeItem(targetKey);
+    if (attemptKey) {
+      const legacy = parseFrozenManagementAttempt(
+        JSON.parse(storage.getItem(storageKey) ?? 'null'),
+      );
+      if (legacy?.key === attemptKey) storage.removeItem(storageKey);
+      return (
+        storage.getItem(targetKey) == null &&
+        parseFrozenManagementAttempt(JSON.parse(storage.getItem(storageKey) ?? 'null'))?.key !==
+          attemptKey
+      );
+    }
+    return storage.getItem(targetKey) == null;
+  } catch {
+    return false;
+  }
+}
 
 function safeAggregate(values: number[]): boolean {
   let total = 0;

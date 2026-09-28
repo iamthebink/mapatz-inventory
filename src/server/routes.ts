@@ -421,6 +421,28 @@ export function apiRouter(
     }),
   );
   api.post(
+    '/inventory/locations/:id/retire',
+    requireRole('admin'),
+    express.json({ limit: '1mb' }),
+    route((req, res) => {
+      const body = parse(
+        z
+          .object({
+            key: z.string().min(8).max(128),
+            ledgerEpoch: positive,
+            action: z.enum(['archive', 'delete']),
+            replacementLocationId: positive.optional(),
+            expectedItemIds: z.array(positive).max(50000),
+            expectedCode: z.string().min(1).max(40),
+            expectedName: z.string().min(1).max(100),
+          })
+          .strict(),
+        req.body,
+      );
+      res.json(service.retireLocationCommand({ ...body, locationId: parse(id, req.params.id) }));
+    }),
+  );
+  api.post(
     '/locations',
     requireRole('admin'),
     route((req, res) => {
@@ -506,6 +528,26 @@ export function apiRouter(
     }),
   );
   api.post(
+    '/inventory/items/:id/delete',
+    requireRole('admin'),
+    route((req, res) => {
+      const body = parse(
+        z
+          .object({
+            key: z.string().min(8).max(128),
+            ledgerEpoch: positive,
+            expectedStockRevision: z.number().int().min(0),
+            expectedCode: positive,
+            expectedName: z.string().min(1).max(200),
+            expectedLocationId: positive.nullable(),
+          })
+          .strict(),
+        req.body,
+      );
+      res.json(service.deleteItemCommand({ ...body, itemId: parse(id, req.params.id) }));
+    }),
+  );
+  api.post(
     '/inventory/damage',
     requireRole('operator', 'admin'),
     route((req, res) => {
@@ -582,6 +624,32 @@ export function apiRouter(
         parse(id, req.params.id),
       );
       res.json(snapshot);
+    }),
+  );
+  api.get(
+    '/borrowers/:id/deletion-status',
+    requireRole('admin'),
+    route((req, res) => res.json(service.borrowerDeletionStatus(parse(id, req.params.id)))),
+  );
+  api.post(
+    '/borrowers/:id/delete',
+    requireRole('admin'),
+    route((req, res) => {
+      const body = parse(
+        z
+          .object({
+            key: z.string().min(8).max(128),
+            ledgerEpoch: positive,
+            expectedStateRevision: z.number().int().min(0),
+            expectedOutstanding: z.number().int().min(0),
+            expectedLost: z.number().int().min(0),
+            expectedName: z.string().min(1).max(200),
+            expectedUsername: z.string().min(1).max(100),
+          })
+          .strict(),
+        req.body,
+      );
+      res.json(service.deleteBorrowerCommand({ ...body, borrowerId: parse(id, req.params.id) }));
     }),
   );
   api.post(

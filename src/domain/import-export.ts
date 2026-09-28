@@ -1,5 +1,11 @@
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
+import {
+  allocateIdentity,
+  getIdentityHighWater,
+  persistIdentityHighWater,
+  type IdentityHighWater,
+} from '../db/identity-high-water.js';
 import { normalizeItemName } from './item-name.js';
 import { DomainError, type BorrowerType, type EventKind, type ItemKind } from './types.js';
 import type { Radio } from './types.js';
@@ -68,6 +74,8 @@ export interface InventoryTransferSnapshot {
   events: TransferEvent[];
   loans: TransferLoan[];
   stateRevision: number;
+  nextItemCode: number;
+  identityHighWater: IdentityHighWater;
   radioCount: number;
   radios: Radio[];
 }
@@ -97,6 +105,8 @@ export interface RecoveryPayload {
   events: TransferEvent[];
   loans: TransferLoan[];
   stateRevision: number;
+  nextItemCode: number;
+  identityHighWater: IdentityHighWater;
   radioCount: number;
   radios: Radio[];
 }
@@ -198,6 +208,7 @@ function utcTimestamp(value: string): number {
 }
 
 export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPayload {
+  const identityFields = ['nextItemId', 'nextBorrowerId', 'nextLocationId', 'nextEventId'] as const;
   if (
     !payload ||
     !Array.isArray(payload.locations) ||
@@ -206,7 +217,14 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     !Array.isArray(payload.events) ||
     !Array.isArray(payload.loans) ||
     !Number.isSafeInteger(payload.stateRevision) ||
-    payload.stateRevision < 0
+    payload.stateRevision < 0 ||
+    !Number.isSafeInteger(payload.nextItemCode) ||
+    payload.nextItemCode < 100 ||
+    !payload.identityHighWater ||
+    typeof payload.identityHighWater !== 'object' ||
+    Array.isArray(payload.identityHighWater) ||
+    Object.keys(payload.identityHighWater).length !== identityFields.length ||
+    identityFields.some((field) => !Object.hasOwn(payload.identityHighWater, field))
   )
     invalidWorkbook('Recovery is missing authoritative state or required tables');
   payload = normalizeRecoveryTimestamps(payload);
@@ -215,6 +233,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     if (!Number.isSafeInteger(value) || value < (positive ? 1 : 0))
       invalidWorkbook(`${label} must be a ${positive ? 'positive' : 'nonnegative'} safe integer`);
   };
+  for (const field of identityFields)
+    safe(payload.identityHighWater[field], `Recovery ${field}`, true);
   const locations = new Map<string, TransferLocation>();
   for (const location of payload.locations) {
     const key = location.name.toLocaleLowerCase();
@@ -247,8 +267,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       item.location == null ? undefined : locations.get(item.location.toLocaleLowerCase());
     if (item.location != null && !location)
       invalidWorkbook(`Recovery item ${item.code} references unknown Location "${item.location}"`);
-    if (!item.archived && location?.archived)
-      invalidWorkbook(`Recovery item ${item.code} is active at an archived location`);
+    if (location?.archived)
+      invalidWorkbook(`Recovery item ${item.code} references an archived location`);
     const resetTotal =
       item.kind === 'consumable'
         ? item.available
@@ -350,14 +370,33 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
     events.set(event.id, event);
   }
-  for (const item of payload.items)
+  const highestGeneratedCode = payload.items.reduce(
+    (highest, item) => Math.max(highest, item.code >= 100 ? item.code : 99),
+    99,
+  );
+  if (payload.nextItemCode <= highestGeneratedCode)
+    invalidWorkbook(
+      'Recovery Item Code high-water mark must be greater than every generated item code',
+    );
+  if (payload.identityHighWater.nextEventId <= previousId)
+    invalidWorkbook('Recovery Event ID high-water mark must be greater than every retained event');
+  for (const item of payload.items) {
+    const anchor = events.get(item.baselineThroughEventId);
+    if (item.baselineThroughEventId !== 0 && anchor && anchor.itemCode !== item.code)
+      invalidWorkbook(
+        `Recovery item ${item.code} references Baseline Through Event ID ${item.baselineThroughEventId} for another item`,
+      );
+    // A deleted event may leave a numeric reporting cursor. It is not a foreign key:
+    // its value remains the exact cutoff and event ids are never allocated below it.
     if (
       item.baselineThroughEventId !== 0 &&
-      events.get(item.baselineThroughEventId)?.itemCode !== item.code
+      !anchor &&
+      item.baselineThroughEventId >= payload.identityHighWater.nextEventId
     )
       invalidWorkbook(
-        `Recovery item ${item.code} references missing Baseline Through Event ID ${item.baselineThroughEventId}`,
+        `Recovery item ${item.code} has Baseline Through Event ID beyond the event high-water mark`,
       );
+  }
 
   const loans = new Set<number>();
   const totals = new Map<number, { borrowed: number; lost: number }>();
@@ -538,6 +577,11 @@ export class InventoryTransferService {
       Row | undefined;
     if (!clock || typeof clock.revision !== 'number' || !Number.isSafeInteger(clock.revision))
       throw new DomainError('integrity_error', 'State revision is missing or invalid', 500);
+    const nextItemCode = Number(
+      (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
+        .next_code,
+    );
+    const identityHighWater = getIdentityHighWater(this.db);
     const fleet = new RadioService(this.db).fleet();
     return {
       locations,
@@ -546,6 +590,8 @@ export class InventoryTransferService {
       events,
       loans,
       stateRevision: Number(clock.revision),
+      nextItemCode,
+      identityHighWater,
       radioCount: fleet.count,
       radios: fleet.radios,
     };
@@ -556,9 +602,15 @@ export class InventoryTransferService {
       if (!Number.isSafeInteger(item.total) || item.total < 0 || (item.archived && item.total > 0))
         invalidWorkbook(`Reset item ${item.code} has invalid total or archived stock`);
     transaction(this.db, () => {
+      const previousHighWater = getIdentityHighWater(this.db);
+      const previousNextCode = Number(
+        (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
+          .next_code,
+      );
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('DELETE FROM inventory_command_receipts').run();
+      persistIdentityHighWater(this.db, previousHighWater);
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM loan_state').run();
       this.db.prepare('DELETE FROM item_state').run();
@@ -571,30 +623,34 @@ export class InventoryTransferService {
 
       const locationIds = new Map<string, number>();
       const insertLocation = this.db.prepare(
-        'INSERT INTO locations(code,name,archived) VALUES (?,?,?)',
+        'INSERT INTO locations(id,code,name,archived) VALUES (?,?,?,?)',
       );
       payload.locations.forEach((location, index) => {
-        const result = insertLocation.run(
+        const locationId = allocateIdentity(this.db, 'location');
+        insertLocation.run(
+          locationId,
           `import-location-${index + 1}`,
           location.name,
           Number(location.archived),
         );
-        locationIds.set(location.name.toLocaleLowerCase(), Number(result.lastInsertRowid));
+        locationIds.set(location.name.toLocaleLowerCase(), locationId);
       });
 
       const insertItem = this.db.prepare(
-        'INSERT INTO items(code,name,kind,lot_size,location_id,archived) VALUES (?,?,?,?,?,?)',
+        'INSERT INTO items(id,code,name,kind,lot_size,location_id,archived) VALUES (?,?,?,?,?,?,?)',
       );
       const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
       const insertEvent = this.db.prepare(
-        "INSERT INTO inventory_events(kind,item_id,quantity,note) VALUES ('stock_added',?,?,?)",
+        "INSERT INTO inventory_events(id,kind,item_id,quantity,note) VALUES (?,'stock_added',?,?,?)",
       );
       const insertBaseline = this.db.prepare(
         'INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,?,?)',
       );
       const insertState = this.db.prepare('INSERT INTO item_state(item_id,available) VALUES (?,?)');
       for (const item of payload.items) {
-        const result = insertItem.run(
+        const itemId = allocateIdentity(this.db, 'item');
+        insertItem.run(
+          itemId,
           item.code,
           item.name,
           item.kind,
@@ -602,13 +658,11 @@ export class InventoryTransferService {
           item.location == null ? null : locationIds.get(item.location.toLocaleLowerCase())!,
           Number(item.archived),
         );
-        const itemId = Number(result.lastInsertRowid);
         insertState.run(itemId, item.total);
         for (const alias of item.aliases) insertAlias.run(itemId, alias);
-        const baselineEventId =
-          item.total === 0
-            ? 0
-            : Number(insertEvent.run(itemId, item.total, 'Reset baseline import').lastInsertRowid);
+        const baselineEventId = item.total === 0 ? 0 : allocateIdentity(this.db, 'event');
+        if (baselineEventId !== 0)
+          insertEvent.run(baselineEventId, itemId, item.total, 'Reset baseline import');
         insertBaseline.run(itemId, item.total, baselineEventId);
       }
       this.db.prepare('UPDATE state_clock SET revision=0 WHERE singleton=1').run();
@@ -618,7 +672,7 @@ export class InventoryTransferService {
       );
       this.db
         .prepare('UPDATE code_sequence SET next_code=? WHERE singleton=1')
-        .run(Math.max(100, highestGeneratedRangeCode + 1));
+        .run(Math.max(100, previousNextCode, highestGeneratedRangeCode + 1));
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
     });
   }
@@ -626,10 +680,27 @@ export class InventoryTransferService {
   replaceWithRecovery(payload: RecoveryPayload): void {
     payload = validateRecoveryPayload(payload);
     transaction(this.db, () => {
+      const previousHighWater = getIdentityHighWater(this.db);
+      const previousNextCode = Number(
+        (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
+          .next_code,
+      );
       new RadioService(this.db).restore(payload.radioCount, payload.radios);
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('DELETE FROM inventory_command_receipts').run();
+      persistIdentityHighWater(this.db, {
+        nextItemId: Math.max(previousHighWater.nextItemId, payload.identityHighWater.nextItemId),
+        nextBorrowerId: Math.max(
+          previousHighWater.nextBorrowerId,
+          payload.identityHighWater.nextBorrowerId,
+        ),
+        nextLocationId: Math.max(
+          previousHighWater.nextLocationId,
+          payload.identityHighWater.nextLocationId,
+        ),
+        nextEventId: Math.max(previousHighWater.nextEventId, payload.identityHighWater.nextEventId),
+      });
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM loan_state').run();
       this.db.prepare('DELETE FROM item_state').run();
@@ -642,28 +713,32 @@ export class InventoryTransferService {
 
       const locationIds = new Map<string, number>();
       const insertLocation = this.db.prepare(
-        'INSERT INTO locations(code,name,archived) VALUES (?,?,?)',
+        'INSERT INTO locations(id,code,name,archived) VALUES (?,?,?,?)',
       );
       payload.locations.forEach((location, index) => {
-        const result = insertLocation.run(
+        const locationId = allocateIdentity(this.db, 'location');
+        insertLocation.run(
+          locationId,
           `recovered-location-${index + 1}`,
           location.name,
           Number(location.archived),
         );
-        locationIds.set(location.name.toLocaleLowerCase(), Number(result.lastInsertRowid));
+        locationIds.set(location.name.toLocaleLowerCase(), locationId);
       });
 
       const itemIds = new Map<number, number>();
       const insertItem = this.db.prepare(
-        `INSERT INTO items(code,name,kind,lot_size,location_id,archived,created_at)
-        VALUES (?,?,?,?,?,?,?)`,
+        `INSERT INTO items(id,code,name,kind,lot_size,location_id,archived,created_at)
+        VALUES (?,?,?,?,?,?,?,?)`,
       );
       const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
       const insertState = this.db
         .prepare(`INSERT INTO item_state(item_id,available,borrowed,damaged,lost,revision)
         VALUES (?,?,?,?,?,?)`);
       for (const item of payload.items) {
-        const result = insertItem.run(
+        const itemId = allocateIdentity(this.db, 'item');
+        insertItem.run(
+          itemId,
           item.code,
           item.name,
           item.kind,
@@ -672,7 +747,6 @@ export class InventoryTransferService {
           Number(item.archived),
           item.createdAt,
         );
-        const itemId = Number(result.lastInsertRowid);
         itemIds.set(item.code, itemId);
         insertState.run(
           itemId,
@@ -687,11 +761,13 @@ export class InventoryTransferService {
 
       const borrowerIds = new Map<string, number>();
       const insertBorrower = this.db.prepare(
-        `INSERT INTO borrowers(username,name,contact,type,archived,created_at)
-        VALUES (?,?,?,?,?,?)`,
+        `INSERT INTO borrowers(id,username,name,contact,type,archived,created_at)
+        VALUES (?,?,?,?,?,?,?)`,
       );
       for (const borrower of payload.borrowers) {
-        const result = insertBorrower.run(
+        const borrowerId = allocateIdentity(this.db, 'borrower');
+        insertBorrower.run(
+          borrowerId,
           borrower.username,
           borrower.name,
           borrower.contact,
@@ -699,7 +775,7 @@ export class InventoryTransferService {
           Number(borrower.archived),
           borrower.createdAt,
         );
-        borrowerIds.set(borrower.username.toLocaleLowerCase(), Number(result.lastInsertRowid));
+        borrowerIds.set(borrower.username.toLocaleLowerCase(), borrowerId);
       }
 
       const insertEvent = this.db.prepare(
@@ -741,10 +817,11 @@ export class InventoryTransferService {
         VALUES (?,?,?,?)`,
       );
       for (const item of payload.items) {
+        const anchor = payload.events.find((event) => event.id === item.baselineThroughEventId);
         const establishedAt =
           item.baselineThroughEventId === 0
             ? item.createdAt
-            : payload.events.find((event) => event.id === item.baselineThroughEventId)!.createdAt;
+            : (anchor?.createdAt ?? item.createdAt);
         insertBaseline.run(
           itemIds.get(item.code)!,
           item.startingStock,
@@ -758,7 +835,7 @@ export class InventoryTransferService {
       );
       this.db
         .prepare('UPDATE code_sequence SET next_code=? WHERE singleton=1')
-        .run(Math.max(100, highestGeneratedRangeCode + 1));
+        .run(Math.max(100, previousNextCode, payload.nextItemCode, highestGeneratedRangeCode + 1));
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
     });
   }

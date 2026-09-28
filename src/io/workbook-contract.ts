@@ -1,5 +1,5 @@
 export const WORKBOOK_CONTRACT = {
-  version: 4,
+  version: 5,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   filename: 'mapatz-inventory.xlsx',
   sheets: {
@@ -58,7 +58,14 @@ export const WORKBOOK_CONTRACT = {
     },
     recoveryState: {
       name: 'Recovery State',
-      columns: ['Revision'],
+      columns: [
+        'Revision',
+        'Next Item Code',
+        'Next Item ID',
+        'Next Borrower ID',
+        'Next Location ID',
+        'Next Event ID',
+      ],
     },
     recoveryBorrowers: {
       name: 'Recovery Borrowers',

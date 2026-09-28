@@ -1084,4 +1084,67 @@ describe('atomic borrower commands', () => {
       afterRejection.receipts,
     );
   });
+
+  it('returns privacy-safe protocol errors when deleted borrower creation and operation receipts are retried', () => {
+    const { inventory } = fixture();
+    const createKey = key(920);
+    const createRequest = {
+      contractVersion: 1 as const,
+      ledgerEpoch: 1,
+      username: 'deleted-private-user',
+      name: 'Deleted Private Name',
+      contact: 'private-contact',
+      type: 'individual' as const,
+    };
+    const created = inventory.createBorrowerCommand(createKey, createRequest);
+    expect(created).toMatchObject({ outcome: 'committed' });
+    if (!('borrower' in created)) throw new Error('Borrower creation did not commit');
+    const borrower = created.borrower;
+    const item = inventory.createItem({ name: 'Settled loan', kind: 'non_consumable' });
+    inventory.addStock(item.id, 1);
+    const operationKey = key(921);
+    const operation = {
+      contractVersion: 1 as const,
+      ledgerEpoch: 1,
+      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: 'checkout' }] }],
+    };
+    expect(inventory.commitBorrowerOperations(borrower.id, operationKey, operation)).toMatchObject({
+      outcome: 'committed',
+    });
+    const returnRequest = {
+      contractVersion: 1 as const,
+      ledgerEpoch: 1,
+      items: [{ itemId: item.id, return: [{ usable: 1, damaged: 0, note: 'return' }] }],
+    };
+    inventory.commitBorrowerOperations(borrower.id, key(922), returnRequest);
+    const status = inventory.borrowerDeletionStatus(borrower.id);
+    inventory.deleteBorrowerCommand({
+      key: 'delete-private-borrower-1',
+      ledgerEpoch: 1,
+      borrowerId: borrower.id,
+      expectedStateRevision: status.stateRevision,
+      expectedOutstanding: 0,
+      expectedLost: 0,
+      expectedName: borrower.name,
+      expectedUsername: borrower.username,
+    });
+
+    const createRetry = inventory.createBorrowerCommand(createKey, createRequest);
+    const operationRetry = inventory.commitBorrowerOperations(borrower.id, operationKey, operation);
+    expect(createRetry).toMatchObject({
+      error: 'idempotency_key_reused',
+      outcome: 'protocol_error',
+      idempotencyKey: createKey,
+    });
+    expect(operationRetry).toMatchObject({
+      error: 'idempotency_key_reused',
+      outcome: 'protocol_error',
+      idempotencyKey: operationKey,
+    });
+    for (const result of [createRetry, operationRetry]) {
+      expect(JSON.stringify(result)).not.toContain(borrower.username);
+      expect(JSON.stringify(result)).not.toContain(borrower.name);
+      expect(JSON.stringify(result)).not.toContain(borrower.contact);
+    }
+  });
 });

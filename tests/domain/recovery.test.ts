@@ -56,7 +56,7 @@ function sourceFixture() {
         code: 102,
         name: 'Old stock',
         kind: 'consumable',
-        location: 'Historic',
+        location: null,
         aliases: [],
         lotSize: null,
         archived: true,
@@ -100,7 +100,87 @@ async function save(workbook: ExcelJS.Workbook): Promise<Buffer> {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
+function expectRecoveredState(
+  actual: ReturnType<InventoryTransferService['snapshot']>,
+  expected: ReturnType<InventoryTransferService['snapshot']>,
+) {
+  const { identityHighWater: actualHighWater, ...actualBusinessState } = actual;
+  const { identityHighWater: expectedHighWater, ...expectedBusinessState } = expected;
+  expect(actualBusinessState).toEqual(expectedBusinessState);
+  for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
+    expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
+}
+
 describe('complete inventory recovery', () => {
+  it('preserves deleted report anchors and identity high-water marks in a new recovery workbook', async () => {
+    const source = openDatabase(':memory:');
+    const sourceInventory = new InventoryService(source);
+    const sourceTransfers = new InventoryTransferService(source);
+    const removed = sourceInventory.createItem({ name: 'Deleted name', kind: 'consumable' });
+    sourceInventory.addStock(removed.id, 1);
+    const survivor = sourceInventory.createItem({ name: 'Surviving loan', kind: 'non_consumable' });
+    const borrower = sourceInventory.createBorrower({
+      username: 'removed-borrower',
+      name: 'Removed Borrower',
+      type: 'individual',
+    });
+    sourceInventory.addStock(survivor.id, 4);
+    const checkoutId = sourceInventory.checkout(survivor.id, borrower.id, 1);
+    sourceInventory.returnCheckout(checkoutId, 1, 0);
+    source
+      .prepare('UPDATE inventory_baselines SET quantity=4,through_event_id=? WHERE item_id=?')
+      .run(checkoutId, survivor.id);
+    const status = sourceInventory.borrowerDeletionStatus(borrower.id);
+    sourceInventory.deleteBorrowerCommand({
+      key: 'delete-borrower-recovery',
+      ledgerEpoch: sourceInventory.inventoryEpoch(),
+      borrowerId: borrower.id,
+      expectedStateRevision: status.stateRevision,
+      expectedOutstanding: status.outstanding,
+      expectedLost: status.lost,
+      expectedName: status.borrower.name,
+      expectedUsername: status.borrower.username,
+    });
+    sourceInventory.deleteItemCommand({
+      key: 'delete-item-recovery',
+      ledgerEpoch: sourceInventory.inventoryEpoch(),
+      itemId: removed.id,
+      expectedStockRevision: sourceInventory.listItems('Deleted name', true)[0]!.stockRevision,
+      expectedCode: removed.code,
+      expectedName: removed.name,
+      expectedLocationId: removed.locationId,
+    });
+
+    const snapshot = sourceTransfers.snapshot();
+    const survivorSnapshot = snapshot.items.find((item) => item.code === survivor.code)!;
+    expect(survivorSnapshot.baselineThroughEventId).toBe(checkoutId);
+    expect(snapshot.events.some((event) => event.id === checkoutId)).toBe(false);
+    expect(snapshot.borrowers.some((entry) => entry.username === 'removed-borrower')).toBe(false);
+    expect(snapshot.items.some((item) => item.code === removed.code)).toBe(false);
+    const payload = await parseRecoveryWorkbook(await exportWorkbook(snapshot));
+
+    const destination = openDatabase(':memory:');
+    const destinationTransfers = new InventoryTransferService(destination);
+    destinationTransfers.replaceWithRecovery(payload);
+    expectRecoveredState(destinationTransfers.snapshot(), snapshot);
+    expect(
+      destinationTransfers.snapshot().items.find((item) => item.code === survivor.code),
+    ).toMatchObject({
+      baselineThroughEventId: checkoutId,
+      available: 4,
+    });
+
+    const recoveredInventory = new InventoryService(destination);
+    const nextItem = recoveredInventory.createItem({ name: 'After recovery', kind: 'consumable' });
+    recoveredInventory.addStock(nextItem.id, 1);
+    const newEvent = recoveredInventory.listLedger()[0]!;
+    expect(nextItem.code).toBeGreaterThan(removed.code);
+    expect(newEvent.id).toBeGreaterThanOrEqual(snapshot.identityHighWater.nextEventId);
+    expect(newEvent.id).toBeGreaterThan(checkoutId);
+    source.close();
+    destination.close();
+  });
+
   it('round-trips business state into a clean destination and remains operable', async () => {
     const source = sourceFixture();
     const expected = source.transfers.snapshot();
@@ -141,7 +221,7 @@ describe('complete inventory recovery', () => {
       .get();
 
     destinationTransfers.replaceWithRecovery(payload);
-    expect(destinationTransfers.snapshot()).toEqual(expected);
+    expectRecoveredState(destinationTransfers.snapshot(), expected);
     expect(
       destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
     ).toEqual({
@@ -153,7 +233,10 @@ describe('complete inventory recovery', () => {
     expect(
       destination.prepare('SELECT COUNT(*) count FROM inventory_command_receipts').get(),
     ).toEqual({
-      count: 0,
+      count: 1,
+    });
+    expect(destination.prepare('SELECT key FROM inventory_command_receipts').get()).toEqual({
+      key: 'system:identity-high-water',
     });
     expect(
       destination
@@ -168,7 +251,7 @@ describe('complete inventory recovery', () => {
       )
       .run('obsolete-second-recovery', 'borrower_operation', 2, 1, 'hash', 'committed', 1, '{}');
     destinationTransfers.replaceWithRecovery(payload);
-    expect(destinationTransfers.snapshot()).toEqual(expected);
+    expectRecoveredState(destinationTransfers.snapshot(), expected);
     expect(
       destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
     ).toEqual({ ledger_epoch: 3 });
@@ -293,22 +376,28 @@ describe('complete inventory recovery', () => {
     destination.close();
   });
 
-  it('rejects active recovered items at archived locations before replacing inventory', async () => {
+  it('rejects active or archived recovered items at archived locations before replacing inventory', async () => {
     const source = sourceFixture();
     const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
-    const archivedItem = payload.items.find((item) => item.name === 'Old stock')!;
-    archivedItem.archived = false;
 
     const destination = database('active-item-archived-location');
     const transfers = new InventoryTransferService(destination);
     const before = transfers.snapshot();
     const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
 
-    expect(() => transfers.replaceWithRecovery(payload)).toThrow(/active at an archived location/);
-    expect(transfers.snapshot()).toEqual(before);
-    expect(
-      destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
-    ).toEqual(epoch);
+    for (const archived of [false, true]) {
+      const invalid = structuredClone(payload);
+      const item = invalid.items.find((entry) => entry.name === 'Old stock')!;
+      item.archived = archived;
+      item.location = 'Historic';
+      expect(() => transfers.replaceWithRecovery(invalid)).toThrow(
+        /references an archived location/,
+      );
+      expect(transfers.snapshot()).toEqual(before);
+      expect(
+        destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
+      ).toEqual(epoch);
+    }
     source.db.close();
     destination.close();
   });
@@ -384,7 +473,7 @@ it('round-trips mixed ordinary and found returns and rejects malformed recoverie
   const destination = database('mixed-found-returned');
   const transfers = new InventoryTransferService(destination);
   transfers.replaceWithRecovery(payload);
-  expect(transfers.snapshot()).toEqual(snapshot);
+  expectRecoveredState(transfers.snapshot(), snapshot);
   const totals = destination
     .prepare(
       "SELECT kind,SUM(quantity) quantity FROM inventory_events WHERE kind IN ('returned_usable','returned_damaged','found_returned') GROUP BY kind ORDER BY kind",
@@ -455,7 +544,7 @@ it('round-trips damaged lost recovery and rejects an over-recovery workbook', as
   const destination = database('damaged-found-returned');
   const transfers = new InventoryTransferService(destination);
   transfers.replaceWithRecovery(payload);
-  expect(transfers.snapshot()).toEqual(snapshot);
+  expectRecoveredState(transfers.snapshot(), snapshot);
   expect(new InventoryService(destination).listLoans()[0]).toMatchObject({
     outstanding: 2,
     lost: 0,

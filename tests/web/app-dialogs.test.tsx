@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/web/App';
 import { DialogStackProvider } from '../../src/web/Dialog';
 import type { Item } from '../../src/web/InventoryDialogs';
+import type { Borrower } from '../../src/domain/types.js';
+import { installWindowStorage } from '../helpers/window-storage.js';
 
 const hammer: Item = {
   id: 11,
@@ -31,9 +33,12 @@ function setup(
   role: 'admin' | 'operator' = 'admin',
   startPath = '/management',
   initialItems: Item[] = [hammer],
+  initialBorrowers: Borrower[] = [],
+  storageUnavailable = false,
 ) {
   let currentRole = role;
   let items: Item[] = initialItems;
+  let borrowers = initialBorrowers;
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
@@ -54,7 +59,19 @@ function setup(
         deadline: currentRole === 'admin' ? Date.now() + 600_000 : null,
       });
     if (path === '/api/items' || path === '/api/items?all=1') return response(items);
-    if (path === '/api/borrowers?all=1') return response([]);
+    if (path === '/api/borrowers?all=1') return response(borrowers);
+    const deletionStatus = path.match(/^\/api\/borrowers\/(\d+)\/deletion-status$/);
+    if (deletionStatus) {
+      const borrower = borrowers.find((entry) => entry.id === Number(deletionStatus[1]));
+      if (!borrower) return response({ error: 'not_found', message: 'Not found' }, 404);
+      return response({ borrower, outstanding: 0, lost: 0, stateRevision: 7 });
+    }
+    const deletion = path.match(/^\/api\/borrowers\/(\d+)\/delete$/);
+    if (deletion && method === 'POST') {
+      const borrowerId = Number(deletion[1]);
+      borrowers = borrowers.filter((entry) => entry.id !== borrowerId);
+      return response({ outcome: 'committed', action: 'delete_borrower', borrowerId });
+    }
     if (path === '/api/locations?all=1') return response([location]);
     if (path === '/api/inventory/epoch') return response({ ledgerEpoch: 1 });
     if (path === '/api/radios')
@@ -96,6 +113,14 @@ function setup(
     throw new Error(`Unexpected request: ${method} ${path}`);
   });
   window.history.replaceState({}, '', startPath);
+  installWindowStorage();
+  if (storageUnavailable)
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('storage access denied');
+      },
+    });
   const user = userEvent.setup();
   render(
     <DialogStackProvider>
@@ -106,11 +131,40 @@ function setup(
 }
 afterEach(() => {
   cleanup();
+  try {
+    if (typeof window.localStorage?.clear === 'function') window.localStorage.clear();
+  } catch {
+    // A focused test may replace the browser storage getter with a throwing accessor.
+  }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('inventory management in App', () => {
+  it('keeps borrower deletion unavailable when the browser storage getter throws', async () => {
+    const borrower: Borrower = {
+      id: 43,
+      username: 'storage-user',
+      name: 'Storage User',
+      contact: '',
+      type: 'individual',
+      archived: false,
+    };
+    const { user, requests } = setup('admin', '/management', [hammer], [borrower], true);
+    await user.click(await screen.findByRole('link', { name: 'ניהול' }));
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+    await user.click(
+      within(screen.getByRole('row', { name: /Storage User/ })).getByRole('button', {
+        name: 'מחיקה',
+      }),
+    );
+    await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Storage User?' });
+    await user.click(screen.getByRole('button', { name: 'מחיקת השואל וההיסטוריה' }));
+
+    expect(requests.some((request) => request.path === '/api/borrowers/43/delete')).toBe(false);
+    expect(await screen.findByText(/אחסון השחזור בדפדפן אינו זמין/)).toBeTruthy();
+  });
+
   it('guards a dirty desk batch across navigation and popstate until explicit discard', async () => {
     const tape: Item = {
       ...hammer,
@@ -280,6 +334,70 @@ describe('inventory management in App', () => {
     const save = requests.find((request) => request.path === '/api/inventory/items')!;
     expect(save.body).toMatchObject({ name: 'שולחן', targetAvailable: 5 });
     await waitFor(() => expect(screen.getByRole('button', { name: 'שולחן' })).toBeTruthy());
+  });
+
+  it('confirms borrower deletion explicitly and lets an archived borrower deletion be cancelled', async () => {
+    const activeBorrower: Borrower = {
+      id: 41,
+      username: 'active-user',
+      name: 'Active User',
+      contact: '050',
+      type: 'individual',
+      archived: false,
+    };
+    const archivedBorrower: Borrower = {
+      ...activeBorrower,
+      id: 42,
+      username: 'archived-user',
+      name: 'Archived User',
+      archived: true,
+    };
+    const { user, requests } = setup(
+      'admin',
+      '/management',
+      [hammer],
+      [activeBorrower, archivedBorrower],
+    );
+    await user.click(await screen.findByRole('link', { name: 'ניהול' }));
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+
+    const activeRow = screen.getByRole('row', { name: /Active User/ });
+    await user.click(within(activeRow).getByRole('button', { name: 'מחיקה' }));
+    expect(
+      await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Active User?' }),
+    ).toBeTruthy();
+    expect(screen.getByText(/פרטי הקשר שלו/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    expect(requests.some((request) => request.path.endsWith('/delete'))).toBe(false);
+
+    await user.click(
+      within(screen.getByRole('row', { name: /Active User/ })).getByRole('button', {
+        name: 'מחיקה',
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'מחיקת השואל וההיסטוריה' }));
+    await waitFor(() =>
+      expect(requests.some((request) => request.path === '/api/borrowers/41/delete')).toBe(true),
+    );
+    const deletion = requests.find((request) => request.path === '/api/borrowers/41/delete')!;
+    expect(deletion.body).toMatchObject({
+      expectedStateRevision: 7,
+      expectedOutstanding: 0,
+      expectedLost: 0,
+      expectedName: activeBorrower.name,
+      expectedUsername: activeBorrower.username,
+    });
+
+    await user.click(
+      within(screen.getByRole('row', { name: /Archived User/ })).getByRole('button', {
+        name: 'מחיקה',
+      }),
+    );
+    expect(
+      await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Archived User?' }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    expect(requests.some((request) => request.path === '/api/borrowers/42/delete')).toBe(false);
   });
 
   it('guards in-app navigation from a dirty item editor', async () => {

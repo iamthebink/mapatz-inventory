@@ -135,6 +135,12 @@ export function migrate(db: InventoryDatabase): void {
       OR e.borrower_id IS NOT l.borrower_id OR e.quantity<>l.quantity LIMIT 1`,
     )
     .get();
+  const itemAtArchivedLocation = db
+    .prepare(
+      `SELECT 1 FROM items i JOIN locations l ON l.id=i.location_id
+      WHERE l.archived=1 LIMIT 1`,
+    )
+    .get();
   const checkoutWithoutLoan = db
     .prepare(
       `SELECT 1 FROM inventory_events e LEFT JOIN loan_state l ON l.checkout_id=e.id
@@ -145,6 +151,8 @@ export function migrate(db: InventoryDatabase): void {
     throw new Error('Database has invalid authoritative inventory balances.');
   if (invalidLoanIdentity || checkoutWithoutLoan)
     throw new Error('Database has inconsistent checkout and loan state.');
+  if (itemAtArchivedLocation)
+    throw new Error('Database has an item assigned to an archived location.');
 }
 
 export function transaction<T>(db: InventoryDatabase, operation: () => T): T {

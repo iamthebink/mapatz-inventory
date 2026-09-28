@@ -5,13 +5,19 @@ import type {
   FrozenOperationAttempt,
 } from '../../src/web/borrower-workflow-recovery.js';
 import {
+  BORROWER_DELETION_STORAGE_KEY,
   clearFrozenAttempt,
+  clearFrozenManagementAttempt,
   dispatchFrozenAttempt,
   enumerateFrozenAttempts,
   frozenAttemptStorageKey,
   initializeFrozenAttemptRecovery,
   isExactBorrowerOperationConflictSet,
   parseFrozenAttempt,
+  parseFrozenManagementAttempt,
+  persistFrozenManagementAttempt,
+  readFrozenManagementAttempt,
+  readFrozenManagementAttempts,
   persistFrozenAttempt,
   resolveFrozenAttempt,
 } from '../../src/web/borrower-workflow-recovery.js';
@@ -87,6 +93,59 @@ beforeEach(() => {
 });
 
 describe('frozen attempt validation and storage', () => {
+  it('persists an exact borrower deletion command and restores it after reload', () => {
+    const attempt = {
+      version: 1 as const,
+      key: key1,
+      path: '/borrowers/7/delete',
+      method: 'POST' as const,
+      body: {
+        key: key1,
+        ledgerEpoch: 3,
+        expectedStateRevision: 18,
+        expectedOutstanding: 0,
+        expectedLost: 0,
+      },
+    };
+    expect(parseFrozenManagementAttempt(attempt)).toEqual(attempt);
+    expect(
+      parseFrozenManagementAttempt({
+        ...attempt,
+        body: { ...attempt.body, key: key2 },
+      }),
+    ).toBeNull();
+    expect(
+      persistFrozenManagementAttempt(testStorage, attempt, BORROWER_DELETION_STORAGE_KEY),
+    ).toBe(true);
+    expect(readFrozenManagementAttempt(testStorage, BORROWER_DELETION_STORAGE_KEY)).toEqual(
+      attempt,
+    );
+    expect(clearFrozenManagementAttempt(testStorage, BORROWER_DELETION_STORAGE_KEY, key1)).toBe(
+      true,
+    );
+    expect(readFrozenManagementAttempt(testStorage, BORROWER_DELETION_STORAGE_KEY)).toBeNull();
+  });
+
+  it('keeps attempts from separate tabs under distinct keys and clears only the reconciled key', () => {
+    const first = {
+      version: 1 as const,
+      key: key1,
+      path: '/inventory/items/1/delete',
+      method: 'POST' as const,
+      body: { key: key1, ledgerEpoch: 3 },
+    };
+    const second = {
+      ...first,
+      key: key2,
+      body: { key: key2, ledgerEpoch: 3 },
+    };
+    expect(persistFrozenManagementAttempt(testStorage, first)).toBe(true);
+    expect(persistFrozenManagementAttempt(testStorage, second)).toBe(true);
+    expect(readFrozenManagementAttempts(testStorage)).toEqual([first, second]);
+    expect(clearFrozenManagementAttempt(testStorage, undefined, key1)).toBe(true);
+    expect(readFrozenManagementAttempts(testStorage)).toEqual([second]);
+  });
+
   it('requires explicit recovery condition in frozen operation bodies', () => {
     const borrowOnly = operation();
     expect(parseFrozenAttempt(borrowOnly)).toEqual(borrowOnly);

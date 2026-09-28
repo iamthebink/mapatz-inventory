@@ -5,6 +5,7 @@ import { openDatabase } from '../../src/db/database.js';
 import {
   InventoryTransferService,
   type InventoryTransferSnapshot,
+  validateRecoveryPayload,
 } from '../../src/domain/import-export.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 import { WORKBOOK_CONTRACT } from '../../src/io/workbook-contract.js';
@@ -27,6 +28,17 @@ async function save(workbook: ExcelJS.Workbook): Promise<Buffer> {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
+function expectRecoveredState(
+  actual: InventoryTransferSnapshot,
+  expected: InventoryTransferSnapshot,
+) {
+  const { identityHighWater: actualHighWater, ...actualBusinessState } = actual;
+  const { identityHighWater: expectedHighWater, ...expectedBusinessState } = expected;
+  expect(actualBusinessState).toEqual(expectedBusinessState);
+  for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
+    expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
+}
+
 const emptySnapshot: InventoryTransferSnapshot = {
   radioCount: 0,
   radios: [],
@@ -36,9 +48,50 @@ const emptySnapshot: InventoryTransferSnapshot = {
   events: [],
   loans: [],
   stateRevision: 0,
+  nextItemCode: 100,
+  identityHighWater: {
+    nextItemId: 1,
+    nextBorrowerId: 1,
+    nextLocationId: 1,
+    nextEventId: 1,
+  },
 };
 
 describe('inventory XLSX workbook', () => {
+  it('requires exactly four positive safe identity high-water fields in recovery payloads', () => {
+    const valid = structuredClone(emptySnapshot);
+    expect(validateRecoveryPayload(valid)).toEqual(valid);
+    const malformed = [
+      {
+        ...valid,
+        identityHighWater: {
+          nextItemId: 1,
+          nextBorrowerId: 1,
+          nextLocationId: 1,
+        },
+      },
+      {
+        ...valid,
+        identityHighWater: { ...valid.identityHighWater, nextEventId: 1, unexpected: 1 },
+      },
+      {
+        ...valid,
+        identityHighWater: { ...valid.identityHighWater, nextEventId: 0 },
+      },
+      {
+        ...valid,
+        identityHighWater: {
+          ...valid.identityHighWater,
+          nextEventId: Number.MAX_SAFE_INTEGER + 1,
+        },
+      },
+    ];
+    for (const payload of malformed)
+      expect(() => validateRecoveryPayload(payload as never)).toThrow(
+        expect.objectContaining({ code: 'invalid_workbook' }),
+      );
+  });
+
   it('normalizes accepted offset timestamps before storing a recovery ledger and summarizing Israel days', async () => {
     const exported = await exportWorkbook({
       radioCount: 0,
@@ -127,6 +180,13 @@ describe('inventory XLSX workbook', () => {
         },
       ],
       stateRevision: 3,
+      nextItemCode: 101,
+      identityHighWater: {
+        nextItemId: 2,
+        nextBorrowerId: 2,
+        nextLocationId: 1,
+        nextEventId: 4,
+      },
     });
     const recovery = await parseRecoveryWorkbook(exported);
     const db = openDatabase(':memory:');
@@ -200,7 +260,7 @@ describe('inventory XLSX workbook', () => {
     const recovery = await parseRecoveryWorkbook(exported);
     const destination = openDatabase(':memory:');
     new InventoryTransferService(destination).replaceWithRecovery(recovery);
-    expect(new InventoryTransferService(destination).snapshot()).toEqual(snapshot);
+    expectRecoveredState(new InventoryTransferService(destination).snapshot(), snapshot);
 
     const impossibleIssue = await load(exported);
     impossibleIssue
@@ -251,7 +311,7 @@ describe('inventory XLSX workbook', () => {
           code: 101,
           name: 'אוהל',
           kind: 'non_consumable',
-          location: 'מחסן ישן',
+          location: null,
           aliases: ['Tent'],
           lotSize: null,
           archived: false,
@@ -444,6 +504,22 @@ describe('inventory XLSX workbook', () => {
     if (second) items.addRow(second);
     await expect(parseResetWorkbook(await save(workbook))).rejects.toMatchObject({
       code: 'invalid_workbook',
+    });
+  });
+
+  it('rejects reset items assigned to an archived location', async () => {
+    const workbook = await load(
+      await exportWorkbook({
+        ...emptySnapshot,
+        locations: [{ name: 'Old storage', archived: true }],
+      }),
+    );
+    workbook
+      .getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!
+      .addRow([100, 'Archived location item', 'consumable', 'Old storage', '', '', '', 0]);
+    await expect(parseResetWorkbook(await save(workbook))).rejects.toMatchObject({
+      code: 'invalid_workbook',
+      message: expect.stringContaining('archived location'),
     });
   });
 

@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Settings2,
   ShieldCheck,
+  Trash2,
   Upload,
   UserPlus,
   Users,
@@ -51,6 +52,16 @@ import { PeriodSummary } from './PeriodSummary';
 import { InventoryManagement } from './InventoryManagement';
 import { Radios } from './Radios';
 import { RadioCountSettings } from './RadioCountSettings';
+import { Dialog } from './Dialog';
+import {
+  BORROWER_DELETION_STORAGE_KEY,
+  clearFrozenManagementAttempt,
+  persistFrozenManagementAttempt,
+  readFrozenManagementAttempt,
+  readFrozenManagementAttempts,
+  safeWindowStorage,
+  type FrozenManagementAttempt,
+} from './borrower-workflow-recovery.js';
 
 type Role = 'operator' | 'admin';
 type LedgerEvent = {
@@ -67,6 +78,12 @@ type Session = { role: Role; deadline: number | null };
 type Tab = 'desk' | 'summary' | 'catalogs' | 'ledger' | 'radios';
 type ManagementTab = 'inventory' | 'borrowers' | 'data' | 'access';
 type DeskView = 'borrowers' | 'consumables';
+type BorrowerDeletionStatus = {
+  borrower: Borrower;
+  outstanding: number;
+  lost: number;
+  stateRevision: number;
+};
 
 const tabRoutes: Record<Tab, { path: string; aliases?: readonly string[] }> = {
   desk: { path: '/', aliases: ['/frontdesk'] },
@@ -153,6 +170,12 @@ export function App() {
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [adminRecoveryOpen, setAdminRecoveryOpen] = useState(false);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
+  const [borrowerDeletionStatus, setBorrowerDeletionStatus] =
+    useState<BorrowerDeletionStatus | null>(null);
+  const [borrowerDeletionAttempt, setBorrowerDeletionAttempt] =
+    useState<FrozenManagementAttempt | null>(() =>
+      readFrozenManagementAttempt(safeWindowStorage(), BORROWER_DELETION_STORAGE_KEY),
+    );
   const [adminPasswordError, setAdminPasswordError] = useState('');
   const [sessionReconciling, setSessionReconciling] = useState(false);
   const [announcement, setAnnouncement] = useState({ id: 0, text: '' });
@@ -485,6 +508,145 @@ export function App() {
       setPending(false);
     }
   }
+  async function inspectBorrowerForDeletion(borrower: Borrower) {
+    if (!adminActionsEnabled || pendingRef.current || borrowerDeletionAttempt) return;
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      await activityRequestRef.current;
+      setBorrowerDeletionStatus(
+        await api<BorrowerDeletionStatus>(`/borrowers/${borrower.id}/deletion-status`),
+      );
+    } catch (error) {
+      showError('בדיקת אפשרות למחיקת שואל', error);
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }
+  function clearStoredBorrowerDeletionAttempt(key: string): boolean {
+    return clearFrozenManagementAttempt(safeWindowStorage(), BORROWER_DELETION_STORAGE_KEY, key);
+  }
+  async function dispatchBorrowerDeletion(attempt: FrozenManagementAttempt) {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      await activityRequestRef.current;
+      await api(attempt.path, {
+        method: attempt.method,
+        body: JSON.stringify(attempt.body),
+      });
+      const cleared = clearStoredBorrowerDeletionAttempt(attempt.key);
+      setBorrowerDeletionAttempt(
+        cleared
+          ? readFrozenManagementAttempt(safeWindowStorage(), BORROWER_DELETION_STORAGE_KEY)
+          : attempt,
+      );
+      setBorrowerDeletionStatus(null);
+      try {
+        await refresh();
+        showToast(
+          'מחיקת שואל',
+          cleared
+            ? 'השואל וההיסטוריה שלו נמחקו. יתרות המלאי של פריטים אחרים לא השתנו.'
+            : 'השואל נמחק, אך לא ניתן להסיר את פרטי ניסיון השחזור מהמכשיר.',
+          cleared ? 'success' : 'warning',
+        );
+      } catch {
+        showToast(
+          'מחיקת שואל',
+          cleared
+            ? 'השואל נמחק, אך התצוגה לא התרעננה. יש לרענן את המסך.'
+            : 'השואל נמחק, אך התצוגה וניסיון השחזור לא התרעננו. יש לרענן את המסך.',
+          'warning',
+        );
+      }
+    } catch (error) {
+      setBorrowerDeletionStatus(null);
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        setBorrowerDeletionAttempt(attempt);
+        showToast(
+          'מחיקת שואל ממתינה',
+          'השרת דרש הרשאת מנהל. לאחר הכניסה למצב מנהל, יש לבדוק שוב את אותה פעולה.',
+          'warning',
+        );
+      } else if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        const cleared = clearStoredBorrowerDeletionAttempt(attempt.key);
+        setBorrowerDeletionAttempt(
+          cleared
+            ? readFrozenManagementAttempt(safeWindowStorage(), BORROWER_DELETION_STORAGE_KEY)
+            : attempt,
+        );
+        try {
+          await refresh();
+        } catch {
+          // The rejection is definitive; the toast below carries the server result.
+        }
+        showToast('מחיקת שואל לא בוצעה', error.message, cleared ? 'error' : 'warning');
+      } else {
+        setBorrowerDeletionAttempt(attempt);
+        try {
+          await refresh();
+        } catch {
+          // The same-key retry remains available if the commit status is still unknown.
+        }
+        showToast(
+          'מחיקת שואל ממתינה לבדיקה',
+          'לא התקבלה תשובה חד־משמעית. אפשר לבדוק שוב את אותה פעולה עם אותו מפתח.',
+          'warning',
+        );
+      }
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }
+  function confirmBorrowerDeletion() {
+    if (!borrowerDeletionStatus || inventoryEpoch == null || borrowerDeletionAttempt) return;
+    const storage = safeWindowStorage();
+    if (!storage) {
+      showToast('המחיקה לא נשלחה', 'אחסון השחזור בדפדפן אינו זמין כרגע', 'error');
+      return;
+    }
+    const existingAttempt = readFrozenManagementAttempts(storage, BORROWER_DELETION_STORAGE_KEY)[0];
+    if (existingAttempt) {
+      setBorrowerDeletionAttempt(existingAttempt);
+      showToast(
+        'מחיקה קודמת ממתינה לבדיקה',
+        'יש לבדוק תחילה את אותה פעולה לפני מחיקה נוספת',
+        'warning',
+      );
+      return;
+    }
+    const key = crypto.randomUUID();
+    const attempt: FrozenManagementAttempt = {
+      version: 1,
+      key,
+      path: `/borrowers/${borrowerDeletionStatus.borrower.id}/delete`,
+      method: 'POST',
+      body: {
+        key,
+        ledgerEpoch: inventoryEpoch,
+        expectedStateRevision: borrowerDeletionStatus.stateRevision,
+        expectedOutstanding: borrowerDeletionStatus.outstanding,
+        expectedLost: borrowerDeletionStatus.lost,
+        expectedName: borrowerDeletionStatus.borrower.name,
+        expectedUsername: borrowerDeletionStatus.borrower.username,
+      },
+    };
+    const stored = persistFrozenManagementAttempt(storage, attempt, BORROWER_DELETION_STORAGE_KEY);
+    if (!stored) {
+      showToast(
+        'המחיקה לא נשלחה',
+        'לא ניתן לשמור ניסיון שחזור מקומי. בדוק את אחסון הדפדפן ונסה שוב.',
+        'error',
+      );
+      return;
+    }
+    setBorrowerDeletionAttempt(attempt);
+    void dispatchBorrowerDeletion(attempt);
+  }
   const closeAdminDialog = useCallback(() => {
     setAdminDialogOpen(false);
     setAdminPasswordError('');
@@ -626,6 +788,9 @@ export function App() {
                 body: JSON.stringify({ archived: !borrower.archived }),
               }),
             )
+          }
+          onDelete={
+            borrowerDeletionAttempt ? undefined : () => void inspectBorrowerForDeletion(borrower)
           }
         />
       ),
@@ -925,6 +1090,23 @@ export function App() {
                       </label>
                     </ActionCard>
                   </div>
+                  {borrowerDeletionAttempt && (
+                    <section className="rounded-2xl border border-ctp-yellow/40 bg-ctp-yellow/5 p-4">
+                      <h3 className="font-semibold">מחיקת שואל ממתינה לבדיקה</h3>
+                      <p className="mt-1 text-sm text-ctp-subtext">
+                        נשמר ניסיון מחיקה שלא התקבלה עליו תשובה. בדיקה חוזרת תשלח בדיוק את אותה
+                        בקשה, עם אותו מפתח.
+                      </p>
+                      <button
+                        type="button"
+                        className="primary-button mt-3"
+                        disabled={pending || !adminActionsEnabled}
+                        onClick={() => void dispatchBorrowerDeletion(borrowerDeletionAttempt)}
+                      >
+                        בדיקת אותה פעולה
+                      </button>
+                    </section>
+                  )}
                   <CatalogBlock title="קטלוג שואלים">
                     <DataTable
                       rows={catalogBorrowers}
@@ -1118,6 +1300,61 @@ export function App() {
           onError={(error) => showError('שחזור סיסמת המנהל', error)}
         />
       )}
+      {borrowerDeletionStatus && (
+        <Dialog
+          title={`למחוק לצמיתות את ${borrowerDeletionStatus.borrower.name}?`}
+          description="המחיקה מסירה את השואל, את פרטי הקשר שלו ואת האירועים וההלוואות הסגורות שלו. היא אינה משנה את יתרות המלאי של פריטים שנותרו."
+          level="root"
+          role="alertdialog"
+          variant="destructive"
+          busy={pending}
+          dismissible={!pending}
+          onClose={() => {
+            if (!pending) setBorrowerDeletionStatus(null);
+          }}
+        >
+          <div className="space-y-3 text-sm">
+            <p>
+              {borrowerDeletionStatus.borrower.name} · שם משתמש{' '}
+              <bdi dir="ltr">{borrowerDeletionStatus.borrower.username}</bdi>
+            </p>
+            <p>
+              יתרות פתוחות: מושאל {borrowerDeletionStatus.outstanding}, אבוד{' '}
+              {borrowerDeletionStatus.lost}.
+            </p>
+            {(borrowerDeletionStatus.outstanding > 0 || borrowerDeletionStatus.lost > 0) && (
+              <p className="dialog-form-error">
+                המחיקה חסומה כל עוד לשואל יש יתרות מושאלות או אבודות. יש להסדיר אותן תחילה.
+              </p>
+            )}
+            <div className="dialog-actions dialog-actions-destructive">
+              <button
+                type="button"
+                className="danger-button"
+                disabled={
+                  pending ||
+                  !adminActionsEnabled ||
+                  inventoryEpoch == null ||
+                  !!borrowerDeletionAttempt ||
+                  borrowerDeletionStatus.outstanding > 0 ||
+                  borrowerDeletionStatus.lost > 0
+                }
+                onClick={confirmBorrowerDeletion}
+              >
+                מחיקת השואל וההיסטוריה
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={pending}
+                onClick={() => setBorrowerDeletionStatus(null)}
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        </Dialog>
+      )}
       {activeDialog && (
         <InventoryDialog
           active={activeDialog}
@@ -1309,11 +1546,13 @@ function SmallButton({
 function RowActions({
   onEdit,
   onArchive,
+  onDelete,
   archived,
   disabled,
 }: {
   onEdit: () => void;
   onArchive: () => void;
+  onDelete?: () => void;
   archived: boolean;
   disabled: boolean;
 }) {
@@ -1324,6 +1563,9 @@ function RowActions({
       </SmallButton>
       <SmallButton icon={archived ? RotateCcw : Archive} disabled={disabled} onClick={onArchive}>
         {archived ? 'שחזור' : 'ארכוב'}
+      </SmallButton>
+      <SmallButton icon={Trash2} disabled={disabled || !onDelete} onClick={onDelete}>
+        מחיקה
       </SmallButton>
     </div>
   );

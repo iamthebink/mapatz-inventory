@@ -96,7 +96,16 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
       loan.lost,
     ]),
   );
-  addSheet(workbook, 'recoveryState', [[snapshot.stateRevision]]);
+  addSheet(workbook, 'recoveryState', [
+    [
+      snapshot.stateRevision,
+      snapshot.nextItemCode,
+      snapshot.identityHighWater.nextItemId,
+      snapshot.identityHighWater.nextBorrowerId,
+      snapshot.identityHighWater.nextLocationId,
+      snapshot.identityHighWater.nextEventId,
+    ],
+  ]);
   addSheet(
     workbook,
     'recoveryBorrowers',
@@ -311,12 +320,12 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
     name: requiredText(row[0], `Reset Locations row ${index + 2} Name`),
     archived: optionalBoolean(row[1], `Reset Locations row ${index + 2} Archived`),
   }));
-  const locationNames = new Map<string, string>();
+  const locationNames = new Map<string, TransferLocation>();
   for (const location of locations) {
     const key = location.name.toLocaleLowerCase();
     if (locationNames.has(key))
       return importError(`Reset Locations contains duplicate name "${location.name}"`);
-    locationNames.set(key, location.name);
+    locationNames.set(key, location);
   }
   const rawItems = dataRows(itemSheet, 8);
   const usedCodes = new Set<number>();
@@ -337,13 +346,16 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
         `Reset Items row ${rowNumber} Kind must be consumable, non_consumable, or camp_equipment`,
       );
     const locationInput = optionalText(row[3], `Reset Items row ${rowNumber} Location`);
-    const location =
+    const referencedLocation =
       locationInput == null
         ? null
         : (locationNames.get(locationInput.toLocaleLowerCase()) ??
           importError(
             `Reset Items row ${rowNumber} references unknown Location "${locationInput}"`,
           ));
+    if (referencedLocation?.archived)
+      importError(`Reset Items row ${rowNumber} references an archived location`);
+    const location = referencedLocation?.name ?? null;
     const lotSize = optionalInteger(row[5], `Reset Items row ${rowNumber} Lot Size`, 1);
     if (kind !== 'consumable' && lotSize != null)
       return importError(`Reset Items row ${rowNumber} Lot Size is only valid for consumables`);
@@ -423,10 +435,17 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     name: requiredText(row[0], `Recovery Locations row ${index + 2} Name`),
     archived: requiredBoolean(row[1], `Recovery Locations row ${index + 2} Archived`),
   }));
-  const revisionRows = dataRows(stateSheet, 1);
+  const revisionRows = dataRows(stateSheet, 6);
   if (revisionRows.length !== 1)
-    return importError('Recovery State must contain exactly one revision');
+    return importError('Recovery State must contain exactly one identity state row');
   const stateRevision = integer(revisionRows[0]![0], 'Recovery State Revision', 0);
+  const nextItemCode = integer(revisionRows[0]![1], 'Recovery Next Item Code', 100);
+  const identityHighWater = {
+    nextItemId: integer(revisionRows[0]![2], 'Recovery Next Item ID', 1),
+    nextBorrowerId: integer(revisionRows[0]![3], 'Recovery Next Borrower ID', 1),
+    nextLocationId: integer(revisionRows[0]![4], 'Recovery Next Location ID', 1),
+    nextEventId: integer(revisionRows[0]![5], 'Recovery Next Event ID', 1),
+  };
   const items = dataRows(itemSheet, 15).map((row, index) => {
     const rowNumber = index + 2;
     const kind = requiredText(row[2], `Recovery Items row ${rowNumber} Kind`) as ItemKind;
@@ -528,6 +547,8 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     events,
     loans,
     stateRevision,
+    nextItemCode,
+    identityHighWater,
     radioCount,
     radios,
   });
