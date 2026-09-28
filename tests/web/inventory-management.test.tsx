@@ -75,7 +75,7 @@ describe('inventory management UI', () => {
       }),
     );
     await screen.findByRole('alertdialog', { name: 'למחוק את Hammer לצמיתות?' });
-    await user.click(screen.getByRole('button', { name: 'מחיקה לצמיתות' }));
+    await user.click(screen.getByRole('button', { name: 'מחק את הפריט וההיסטוריה לצמיתות' }));
 
     expect(fetch).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith(
@@ -344,7 +344,7 @@ describe('inventory management UI', () => {
     expect(fetch).not.toHaveBeenCalled();
 
     await user.click(within(activeRow).getByRole('button', { name: 'מחיקה' }));
-    await user.click(screen.getByRole('button', { name: 'מחיקה לצמיתות' }));
+    await user.click(screen.getByRole('button', { name: 'מחק את הפריט וההיסטוריה לצמיתות' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(fetch.mock.calls[0]?.[0]).toBe('/api/inventory/items/1/delete');
     expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({

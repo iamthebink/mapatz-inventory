@@ -1216,7 +1216,7 @@ export function InventoryManagement({
               }
               onClick={() => deleteItem(deleteConfirm)}
             >
-              מחיקה לצמיתות
+              מחק את הפריט וההיסטוריה לצמיתות
             </button>
           </div>
         </Dialog>
@@ -1283,7 +1283,11 @@ export function InventoryManagement({
               }
               onClick={confirmLocationRetirement}
             >
-              {locationRetirement.action === 'archive' ? 'ארכוב והעברה' : 'מחיקה והעברה'}
+              {locationRetirement.action === 'archive'
+                ? 'ארכוב והעברה'
+                : confirmedLocationItems.length > 0
+                  ? 'העבר את הפריטים ומחק את המיקום לצמיתות'
+                  : 'מחק את המיקום לצמיתות'}
             </button>
           </div>
         </Dialog>

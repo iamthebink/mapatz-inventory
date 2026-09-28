@@ -159,7 +159,7 @@ describe('inventory management in App', () => {
       }),
     );
     await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Storage User?' });
-    await user.click(screen.getByRole('button', { name: 'מחיקת השואל וההיסטוריה' }));
+    await user.click(screen.getByRole('button', { name: 'מחק את השואל וההיסטוריה לצמיתות' }));
 
     expect(requests.some((request) => request.path === '/api/borrowers/43/delete')).toBe(false);
     expect(await screen.findByText(/אחסון השחזור בדפדפן אינו זמין/)).toBeTruthy();
@@ -375,7 +375,7 @@ describe('inventory management in App', () => {
         name: 'מחיקה',
       }),
     );
-    await user.click(screen.getByRole('button', { name: 'מחיקת השואל וההיסטוריה' }));
+    await user.click(screen.getByRole('button', { name: 'מחק את השואל וההיסטוריה לצמיתות' }));
     await waitFor(() =>
       expect(requests.some((request) => request.path === '/api/borrowers/41/delete')).toBe(true),
     );

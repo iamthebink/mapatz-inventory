@@ -1341,7 +1341,7 @@ export function App() {
                 }
                 onClick={confirmBorrowerDeletion}
               >
-                מחיקת השואל וההיסטוריה
+                מחק את השואל וההיסטוריה לצמיתות
               </button>
               <button
                 type="button"
