@@ -110,7 +110,10 @@ describe('period summary view', () => {
     });
     expect(screen.getByText('אין שואלים התואמים לחיפוש.')).toBeTruthy();
     vi.mocked(fetchPeriodSummary).mockResolvedValueOnce({ ...result, borrowers: [] });
-    fireEvent.click(screen.getByRole('button', { name: 'רענון' }));
+    const refresh = screen.getByRole('button', { name: 'רענון' });
+    expect(refresh.classList.contains('secondary-button')).toBe(true);
+    expect(refresh.querySelector('svg')).not.toBeNull();
+    fireEvent.click(refresh);
     expect(await screen.findByText('אין יתרות השאלה חיוביות בתקופה זו.')).toBeTruthy();
     vi.mocked(fetchPeriodSummary).mockRejectedValueOnce(new Error('offline'));
     fireEvent.click(screen.getByRole('button', { name: 'רענון' }));

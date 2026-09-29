@@ -311,15 +311,24 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
     await expectQuantityDialogItem(staging, name);
     await staging.getByRole('button', { name: 'הוספה לעסקה' }).click();
   }
-  await desk
+  const cancelStaged = desk
     .locator('.consumables-draft-item')
     .filter({ hasText: seed.secondConsumable.name })
-    .getByRole('button', { name: 'עריכת כמות והערה' })
-    .click();
-  const edit = page.getByRole('dialog', { name: `עריכת כמות והערה ${seed.secondConsumable.name}` });
-  await expectQuantityDialogItem(edit, seed.secondConsumable.name);
-  await edit.getByRole('spinbutton', { name: 'כמות' }).fill('2');
-  await edit.getByRole('button', { name: 'שמירת שינוי' }).click();
+    .getByRole('button', { name: 'ביטול פעולה' });
+  const cancelBounds = await cancelStaged.boundingBox();
+  expect(cancelBounds!.width).toBeGreaterThanOrEqual(40);
+  expect(cancelBounds!.height).toBeGreaterThanOrEqual(40);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await page.keyboard.press('Tab');
+  await cancelStaged.focus();
+  await expect(cancelStaged).toHaveCSS('outline-width', '3px');
+  await cancelStaged.click();
+  const secondRow = desk.getByRole('row', { name: new RegExp(seed.secondConsumable.name) });
+  await secondRow.getByRole('button', { name: 'ניפוק' }).click();
+  const restage = page.getByRole('dialog', { name: `ניפוק ${seed.secondConsumable.name}` });
+  await expectQuantityDialogItem(restage, seed.secondConsumable.name);
+  await restage.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await restage.getByRole('button', { name: 'הוספה לעסקה' }).click();
   await expect(desk.getByText('סך יחידות לניפוק').locator('..')).toContainText('3');
   await desk.getByRole('button', { name: 'בדיקה ואישור הניפוק' }).click();
   await page.getByRole('button', { name: 'אישור ניפוק' }).click();

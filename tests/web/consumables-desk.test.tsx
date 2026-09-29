@@ -126,7 +126,7 @@ it('stages only from an item-specific dialog and keeps invalid quantity focused 
   expect(send).not.toHaveBeenCalled();
 });
 
-it('sends one atomic command with corrected retained rows and retries the same key after uncertainty', async () => {
+it('corrects a staged item by canceling and restaging it, retaining other rows', async () => {
   const requests: Array<{ key: string; body: { items: unknown[] } }> = [];
   let lost = true;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
@@ -150,20 +150,42 @@ it('sends one atomic command with corrected retained rows and retries the same k
     within(screen.getByRole('row', { name: /אזיקונים/ })).getByRole('button', { name: 'ניפוק' }),
   );
   await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
-  await user.click(screen.getAllByRole('button', { name: 'עריכת כמות והערה' })[0]!);
-  const edit = screen.getByRole('dialog', { name: 'עריכת כמות והערה סרט' });
-  await user.clear(within(edit).getByRole('spinbutton', { name: 'כמות' }));
-  await user.type(within(edit).getByRole('spinbutton', { name: 'כמות' }), '2');
-  await user.click(within(edit).getByRole('button', { name: 'שמירת שינוי' }));
-  await user.click(screen.getAllByRole('button', { name: 'הסרה' })[1]!);
-  expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('2');
-  await user.click(screen.getByRole('button', { name: 'בדיקה ואישור הניפוק' }));
+  const stagedRows = screen.getAllByRole('listitem');
+  const cancelStaged = within(stagedRows[0]!).getByRole('button', { name: 'ביטול פעולה' });
+  expect(cancelStaged.classList.contains('small-button')).toBe(true);
+  expect(cancelStaged.getAttribute('data-tone')).toBeNull();
+  expect(cancelStaged.querySelector('svg')).not.toBeNull();
+  await user.click(cancelStaged);
+  expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }));
+  expect(screen.queryByText('סרט')).toBeTruthy();
+  expect(screen.getAllByText('אזיקונים').length).toBeGreaterThan(0);
+  expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('1');
+  await user.click(
+    within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
+  );
+  const correction = screen.getByRole('dialog', { name: 'ניפוק סרט' });
+  await user.clear(within(correction).getByRole('spinbutton', { name: 'כמות' }));
+  await user.type(within(correction).getByRole('spinbutton', { name: 'כמות' }), '2');
+  await user.type(within(correction).getByRole('textbox', { name: 'הערה (רשות)' }), 'מתוקן');
+  await user.click(within(correction).getByRole('button', { name: 'הוספה לעסקה' }));
+  expect(screen.getAllByText('אזיקונים').length).toBeGreaterThan(0);
+  expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('3');
+  const reviewTrigger = screen.getByRole('button', { name: 'בדיקה ואישור הניפוק' });
+  expect(reviewTrigger.classList.contains('primary-button')).toBe(true);
+  expect(reviewTrigger.querySelector('svg')).not.toBeNull();
+  await user.click(reviewTrigger);
   const review = screen.getByRole('alertdialog', { name: 'אישור ניפוק' });
-  expect(within(review).getByText(/סרט · קוד 101 · כמות 2/)).toBeTruthy();
-  expect(within(review).getByText('סך יחידות לניפוק: 2')).toBeTruthy();
-  await user.click(screen.getByRole('button', { name: 'אישור ניפוק' }));
+  expect(within(review).getByText(/סרט · קוד 101 · כמות 2 · מתוקן/)).toBeTruthy();
+  expect(within(review).getByText('סך יחידות לניפוק: 3')).toBeTruthy();
+  const commit = within(review).getByRole('button', { name: 'אישור ניפוק' });
+  expect(commit.classList.contains('primary-button')).toBe(true);
+  expect(commit.querySelector('svg')).not.toBeNull();
+  await user.click(commit);
   expect(requests).toHaveLength(1);
-  expect(requests[0]?.body.items).toEqual([{ itemId: 1, quantity: 2, note: '' }]);
+  expect(requests[0]?.body.items).toEqual([
+    { itemId: 2, quantity: 1, note: '' },
+    { itemId: 1, quantity: 2, note: 'מתוקן' },
+  ]);
   await user.click(screen.getByRole('button', { name: 'בדיקת הפעולה השמורה' }));
   expect(requests.map((request) => request.key)).toEqual([requests[0]?.key, requests[0]?.key]);
   expect(refresh).toHaveBeenCalledOnce();
@@ -191,20 +213,22 @@ it('restores a valid attempt and preserves correction controls after authoritati
   expect(
     screen.getByText('הפעולה נשלחה. יש לבדוק את תוצאתה השמורה לפני המשך העבודה.'),
   ).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'עריכת כמות והערה' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: 'ביטול פעולה' })).toHaveProperty('disabled', true);
   await user.click(screen.getByRole('button', { name: 'בדיקת הפעולה השמורה' }));
   expect(screen.getByText('הכמויות במלאי לא משתנות עד האישור הסופי.')).toBeTruthy();
-  expect(await screen.findByRole('button', { name: 'עריכת כמות והערה' })).toHaveProperty(
+  expect(await screen.findByRole('button', { name: 'ביטול פעולה' })).toHaveProperty(
     'disabled',
     false,
   );
-  await user.click(screen.getByRole('button', { name: 'עריכת כמות והערה' }));
-  const edit = screen.getByRole('dialog', { name: 'עריכת כמות והערה סרט' });
-  expect(within(edit).getByRole('spinbutton', { name: 'כמות' })).toHaveProperty('value', '2');
-  expect(within(edit).getByRole('textbox', { name: 'הערה (רשות)' })).toHaveProperty(
-    'value',
-    'saved',
+  await user.click(screen.getByRole('button', { name: 'ביטול פעולה' }));
+  await user.click(
+    within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
   );
+  const restage = screen.getByRole('dialog', { name: 'ניפוק סרט' });
+  await user.clear(within(restage).getByRole('spinbutton', { name: 'כמות' }));
+  await user.type(within(restage).getByRole('spinbutton', { name: 'כמות' }), '1');
+  await user.type(within(restage).getByRole('textbox', { name: 'הערה (רשות)' }), 'saved');
+  await user.click(within(restage).getByRole('button', { name: 'הוספה לעסקה' }));
   expect(showToast.mock.lastCall?.[1]).toContain('סרט: זמין 1');
 });
 
@@ -224,7 +248,7 @@ it('rejects a repeated selection that exceeds cumulative stock and keeps the ite
   expect(document.activeElement).toBe(within(dialog).getByRole('spinbutton', { name: 'כמות' }));
 });
 
-it('blocks an invalid edit while retaining the original quantity and total', async () => {
+it('blocks an invalid restage without changing the remaining draft', async () => {
   const showToast = vi.fn();
   const { user } = mount(
     [item(1, 'סרט')],
@@ -235,14 +259,17 @@ it('blocks an invalid edit while retaining the original quantity and total', asy
     within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
   );
   await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
-  await user.click(screen.getByRole('button', { name: 'עריכת כמות והערה' }));
-  const edit = screen.getByRole('dialog', { name: 'עריכת כמות והערה סרט' });
-  await user.clear(within(edit).getByRole('spinbutton', { name: 'כמות' }));
-  await user.type(within(edit).getByRole('spinbutton', { name: 'כמות' }), '0');
-  await user.click(within(edit).getByRole('button', { name: 'שמירת שינוי' }));
-  expect(within(edit).getByRole('alert').textContent).toContain('סרט');
-  await user.click(within(edit).getByRole('button', { name: 'ביטול' }));
-  expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('1');
+  await user.click(screen.getByRole('button', { name: 'ביטול פעולה' }));
+  await user.click(
+    within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
+  );
+  const restage = screen.getByRole('dialog', { name: 'ניפוק סרט' });
+  await user.clear(within(restage).getByRole('spinbutton', { name: 'כמות' }));
+  await user.type(within(restage).getByRole('spinbutton', { name: 'כמות' }), '0');
+  await user.click(within(restage).getByRole('button', { name: 'הוספה לעסקה' }));
+  expect(within(restage).getByRole('alert').textContent).toContain('סרט');
+  await user.click(within(restage).getByRole('button', { name: 'ביטול' }));
+  expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('0');
   expect(showToast).not.toHaveBeenCalled();
 });
 
@@ -268,7 +295,7 @@ it('locks navigation and editing while the atomic submission is in flight', asyn
   await user.click(screen.getByRole('button', { name: 'בדיקה ואישור הניפוק' }));
   await user.click(screen.getByRole('button', { name: 'אישור ניפוק' }));
   expect(sent).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole('button', { name: 'עריכת כמות והערה', hidden: true })).toHaveProperty(
+  expect(screen.getByRole('button', { name: 'ביטול פעולה', hidden: true })).toHaveProperty(
     'disabled',
     true,
   );
@@ -307,7 +334,7 @@ it('preserves the original key and payload after idempotency conflict', async ()
   await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
   await user.click(screen.getByRole('button', { name: 'בדיקה ואישור הניפוק' }));
   await user.click(screen.getByRole('button', { name: 'אישור ניפוק' }));
-  expect(screen.getByRole('button', { name: 'עריכת כמות והערה' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: 'ביטול פעולה' })).toHaveProperty('disabled', true);
   await user.click(screen.getByRole('button', { name: 'בדיקת הפעולה השמורה' }));
   expect(sent).toHaveLength(2);
   expect(sent[1]).toEqual(sent[0]);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { desktop } from './desktop';
 import { initializeFrozenAttemptRecovery } from './borrower-workflow-recovery';
 import { sendFrozenBorrowerAttempt } from './api';
@@ -43,6 +44,7 @@ export function DesktopStartup({ children }: { children: ReactNode }) {
       <p className="mt-4">בודקים את הפעולות השמורות לפני פתיחת המלאי.</p>
       {state === 'failed' && (
         <button className="primary-button mt-4" onClick={() => void reconcile()}>
+          <RefreshCw className="size-4" aria-hidden="true" />
           נסה שוב
         </button>
       )}

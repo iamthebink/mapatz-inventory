@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import type { RadioFleet } from '../domain/types.js';
 import { Dialog } from './Dialog';
 import { fetchRadios, radioCommand } from './api';
@@ -111,6 +112,7 @@ export function RadioCountSettings({ isAdmin, sessionReconciling, showToast }: P
               className="secondary-button mt-2"
               onClick={() => setLoadRevision((value) => value + 1)}
             >
+              <RefreshCw className="size-4" aria-hidden="true" />
               ניסיון טעינה מחדש
             </button>
           )}

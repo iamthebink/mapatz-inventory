@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import type { PeriodSummary as PeriodSummaryResult } from '../contracts/period-summary.js';
 import { periodBounds, todayInIsrael } from '../domain/period-summary.js';
 import { fetchPeriodSummary } from './api';
@@ -174,6 +175,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
           className="secondary-button"
           onClick={() => setReload((value) => value + 1)}
         >
+          <RefreshCw className="size-4" aria-hidden="true" />
           רענון
         </button>
       </div>

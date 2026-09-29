@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Check, ClipboardCheck, PackageMinus, RefreshCw, Undo2 } from 'lucide-react';
 import type { Item } from '../domain/types';
 import { Dialog } from './Dialog';
 import { sendConsumableBatchCommand } from './api';
@@ -32,7 +33,6 @@ export function ConsumablesDesk({
   const [discard, setDiscard] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [quantity, setQuantity] = useState('1');
   const [note, setNote] = useState('');
   const [quantityError, setQuantityError] = useState('');
@@ -117,7 +117,6 @@ export function ConsumablesDesk({
     setEntries([]);
     setQuery('');
     setSelectedId(null);
-    setEditingIndex(null);
     setQuantity('1');
     setNote('');
     setReview(false);
@@ -135,7 +134,6 @@ export function ConsumablesDesk({
   };
   const closeQuantity = () => {
     setSelectedId(null);
-    setEditingIndex(null);
     setQuantity('1');
     setNote('');
     setQuantityError('');
@@ -147,7 +145,6 @@ export function ConsumablesDesk({
     )
       return;
     setSelectedId(null);
-    setEditingIndex(null);
     setQuantity('1');
     setNote('');
     setQuantityError('');
@@ -156,25 +153,15 @@ export function ConsumablesDesk({
   const openQuantity = (item: Item, trigger: HTMLButtonElement) => {
     rowTrigger.current = trigger;
     setSelectedId(item.id);
-    setEditingIndex(null);
     setQuantity('1');
     setNote('');
-    setQuantityError('');
-  };
-  const editQuantity = (entry: Entry, index: number, trigger: HTMLButtonElement) => {
-    rowTrigger.current = trigger;
-    setSelectedId(entry.itemId);
-    setEditingIndex(index);
-    setQuantity(String(entry.quantity));
-    setNote(entry.note);
     setQuantityError('');
   };
   const stageQuantity = () => {
     const amount = Number(quantity);
     const item = active.find((candidate) => candidate.id === selectedId);
     const already = entries.reduce(
-      (sum, entry, index) =>
-        sum + (entry.itemId === selectedId && index !== editingIndex ? entry.quantity : 0),
+      (sum, entry) => sum + (entry.itemId === selectedId ? entry.quantity : 0),
       0,
     );
     if (
@@ -194,11 +181,7 @@ export function ConsumablesDesk({
       return;
     }
     const next: Entry = { itemId: item.id, quantity: amount, note };
-    setEntries((current) =>
-      editingIndex === null
-        ? [...current, next]
-        : current.map((entry, index) => (index === editingIndex ? next : entry)),
-    );
+    setEntries((current) => [...current, next]);
     closeQuantity();
   };
   const submit = async () => {
@@ -366,6 +349,7 @@ export function ConsumablesDesk({
                           disabled={item.available < 1 || busy || Boolean(attempt)}
                           onClick={(event) => openQuantity(item, event.currentTarget)}
                         >
+                          <PackageMinus className="size-3.5" aria-hidden="true" />
                           ניפוק
                         </button>
                       </td>
@@ -413,21 +397,17 @@ export function ConsumablesDesk({
                     <div className="consumables-draft-actions">
                       <button
                         type="button"
+                        className="small-button"
                         disabled={busy || Boolean(attempt)}
-                        onClick={(event) => editQuantity(entry, index, event.currentTarget)}
-                      >
-                        עריכת כמות והערה
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy || Boolean(attempt)}
-                        onClick={() =>
+                        onClick={() => {
                           setEntries((current) =>
                             current.filter((_, position) => position !== index),
-                          )
-                        }
+                          );
+                          queueMicrotask(() => search.current?.focus());
+                        }}
                       >
-                        הסרה
+                        <Undo2 className="size-3.5" aria-hidden="true" />
+                        ביטול פעולה
                       </button>
                     </div>
                   </li>
@@ -445,6 +425,11 @@ export function ConsumablesDesk({
                 disabled={busy || entries.length === 0}
                 onClick={() => (attempt ? void submit() : reviewDraft())}
               >
+                {attempt ? (
+                  <RefreshCw className="size-4" aria-hidden="true" />
+                ) : (
+                  <ClipboardCheck className="size-4" aria-hidden="true" />
+                )}
                 {attempt ? 'בדיקת הפעולה השמורה' : 'בדיקה ואישור הניפוק'}
               </button>
               <small>האישור הסופי יוצג בחלון נפרד, כמו בכרטיס שואל.</small>
@@ -454,7 +439,7 @@ export function ConsumablesDesk({
       </section>
       {selected && (
         <Dialog
-          title={`${editingIndex === null ? 'ניפוק' : 'עריכת כמות והערה'} ${selected.name}`}
+          title={`ניפוק ${selected.name}`}
           description={
             <span className="quantity-dialog-item">
               <span className="quantity-dialog-item-label">פריט: </span>
@@ -477,7 +462,7 @@ export function ConsumablesDesk({
                 ביטול
               </button>
               <button type="button" className="primary-button" onClick={stageQuantity}>
-                {editingIndex === null ? 'הוספה לעסקה' : 'שמירת שינוי'}
+                הוספה לעסקה
               </button>
             </>
           }
@@ -537,6 +522,7 @@ export function ConsumablesDesk({
                 disabled={busy}
                 onClick={() => setReview(false)}
               >
+                <Undo2 className="size-4" aria-hidden="true" />
                 חזרה לעריכה
               </button>
               <button
@@ -557,6 +543,7 @@ export function ConsumablesDesk({
                 }
                 onClick={() => void submit()}
               >
+                <Check className="size-4" aria-hidden="true" />
                 אישור ניפוק
               </button>
             </>
@@ -601,7 +588,7 @@ export function ConsumablesDesk({
               >
                 להמשיך לערוך
               </button>
-              <button type="button" className="primary-button" onClick={discardDraft}>
+              <button type="button" className="danger-button" onClick={discardDraft}>
                 מחיקת טיוטה
               </button>
             </>

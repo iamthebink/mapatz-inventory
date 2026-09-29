@@ -131,6 +131,86 @@ function failFirstRemoveStorage(): Storage {
   };
 }
 
+it('protects a dirty borrower creation draft with a neutral keep and danger discard dialog', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request) => {
+      if (String(input).startsWith('/api/borrowers/search'))
+        return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+      throw new Error(`Unexpected ${String(input)}`);
+    }),
+  );
+  render(
+    <DialogStackProvider>
+      <BorrowerWorkflow showToast={vi.fn()} />
+    </DialogStackProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
+  await user.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+  await user.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
+  await user.click(screen.getByRole('button', { name: 'ביטול' }));
+
+  const discard = await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
+  expect(
+    within(discard)
+      .getByRole('button', { name: 'להמשיך לערוך' })
+      .classList.contains('secondary-button'),
+  ).toBe(true);
+  expect(
+    within(discard)
+      .getByRole('button', { name: 'מחיקת טיוטה' })
+      .classList.contains('danger-button'),
+  ).toBe(true);
+  await user.click(within(discard).getByRole('button', { name: 'להמשיך לערוך' }));
+  expect(screen.getByRole('textbox', { name: 'שם מלא' })).toHaveProperty('value', 'שואל חדש');
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'ביטול' })),
+  );
+
+  const unload = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(true);
+
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
+  await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
+
+  await user.click(
+    within(await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' })).getByRole(
+      'button',
+      { name: 'מחיקת טיוטה' },
+    ),
+  );
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'יצירת שואל חדש' })).toBeNull());
+});
+
+it('protects a borrower creation draft when only its type changed', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request) => {
+      if (String(input).startsWith('/api/borrowers/search'))
+        return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+      throw new Error(`Unexpected ${String(input)}`);
+    }),
+  );
+  render(
+    <DialogStackProvider>
+      <BorrowerWorkflow showToast={vi.fn()} />
+    </DialogStackProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
+  await user.selectOptions(screen.getByRole('combobox', { name: 'סוג' }), 'other');
+  await user.click(screen.getByRole('button', { name: 'ביטול' }));
+
+  const discard = await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
+  await user.click(within(discard).getByRole('button', { name: 'להמשיך לערוך' }));
+  expect(screen.getByRole('combobox', { name: 'סוג' })).toHaveProperty('value', 'other');
+});
+
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
   localStorage.clear();

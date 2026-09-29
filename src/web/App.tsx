@@ -1533,11 +1533,16 @@ function StatusBadge({
 }
 function SmallButton({
   icon: Icon,
+  tone,
   children,
   ...props
-}: { icon: LucideIcon; children: ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+}: {
+  icon: LucideIcon;
+  tone?: 'destructive' | 'warning' | 'positive';
+  children: ReactNode;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button type="button" className="small-button" {...props}>
+    <button type="button" className="small-button" data-tone={tone} {...props}>
       <Icon className="size-3.5" />
       {children}
     </button>
@@ -1564,7 +1569,12 @@ function RowActions({
       <SmallButton icon={archived ? RotateCcw : Archive} disabled={disabled} onClick={onArchive}>
         {archived ? 'שחזור' : 'ארכוב'}
       </SmallButton>
-      <SmallButton icon={Trash2} disabled={disabled || !onDelete} onClick={onDelete}>
+      <SmallButton
+        icon={Trash2}
+        tone="destructive"
+        disabled={disabled || !onDelete}
+        onClick={onDelete}
+      >
         מחיקה
       </SmallButton>
     </div>

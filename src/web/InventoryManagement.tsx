@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Archive, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
 import { ApiError, api } from './api';
 import { DataTable, type TableColumn } from './DataTable';
 import { Dialog } from './Dialog';
@@ -563,20 +564,23 @@ export function InventoryManagement({
         <div className="flex flex-wrap gap-1.5">
           <button
             type="button"
-            className="secondary-button"
+            className="small-button"
             disabled={
               item.archived || item.damaged === 0 || pending || !!unresolved || refreshRecovery
             }
             onClick={() => open({ kind: 'damage', item })}
           >
+            <TriangleAlert className="size-3.5" aria-hidden="true" />
             טיפול בפגומים
           </button>
           <button
             type="button"
-            className="secondary-button"
+            className="small-button"
+            data-tone="destructive"
             disabled={!admin || pending || !!unresolved || refreshRecovery}
             onClick={() => setDeleteConfirm(item)}
           >
+            <Trash2 className="size-3.5" aria-hidden="true" />
             מחיקה
           </button>
         </div>
@@ -766,15 +770,16 @@ export function InventoryManagement({
                     <div className="inventory-location-actions">
                       <button
                         type="button"
-                        className="secondary-button"
+                        className="small-button"
                         disabled={!admin || pending || !!unresolved || refreshRecovery}
                         onClick={() => editLocation(location)}
                       >
+                        <Pencil className="size-3.5" aria-hidden="true" />
                         עריכה
                       </button>
                       <button
                         type="button"
-                        className="secondary-button"
+                        className="small-button"
                         disabled={!admin || pending || !!unresolved || refreshRecovery}
                         onClick={() =>
                           location.archived
@@ -782,14 +787,21 @@ export function InventoryManagement({
                             : retireLocation(location, 'archive')
                         }
                       >
+                        {location.archived ? (
+                          <RotateCcw className="size-3.5" aria-hidden="true" />
+                        ) : (
+                          <Archive className="size-3.5" aria-hidden="true" />
+                        )}
                         {location.archived ? 'שחזור' : 'ארכוב'}
                       </button>
                       <button
                         type="button"
-                        className="secondary-button"
+                        className="small-button"
+                        data-tone="destructive"
                         disabled={!admin || pending || !!unresolved || refreshRecovery}
                         onClick={() => retireLocation(location, 'delete')}
                       >
+                        <Trash2 className="size-3.5" aria-hidden="true" />
                         מחיקה
                       </button>
                     </div>
@@ -1319,7 +1331,7 @@ export function InventoryManagement({
             >
               להמשיך לערוך
             </button>
-            <button type="button" className="primary-button" onClick={discard}>
+            <button type="button" className="danger-button" onClick={discard}>
               ביטול השינויים
             </button>
           </div>

@@ -99,6 +99,15 @@ function focusWithFallback(
   else fallback?.focus();
 }
 
+function creationHasUnsavedInput(creation: CreationState): boolean {
+  return Boolean(
+    creation.values.name ||
+    creation.values.username ||
+    creation.values.contact ||
+    creation.values.type !== 'individual',
+  );
+}
+
 function OperationReview({ state }: { state: OperationState }) {
   const inventory = new Map(state.snapshot.inventory.map((item) => [item.id, item.name]));
   return (
@@ -161,6 +170,7 @@ export const BorrowerWorkflow = forwardRef<
   const [quantity, setQuantity] = useState<QuantityDialog | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [discardCreationOpen, setDiscardCreationOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [creation, setCreation] = useState<CreationState | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -172,6 +182,7 @@ export const BorrowerWorkflow = forwardRef<
   const quantityErrorRef = useRef<HTMLInputElement>(null);
   const reviewConfirmRef = useRef<HTMLButtonElement>(null);
   const createFirstRef = useRef<HTMLInputElement>(null);
+  const discardCreationKeepRef = useRef<HTMLButtonElement>(null);
   const retryCardRef = useRef<HTMLButtonElement>(null);
   const retryRefreshRef = useRef<HTMLButtonElement>(null);
   const directoryRecoveryRef = useRef<HTMLButtonElement>(null);
@@ -388,13 +399,12 @@ export const BorrowerWorkflow = forwardRef<
           showToast('הפעולה מוגנת', 'לא ניתן לצאת בזמן שמצב השמירה אינו ודאי.', 'warning');
           return;
         }
-        if (
-          desktop &&
-          (creation.values.name || creation.values.username || creation.values.contact) &&
-          !window.confirm('לבטל את טיוטת השואל ולצאת?')
-        )
-          return;
         closeInitiatorRef.current = initiator;
+        if (creationHasUnsavedInput(creation)) {
+          navigationRef.current = complete ?? null;
+          setDiscardCreationOpen(true);
+          return;
+        }
         closeCreation(complete);
         return;
       }
@@ -406,7 +416,7 @@ export const BorrowerWorkflow = forwardRef<
         complete?.();
         return;
       }
-      if (stack.depth > 1 || quantity || discardOpen) {
+      if (stack.depth > 1 || quantity || discardOpen || discardCreationOpen) {
         showToast('סיום חלון פעיל', 'יש להשלים או לבטל את החלון הפנימי תחילה.', 'warning');
         return;
       }
@@ -436,6 +446,7 @@ export const BorrowerWorkflow = forwardRef<
       createOpen,
       creation,
       discardOpen,
+      discardCreationOpen,
       operation,
       quantity,
       selectedBorrower,
@@ -478,7 +489,11 @@ export const BorrowerWorkflow = forwardRef<
   }));
 
   useEffect(() => {
-    const protectedCreation = Boolean(createOpen && creation && creationLocks(creation).dismissal);
+    const protectedCreation = Boolean(
+      createOpen &&
+      creation &&
+      (creationLocks(creation).dismissal || creationHasUnsavedInput(creation)),
+    );
     const protectedState =
       protectedCreation ||
       Boolean(operation?.staged.length) ||
@@ -509,7 +524,9 @@ export const BorrowerWorkflow = forwardRef<
       if (!sentinelRef.current) return;
       sentinelRef.current = false;
       const protectedCreation = Boolean(
-        createOpen && creation && creationLocks(creation).dismissal,
+        createOpen &&
+        creation &&
+        (creationLocks(creation).dismissal || creationHasUnsavedInput(creation)),
       );
       const exitNeedsGuard =
         protectedCreation ||
@@ -522,7 +539,8 @@ export const BorrowerWorkflow = forwardRef<
         ) ||
         stack.depth > 1 ||
         Boolean(quantity) ||
-        discardOpen;
+        discardOpen ||
+        discardCreationOpen;
       if (exitNeedsGuard) {
         history.pushState({ mapatzBorrowerWorkflow: true }, '', location.href);
         sentinelRef.current = true;
@@ -533,7 +551,16 @@ export const BorrowerWorkflow = forwardRef<
     };
     window.addEventListener('popstate', pop);
     return () => window.removeEventListener('popstate', pop);
-  }, [createOpen, creation, discardOpen, operation, quantity, requestExit, stack.depth]);
+  }, [
+    createOpen,
+    creation,
+    discardCreationOpen,
+    discardOpen,
+    operation,
+    quantity,
+    requestExit,
+    stack.depth,
+  ]);
 
   useEffect(() => {
     const feedback = operation?.feedback ?? creation?.feedback;
@@ -1825,6 +1852,59 @@ export const BorrowerWorkflow = forwardRef<
               </div>
             )}
           </form>
+        </Dialog>
+      )}
+
+      {discardCreationOpen && creation && (
+        <Dialog
+          title="לבטל טיוטת שואל?"
+          description="הפרטים שהוזנו בטופס יימחקו."
+          level="subordinate"
+          role="alertdialog"
+          variant="destructive"
+          busy={false}
+          dismissible={!creationLocks(creation).dismissal}
+          onClose={() => {
+            setDiscardCreationOpen(false);
+            navigationRef.current = null;
+            queueMicrotask(() =>
+              focusWithFallback(closeInitiatorRef.current, createFirstRef.current),
+            );
+          }}
+          initialFocusRef={discardCreationKeepRef}
+          actions={
+            <>
+              <button
+                ref={discardCreationKeepRef}
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setDiscardCreationOpen(false);
+                  navigationRef.current = null;
+                  queueMicrotask(() =>
+                    focusWithFallback(closeInitiatorRef.current, createFirstRef.current),
+                  );
+                }}
+              >
+                להמשיך לערוך
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                disabled={creationLocks(creation).dismissal}
+                onClick={() => {
+                  const complete = navigationRef.current ?? undefined;
+                  navigationRef.current = null;
+                  setDiscardCreationOpen(false);
+                  window.setTimeout(() => closeCreation(complete), 0);
+                }}
+              >
+                מחיקת טיוטה
+              </button>
+            </>
+          }
+        >
+          <p>אפשר להמשיך לערוך ולחזור לטופס.</p>
         </Dialog>
       )}
     </section>

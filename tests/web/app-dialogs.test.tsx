@@ -141,6 +141,25 @@ afterEach(() => {
 });
 
 describe('inventory management in App', () => {
+  it('keeps a borrower draft during navigation and follows the destination after discard', async () => {
+    const { user } = setup('operator', '/');
+    await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
+    await user.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
+    fireEvent.click(screen.getByRole('link', { name: 'סיכום', hidden: true }));
+    const discard = await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
+    expect(window.location.pathname).toBe('/');
+    await user.click(within(discard).getByRole('button', { name: 'להמשיך לערוך' }));
+    expect(screen.getByRole('textbox', { name: 'שם מלא' })).toHaveProperty('value', 'שואל חדש');
+    fireEvent.click(screen.getByRole('link', { name: 'סיכום', hidden: true }));
+    await user.click(
+      within(await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' })).getByRole(
+        'button',
+        { name: 'מחיקת טיוטה' },
+      ),
+    );
+    await waitFor(() => expect(window.location.pathname).toBe('/summary'));
+  });
+
   it('keeps borrower deletion unavailable when the browser storage getter throws', async () => {
     const borrower: Borrower = {
       id: 43,
@@ -217,7 +236,17 @@ describe('inventory management in App', () => {
     );
     await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
     await user.click(screen.getByRole('button', { name: 'השאלות והחזרות' }));
-    expect(screen.getByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
+    const discard = screen.getByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' });
+    expect(
+      within(discard)
+        .getByRole('button', { name: 'להמשיך לערוך' })
+        .classList.contains('secondary-button'),
+    ).toBe(true);
+    expect(
+      within(discard)
+        .getByRole('button', { name: 'מחיקת טיוטה' })
+        .classList.contains('danger-button'),
+    ).toBe(true);
     expect(
       document
         .querySelector('[aria-controls="desk-consumables-panel"]')
@@ -362,7 +391,11 @@ describe('inventory management in App', () => {
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
 
     const activeRow = screen.getByRole('row', { name: /Active User/ });
-    await user.click(within(activeRow).getByRole('button', { name: 'מחיקה' }));
+    const deleteTrigger = within(activeRow).getByRole('button', { name: 'מחיקה' });
+    expect(deleteTrigger.classList.contains('small-button')).toBe(true);
+    expect(deleteTrigger.getAttribute('data-tone')).toBe('destructive');
+    expect(deleteTrigger.querySelector('svg')).not.toBeNull();
+    await user.click(deleteTrigger);
     expect(
       await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Active User?' }),
     ).toBeTruthy();
@@ -407,7 +440,17 @@ describe('inventory management in App', () => {
     window.history.pushState({}, '', '/summary');
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(window.location.pathname).toBe('/management');
-    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    const discard = await screen.findByRole('alertdialog');
+    expect(
+      within(discard)
+        .getByRole('button', { name: 'להמשיך לערוך' })
+        .classList.contains('secondary-button'),
+    ).toBe(true);
+    expect(
+      within(discard)
+        .getByRole('button', { name: 'ביטול השינויים' })
+        .classList.contains('danger-button'),
+    ).toBe(true);
     await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
     expect((screen.getByRole('textbox', { name: 'שם פריט' }) as HTMLInputElement).value).toContain(
       'חדש',

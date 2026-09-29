@@ -221,7 +221,7 @@
     @apply flex items-center gap-2;
   }
   .period-summary-expander {
-    @apply inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ctp-subtext;
+    @apply inline-flex size-10 shrink-0 items-center justify-center rounded-md text-ctp-subtext transition;
   }
   .period-summary-expander:hover {
     @apply bg-ctp-mantle text-ctp-text;
@@ -264,16 +264,39 @@
     @apply grid gap-1.5 text-sm font-medium text-ctp-subtext;
   }
   .primary-button {
-    @apply inline-flex items-center justify-center rounded-xl bg-ctp-lavender px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-blue;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl bg-ctp-lavender px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-blue disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-ctp-lavender;
   }
   .secondary-button {
-    @apply inline-flex items-center justify-center rounded-xl border border-ctp-surface bg-white px-4 py-2.5 text-sm font-semibold text-ctp-text transition hover:bg-ctp-base;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl border border-ctp-surface bg-white px-4 py-2.5 text-sm font-semibold text-ctp-text transition hover:bg-ctp-base disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-white;
   }
   .icon-button {
     @apply grid size-10 place-items-center rounded-lg text-ctp-subtext transition hover:bg-ctp-base hover:text-ctp-text;
   }
   .small-button {
-    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-ctp-surface bg-white px-2.5 py-1.5 text-xs font-medium text-ctp-subtext transition hover:border-ctp-lavender/30 hover:bg-ctp-lavender/5 hover:text-ctp-lavender;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-ctp-surface bg-white px-2.5 py-1.5 text-xs font-medium text-ctp-subtext transition hover:border-ctp-lavender/30 hover:bg-ctp-lavender/5 hover:text-ctp-lavender disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-ctp-surface disabled:hover:bg-white disabled:hover:text-ctp-subtext;
+  }
+  .small-button[data-tone='destructive'],
+  .small-button[data-tone='warning'] {
+    @apply text-ctp-red hover:border-ctp-red/30 hover:bg-ctp-red/5 hover:text-ctp-red;
+  }
+  .small-button[data-tone='positive'] {
+    @apply text-ctp-green hover:border-ctp-green/30 hover:bg-ctp-green/5 hover:text-ctp-green;
+  }
+  .small-button[data-tone]:disabled:hover {
+    @apply border-ctp-surface bg-white;
+  }
+  :where(
+    .primary-button,
+    .secondary-button,
+    .danger-button,
+    .small-button,
+    .icon-button,
+    .borrower-directory-action,
+    .inventory-link,
+    .period-summary-expander
+  ):focus-visible {
+    outline: 3px solid var(--color-ctp-lavender);
+    outline-offset: 2px;
   }
   .action-card {
     @apply rounded-2xl border border-ctp-surface bg-white p-5 shadow-sm;
@@ -516,7 +539,7 @@
     padding: 0;
   }
   .danger-button {
-    @apply inline-flex items-center justify-center rounded-xl bg-ctp-red px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-maroon;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl bg-ctp-red px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-maroon disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-ctp-red;
   }
   .borrower-workflow-entry {
     min-width: 0;
@@ -583,9 +606,10 @@
   .borrower-directory-row[aria-disabled='true'] {
     @apply cursor-not-allowed opacity-60;
   }
-  .borrower-directory-action {
-    @apply font-semibold text-ctp-blue underline-offset-4 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ctp-blue;
-    min-height: auto;
+  .borrower-directory-action,
+  .inventory-link {
+    @apply inline-flex min-h-10 items-center font-semibold text-ctp-blue underline underline-offset-4 hover:text-ctp-text;
+    text-align: start;
   }
   .borrower-directory-empty {
     @apply py-8 text-center text-ctp-subtext;
@@ -888,13 +912,7 @@
     @apply shrink-0 rounded-lg bg-ctp-base px-2 py-1 text-sm font-semibold tabular-nums;
   }
   .consumables-draft-actions {
-    @apply mt-2 flex gap-4;
-  }
-  .consumables-draft-actions button {
-    @apply min-h-10 text-xs font-semibold text-ctp-blue disabled:opacity-50;
-  }
-  .consumables-draft-actions button:last-child {
-    @apply text-ctp-red;
+    @apply mt-2 flex gap-2;
   }
   .consumables-pending-footer {
     @apply grid gap-3 px-5 py-4;
@@ -1173,20 +1191,4 @@
   .data-table td {
     padding-inline: 0.75rem;
   }
-}
-
-.inventory-link {
-  color: var(--color-ctp-lavender);
-  font-weight: 600;
-  text-align: start;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-}
-.inventory-link:hover {
-  color: var(--color-ctp-mauve);
-}
-.inventory-link:focus-visible {
-  outline: 2px solid var(--color-ctp-lavender);
-  outline-offset: 3px;
-  border-radius: 0.15rem;
 }
