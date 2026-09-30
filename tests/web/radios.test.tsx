@@ -71,13 +71,19 @@ it('offers lost and found actions and locks custody while lost', async () => {
       <Radios active showToast={vi.fn()} />
     </DialogStackProvider>,
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'סמן כאבוד' }));
+  const markLost = await screen.findByRole('button', { name: 'סמן כאבוד' });
+  expect(markLost.classList.contains('small-button')).toBe(true);
+  expect(markLost.hasAttribute('data-tone')).toBe(false);
+  fireEvent.click(markLost);
   await waitFor(() =>
     expect(radioCommand).toHaveBeenCalledWith('/radios/1/lost', 'POST', { generation: 4 }),
   );
   expect(screen.getByText('אבוד')).toBeTruthy();
   expect(screen.getByRole('button', { name: 'עדכון מיקום' }).hasAttribute('disabled')).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'נמצא' }));
+  const markFound = screen.getByRole('button', { name: 'נמצא' });
+  expect(markFound.classList.contains('small-button')).toBe(true);
+  expect(markFound.hasAttribute('data-tone')).toBe(false);
+  fireEvent.click(markFound);
   await waitFor(() =>
     expect(radioCommand).toHaveBeenCalledWith('/radios/1/found', 'POST', { generation: 4 }),
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CircleCheck, MapPin, Radio as RadioIcon, RefreshCw, TriangleAlert } from 'lucide-react';
+import { CircleHelp, MapPin, Radio as RadioIcon, RefreshCw, SearchCheck } from 'lucide-react';
 import type { Radio, RadioFleet } from '../domain/types.js';
 import { Dialog } from './Dialog';
 import { ApiError, fetchRadios, radioCommand } from './api';
@@ -164,7 +164,6 @@ export function Radios({ active, showToast }: Props) {
                       <button
                         type="button"
                         className="small-button"
-                        data-tone={radio.lost ? 'positive' : 'warning'}
                         disabled={busy}
                         onClick={() =>
                           void mutate(
@@ -176,9 +175,9 @@ export function Radios({ active, showToast }: Props) {
                         }
                       >
                         {radio.lost ? (
-                          <CircleCheck className="size-3.5" aria-hidden="true" />
+                          <SearchCheck className="size-3.5" aria-hidden="true" />
                         ) : (
-                          <TriangleAlert className="size-3.5" aria-hidden="true" />
+                          <CircleHelp className="size-3.5" aria-hidden="true" />
                         )}
                         {radio.lost ? 'נמצא' : 'סמן כאבוד'}
                       </button>
