@@ -83,3 +83,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-consumable-disbursement.md`
   summary: Validate whether borrower-card consumable issuance needs explicit anonymity copy.
   evidence: The card labels the action as consumable issuance and keeps it out of holdings, but an operator might still infer recipient attribution from the card context. A brief operator usability check would settle whether extra copy is needed.
+
+- source_spec: `spec-password-recovery-redux.md`
+  summary: Investigate two frozen-operation desktop recovery failures found by the broad recovery filter.
+  evidence: “unknown recovery blocks quit…” and “non-desk reload blocks…” failed in untouched tests during broad packaged verification; password-specific test passed. Baseline comparison has not been run, so pre-existing status is unverified.

@@ -16,7 +16,7 @@ import { X } from 'lucide-react';
 
 export type DialogLevel = 'root' | 'subordinate';
 export type DialogRole = 'dialog' | 'alertdialog';
-export type DialogVariant = 'standard' | 'destructive' | 'workspace';
+export type DialogVariant = 'standard' | 'destructive' | 'workspace' | 'recovery';
 
 const focusableSelector = [
   'button:not([disabled])',
@@ -492,7 +492,7 @@ export function Dialog({
   return createPortal(
     <div
       ref={backdropRef}
-      className={`dialog-backdrop dialog-layer-${level}`}
+      className={`dialog-backdrop dialog-layer-${level}${variant === 'recovery' ? ' dialog-backdrop-recovery' : ''}`}
       role="presentation"
       data-dialog-level={level}
       onMouseDown={(event) => {
@@ -522,7 +522,10 @@ export function Dialog({
               <X className="size-5" />
             </button>
           )}
-          <h2 id={titleId} className="dialog-title">
+          <h2
+            id={titleId}
+            className={variant === 'recovery' ? 'dialog-title sr-only' : 'dialog-title'}
+          >
             {title}
           </h2>
           {description && (

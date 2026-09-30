@@ -144,7 +144,23 @@ else {
       });
       window.removeMenu();
       const session = window.webContents.session;
-      session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      // Recovery may copy plain text, but cannot read the clipboard or grant other permissions.
+      session.setPermissionCheckHandler(
+        (contents, permission, requestingOrigin, details) =>
+          permission === 'clipboard-sanitized-write' &&
+          contents === window?.webContents &&
+          requestingOrigin === origin &&
+          details.isMainFrame &&
+          !!details.requestingUrl?.startsWith(`${origin}/`),
+      );
+      session.setPermissionRequestHandler((contents, permission, callback, details) =>
+        callback(
+          permission === 'clipboard-sanitized-write' &&
+            contents === window?.webContents &&
+            details.isMainFrame &&
+            details.requestingUrl.startsWith(`${origin}/`),
+        ),
+      );
       session.webRequest.onBeforeSendHeaders((details, callback) => {
         if (details.url.startsWith(`${origin}/`))
           details.requestHeaders['x-mapatz-desktop-token'] = token;

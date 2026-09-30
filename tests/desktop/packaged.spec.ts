@@ -116,18 +116,131 @@ test('packaged desktop recovery reveals the current password after the full ritu
   test.setTimeout(90_000);
   const context = await freshApp();
   try {
+    const exactPassword = '  camp\t password\n123  ';
+    const passwordStatuses = await context.page.evaluate(async (password) => {
+      const post = (path: string, body: object) =>
+        fetch(`/api/${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      return [
+        (await post('session/role', { role: 'admin', password: 'camp-password-123' })).status,
+        (await post('password', { password })).status,
+        (await post('session/role', { role: 'operator' })).status,
+      ];
+    }, exactPassword);
+    expect(passwordStatuses).toEqual([200, 204, 200]);
     await context.page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
     await context.page.getByRole('button', { name: 'שכחתי את סיסמת המנהל' }).click();
-    for (const name of ['כן, עשיתי את זה', 'להמשיך בהשפלה', 'זה אני, לעזאזל', 'יאללה, תראה לי']) {
-      await context.page.getByRole('button', { name }).click();
+    await context.page.getByRole('button', { name: 'אני אידיוט.ית ושכחתי סיסמה' }).click();
+    const phrase = context.page.getByRole('textbox', { name: 'בקשה להצגת הסיסמה' });
+    await phrase.click();
+    await expect(phrase).toHaveAttribute('placeholder', 'פה פה יא חמור.ה');
+    await phrase.click();
+    await phrase.fill('תראי');
+    await expect(phrase).toHaveValue('');
+    await expect(phrase).toHaveAttribute('placeholder', 'רגע בעצם פה');
+    await phrase.fill('תראי לי את הסיסמה בבקשה');
+    await context.page.getByRole('button', { name: 'אישור', exact: true }).click();
+    const addition = context.page.getByTestId('recovery-addition');
+    await expect(addition).toBeVisible();
+    const original = await addition.textContent();
+    for (let version = 0; version < 2; version++) {
+      const digits = (await addition.textContent())!.match(/\d+/g)!.map(Number);
+      await context.page
+        .getByRole('textbox', { name: 'סכום המספרים' })
+        .fill(String(digits[0]! + digits[1]!));
+      await context.page.getByRole('button', { name: 'אישור', exact: true }).click();
+      if (version === 0) await expect(addition).not.toHaveText(original!);
     }
-    await expect(context.page.locator('output.admin-recovery-password')).toHaveText(
-      'camp-password-123',
+    await context.page.getByRole('button', { name: 'די כבר, הגזמת' }).click();
+    await context.page.getByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }).click();
+    const passwordOutput = context.page.locator('output.admin-recovery-password');
+    await expect(passwordOutput).toBeVisible();
+    expect(await passwordOutput.textContent()).toBe(exactPassword);
+    await expect(passwordOutput).toHaveCSS('white-space', 'pre-wrap');
+    await context.page.getByRole('button', { name: 'העתקת הסיסמה' }).click();
+    await expect(context.page.getByRole('status', { name: /הצלחה: העתקת הסיסמה/ })).toBeVisible();
+    expect(await context.application.evaluate(({ clipboard }) => clipboard.readText())).toBe(
+      exactPassword,
     );
+    const readDenied = await context.page.evaluate(async () => {
+      try {
+        await navigator.clipboard.readText();
+        return false;
+      } catch (cause) {
+        return cause instanceof DOMException && cause.name === 'NotAllowedError';
+      }
+    });
+    expect(readDenied).toBe(true);
+    await context.page.evaluate(async () => {
+      const iframe = document.createElement('iframe');
+      iframe.id = 'clipboard-child-test';
+      iframe.src = location.origin;
+      iframe.allow = 'clipboard-write';
+      iframe.style.cssText =
+        'position:fixed;top:80px;left:80px;width:240px;height:100px;z-index:2147483647;background:white';
+      const loaded = new Promise<void>((resolve) => {
+        iframe.onload = () => resolve();
+      });
+      document.body.append(iframe);
+      await loaded;
+    });
+    const child = context.page
+      .frames()
+      .find((frame) => frame.parentFrame() === context.page.mainFrame())!;
+    await child.evaluate(() => {
+      const button = document.createElement('button');
+      button.textContent = 'Attempt child clipboard write';
+      button.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText('child overwrite');
+          document.body.dataset.clipboardResult = 'allowed';
+        } catch (cause) {
+          document.body.dataset.clipboardResult =
+            cause instanceof DOMException ? cause.name : 'unexpected';
+        }
+      };
+      document.body.replaceChildren(button);
+    });
+    await child.getByRole('button', { name: 'Attempt child clipboard write' }).click();
+    await expect
+      .poll(() => child.evaluate(() => document.body.dataset.clipboardResult))
+      .toBe('NotAllowedError');
+    expect(await context.application.evaluate(({ clipboard }) => clipboard.readText())).toBe(
+      exactPassword,
+    );
+    await context.page.locator('#clipboard-child-test').evaluate((iframe) => iframe.remove());
+    await context.page.screenshot({ path: test.info().outputPath('recovery-reveal.png') });
     await context.page.locator('.admin-recovery').getByRole('button', { name: 'סגירה' }).click();
     await expect(context.page.getByRole('alertdialog')).toContainText('הסיסמה תוסתר');
     await context.page.getByRole('button', { name: 'יציאה' }).click();
     await expect(context.page.getByRole('dialog')).toHaveCount(0);
+    await context.page.emulateMedia({ reducedMotion: 'reduce' });
+    await context.page.setViewportSize({ width: 600, height: 360 });
+    await context.page.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
+    await context.page.getByRole('button', { name: 'שכחתי את סיסמת המנהל' }).click();
+    await context.page.getByRole('button', { name: 'אני אידיוט.ית ושכחתי סיסמה' }).click();
+    await phrase.click();
+    await expect(phrase).toHaveAttribute('placeholder', 'פה פה יא חמור.ה');
+    await phrase.click();
+    await phrase.fill('abc');
+    await expect(phrase).toHaveAttribute('placeholder', 'רגע בעצם פה');
+    const submit = context.page.getByRole('button', { name: 'אישור', exact: true });
+    await submit.scrollIntoViewIfNeeded();
+    const submitBounds = await submit.boundingBox();
+    const exitBounds = await context.page
+      .getByRole('button', { name: 'יציאה מהשחזור' })
+      .boundingBox();
+    expect(submitBounds!.y + submitBounds!.height).toBeLessThanOrEqual(exitBounds!.y);
+    await context.page.screenshot({ path: test.info().outputPath('recovery-short.png') });
+    await context.page.getByRole('button', { name: 'יציאה מהשחזור' }).click();
+    await context.page.getByRole('button', { name: 'להמשיך בשחזור' }).click();
+    await expect(phrase).toHaveAttribute('placeholder', 'רגע בעצם פה');
+    await context.page.getByRole('button', { name: 'יציאה מהשחזור' }).click();
+    await context.page.getByRole('button', { name: 'יציאה', exact: true }).click();
+    await expect(context.page.getByRole('button', { name: 'הפעל מצב מנהל' })).toBeFocused();
   } finally {
     await finishApplication(context.application);
     await cleanupProfile(context.profile);

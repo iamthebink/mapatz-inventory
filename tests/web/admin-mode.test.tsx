@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createRef } from 'react';
+import { createRef, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,97 +10,12 @@ import {
   AdminPasswordDialog,
   AdminRecoveryDialog,
 } from '../../src/web/AdminMode';
-import { formatAdminCountdown, recoveryRemainingMs } from '../../src/web/admin-mode';
+import { formatAdminCountdown } from '../../src/web/admin-mode';
 import { DialogStackProvider } from '../../src/web/Dialog';
 
 afterEach(() => cleanup());
 
 describe('admin mode presentation', () => {
-  it('requires each five-second gate and the full twenty seconds, with mercy adding time', () => {
-    expect(recoveryRemainingMs(0, 19_000, 4_999, 0)).toBe(1);
-    expect(recoveryRemainingMs(1, 19_000, 5_000, 0)).toBe(0);
-    expect(recoveryRemainingMs(3, 19_000, 5_000, 0)).toBe(1_000);
-    expect(recoveryRemainingMs(3, 20_000, 5_000, 8_000)).toBe(8_000);
-  });
-
-  it('confirms exit neutrally and keeps the current stage when continuing', async () => {
-    const onClose = vi.fn();
-    render(
-      <DialogStackProvider>
-        <AdminRecoveryDialog
-          returnFocusRef={createRef<HTMLButtonElement>()}
-          onClose={onClose}
-          onError={() => undefined}
-        />
-      </DialogStackProvider>,
-    );
-    expect(screen.getByText('שלב 1 מתוך 4')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
-    expect(screen.getByRole('alertdialog').textContent).toContain('ההתקדמות תאבד');
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
-    fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
-    expect(screen.getByText('שלב 1 מתוך 4')).toBeTruthy();
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'יציאה מהשחזור' })),
-    );
-    expect(onClose).not.toHaveBeenCalled();
-    fireEvent.keyDown(document, { key: 'Escape' });
-    fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
-    expect(onClose).toHaveBeenCalledOnce();
-  });
-
-  it('runs the fixed gates, makes mercy longer, and renders the exact password as text', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ password: '<secret&value>' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    );
-    try {
-      render(
-        <DialogStackProvider>
-          <AdminRecoveryDialog
-            returnFocusRef={createRef<HTMLButtonElement>()}
-            onClose={() => undefined}
-            onError={() => undefined}
-          />
-        </DialogStackProvider>,
-      );
-      expect(screen.getByRole('button', { name: 'כן, עשיתי את זה' }).hasAttribute('disabled')).toBe(
-        true,
-      );
-      await act(async () => vi.advanceTimersByTime(5_000));
-      fireEvent.click(screen.getByRole('button', { name: 'כן, עשיתי את זה' }));
-      expect(screen.getByText('שלב 2 מתוך 4')).toBeTruthy();
-      expect(document.activeElement?.classList.contains('admin-recovery')).toBe(true);
-      fireEvent.click(screen.getByRole('button', { name: 'רחמים, נמאס לי' }));
-      expect(screen.getByText(/״רחמים״ זה שם של מדף ריק/)).toBeTruthy();
-      await act(async () => vi.advanceTimersByTime(8_000));
-      fireEvent.click(screen.getByRole('button', { name: 'חזרה למסלול' }));
-      fireEvent.click(screen.getByRole('button', { name: 'להמשיך בהשפלה' }));
-      expect(screen.getByText('שלב 3 מתוך 4')).toBeTruthy();
-      await act(async () => vi.advanceTimersByTime(5_000));
-      fireEvent.click(screen.getByRole('button', { name: 'זה אני, לעזאזל' }));
-      await act(async () => vi.advanceTimersByTime(5_000));
-      expect(screen.getByRole('button', { name: 'יאללה, תראה לי' }).hasAttribute('disabled')).toBe(
-        true,
-      );
-      await act(async () => vi.advanceTimersByTime(5_000));
-      await act(async () =>
-        fireEvent.click(screen.getByRole('button', { name: 'יאללה, תראה לי' })),
-      );
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(screen.getByText('<secret&value>').tagName).toBe('OUTPUT');
-      expect(document.body.innerHTML).toContain('&lt;secret&amp;value&gt;');
-      fireEvent.click(screen.getByText('סגירה'));
-      expect(screen.getByRole('alertdialog').textContent).toContain('הסיסמה תוסתר');
-    } finally {
-      fetchSpy.mockRestore();
-      vi.useRealTimers();
-    }
-  });
   it('formats the ten-minute countdown without exceeding the configured window', () => {
     expect(formatAdminCountdown(601)).toBe('10:00');
     expect(formatAdminCountdown(600)).toBe('10:00');
@@ -193,5 +108,244 @@ describe('admin mode presentation', () => {
     fireEvent.mouseDown(dialog.parentElement!);
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBe(dialog);
+  });
+});
+
+describe('interactive recovery', () => {
+  async function setup() {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const ref = createRef<HTMLButtonElement>();
+    render(
+      <DialogStackProvider>
+        <button ref={ref}>admin</button>
+        <AdminRecoveryDialog returnFocusRef={ref} onClose={onClose} onError={onError} />
+      </DialogStackProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'אני אידיוט.ית ושכחתי סיסמה' }));
+    await screen.findByRole('textbox', { name: 'בקשה להצגת הסיסמה' });
+    const field = screen.getByRole('textbox', { name: 'בקשה להצגת הסיסמה' });
+    fireEvent.focus(field);
+    expect(field.getAttribute('placeholder')).toBe('פה פה יא חמור.ה');
+    fireEvent.change(field, { target: { value: 'ab' } });
+    fireEvent.submit(field.closest('form')!);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect((field as HTMLInputElement).value).toBe('');
+    expect(field.getAttribute('placeholder')).toBe('פה פה יא חמור.ה');
+    expect(screen.queryByTestId('recovery-addition')).toBeNull();
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: 'abc' } });
+    expect((field as HTMLInputElement).value).toBe('');
+    expect(field.getAttribute('placeholder')).toBe('רגע בעצם פה');
+    fireEvent.change(field, { target: { value: 'wrong' } });
+    fireEvent.submit(field.closest('form')!);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.change(field, { target: { value: 'תראי לי את הסיסמה בבקשה' } });
+    expect(field.getAttribute('aria-invalid')).toBe('false');
+    fireEvent.submit(field.closest('form')!);
+    await screen.findByTestId('recovery-addition');
+    const addition = screen.getByRole('textbox', { name: 'סכום המספרים' });
+    const original = screen.getByTestId('recovery-addition').textContent!;
+    fireEvent.change(addition, { target: { value: '2abc' } });
+    fireEvent.submit(addition.closest('form')!);
+    expect(screen.getByTestId('recovery-addition').textContent).toBe(original);
+    for (let version = 0; version < 2; version++) {
+      const digits = screen
+        .getByTestId('recovery-addition')
+        .textContent!.match(/\d+/g)!
+        .map(Number);
+      fireEvent.change(addition, { target: { value: String(digits[0]! + digits[1]!) } });
+      fireEvent.submit(addition.closest('form')!);
+      if (version === 0)
+        expect(screen.getByTestId('recovery-addition').textContent).not.toBe(original);
+    }
+    await screen.findByRole('textbox', { name: 'תוצאת האינטגרל' });
+    return { onClose, onError };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('removes the subordinate before unmounting recovery and restores admin focus', async () => {
+    const ref = createRef<HTMLButtonElement>();
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <DialogStackProvider>
+          <button ref={ref}>admin</button>
+          {open && (
+            <AdminRecoveryDialog
+              returnFocusRef={ref}
+              onClose={() => setOpen(false)}
+              onError={() => undefined}
+            />
+          )}
+        </DialogStackProvider>
+      );
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(ref.current));
+  });
+
+  it('completes skip, serializes retrieval, preserves exact text and reports copy failure', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ password: '<secret&value>' }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const { onClose } = await setup();
+    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
+    const reveal = await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' });
+    fireEvent.click(reveal);
+    fireEvent.click(reveal);
+    await screen.findByText('<secret&value>');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'העתקת הסיסמה' }));
+    await screen.findByRole('alert', { name: /לא ניתן להעתיק ללוח/ });
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('הסיסמה תוסתר');
+    fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+    expect(screen.getByText('<secret&value>')).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'יציאה מהשחזור' })),
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('solves the integral, retries failed retrieval without replay, and copies exactly', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ password: 'exact password' }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const { onError } = await setup();
+    const math = screen.getByRole('math').textContent!;
+    const multiplier = math.match(/([23])x³/)?.[1] ?? '1';
+    const field = screen.getByRole('textbox', { name: 'תוצאת האינטגרל' });
+    fireEvent.change(field, { target: { value: 'wrong' } });
+    fireEvent.submit(field.closest('form')!);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.change(field, { target: { value: String(Number(multiplier) * 2) } });
+    fireEvent.submit(field.closest('form')!);
+    fireEvent.submit(field.closest('form')!);
+    const retry = await screen.findByRole('button', { name: 'נסו שוב' });
+    expect(onError).toHaveBeenCalledOnce();
+    fireEvent.click(retry);
+    await screen.findByText('exact password');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'העתקת הסיסמה' }));
+    await screen.findByRole('status', { name: /הסיסמה הועתקה ללוח/ });
+    expect(writeText).toHaveBeenCalledWith('exact password');
+  });
+
+  it('defers request completion during confirmation without stealing focus', async () => {
+    let resolve!: (response: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((done) => {
+          resolve = done;
+        }),
+    );
+    const { onClose } = await setup();
+    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }));
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+    await act(async () =>
+      resolve(
+        new Response(JSON.stringify({ password: 'deferred' }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+    expect(screen.queryByText('deferred')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+    fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+    await screen.findByText('deferred');
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect((fetchSpy.mock.calls[0]![1] as RequestInit).signal?.aborted).toBe(true);
+  });
+  it.each(['success', 'rejection'])('ignores late %s after confirmed exit', async (outcome) => {
+    let resolve!: (response: Response) => void;
+    let reject!: (cause: Error) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((done, fail) => {
+          resolve = done;
+          reject = fail;
+        }),
+    );
+    const { onClose, onError } = await setup();
+    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }));
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+    fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect((fetchSpy.mock.calls[0]![1] as RequestInit).signal?.aborted).toBe(true);
+    await act(async () => {
+      if (outcome === 'success')
+        resolve(
+          new Response(JSON.stringify({ password: 'late secret' }), {
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      else reject(new Error('late failure'));
+    });
+    expect(screen.queryByText('late secret')).toBeNull();
+    expect(document.querySelector('.admin-recovery-password')).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'נסו שוב' })).toBeNull();
+  });
+
+  it('pauses an ordinary timed transition during confirmation and resumes once', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    try {
+      render(
+        <DialogStackProvider>
+          <AdminRecoveryDialog
+            returnFocusRef={createRef<HTMLButtonElement>()}
+            onClose={() => undefined}
+            onError={() => undefined}
+          />
+        </DialogStackProvider>,
+      );
+      const welcome = screen.getByRole('button', { name: 'אני אידיוט.ית ושכחתי סיסמה' });
+      fireEvent.click(welcome);
+      await act(async () => vi.advanceTimersByTime(100));
+      fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+      await act(async () => vi.advanceTimersByTime(1000));
+      expect(screen.queryByRole('textbox', { name: 'בקשה להצגת הסיסמה' })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+      expect(document.querySelector('.dialog-backdrop-recovery')?.hasAttribute('inert')).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+      await act(async () => vi.advanceTimersByTime(249));
+      expect(screen.queryByRole('textbox', { name: 'בקשה להצגת הסיסמה' })).toBeNull();
+      await act(async () => vi.advanceTimersByTime(1));
+      expect(screen.getByRole('textbox', { name: 'בקשה להצגת הסיסמה' })).toBeTruthy();
+      expect(
+        document
+          .querySelector('.admin-recovery-content')
+          ?.classList.contains('recovery-transition'),
+      ).toBe(false);
+      expect(document.querySelector('.recovery-text-enter')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
