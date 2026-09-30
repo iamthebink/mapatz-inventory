@@ -404,6 +404,10 @@
   .data-table tbody tr {
     @apply transition hover:bg-ctp-base/50;
   }
+  .data-table tbody tr.radio-row-faulty {
+    @apply bg-ctp-base/70 text-ctp-subtext;
+    filter: grayscale(1);
+  }
   .sort-button {
     @apply inline-flex min-h-10 min-w-10 items-center gap-1.5 rounded-md text-right transition hover:text-ctp-lavender;
   }

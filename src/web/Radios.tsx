@@ -17,12 +17,19 @@ type CustodyEdit = {
   holderEdited: boolean;
 };
 
+function isFaulty(radio: Radio): boolean {
+  return radio.holder === 'תקול';
+}
+
 export function Radios({ active, showToast }: Props) {
   const [fleet, setFleet] = useState<RadioFleet | null>(null);
   const [edit, setEdit] = useState<CustodyEdit | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadStatus, setLoadStatus] = useState<'loading' | 'failed' | 'ready'>('loading');
   const [loadRevision, setLoadRevision] = useState(0);
+  const visibleRadios = fleet
+    ? [...fleet.radios.filter((radio) => !isFaulty(radio)), ...fleet.radios.filter(isFaulty)]
+    : [];
 
   useEffect(() => {
     if (!active) return;
@@ -126,8 +133,8 @@ export function Radios({ active, showToast }: Props) {
               </tr>
             </thead>
             <tbody>
-              {fleet.radios.map((radio) => (
-                <tr key={radio.number}>
+              {visibleRadios.map((radio) => (
+                <tr key={radio.number} className={isFaulty(radio) ? 'radio-row-faulty' : undefined}>
                   <td>
                     <span className="code-pill">{radio.number}</span>
                   </td>
@@ -137,9 +144,9 @@ export function Radios({ active, showToast }: Props) {
                   </td>
                   <td>
                     <span
-                      className={`status-badge ${radio.lost ? 'bg-ctp-red/10 text-ctp-red' : 'green'}`}
+                      className={`status-badge ${radio.lost ? 'bg-ctp-red/10 text-ctp-red' : isFaulty(radio) ? 'neutral' : 'green'}`}
                     >
-                      {radio.lost ? 'אבוד' : 'תקין'}
+                      {radio.lost ? 'אבוד' : isFaulty(radio) ? 'תקול' : 'תקין'}
                     </span>
                   </td>
                   <td>

@@ -22,6 +22,132 @@ const fleet: RadioFleet = {
   radios: [{ number: 1, holder: 'Alice', team: 'Old', lost: false }],
 };
 
+it('moves only faulty locations to the bottom, regardless of team, without mutating the fleet', async () => {
+  const mixedFleet: RadioFleet = {
+    ...fleet,
+    count: 6,
+    radios: [
+      { number: 1, holder: 'תקול', team: 'Alpha', lost: false },
+      { number: 2, holder: 'Alice', team: 'תקול', lost: false },
+      { number: 3, holder: 'תקול', team: '', lost: true },
+      { number: 4, holder: 'צוללת', team: '', lost: false },
+      { number: 5, holder: 'תקול זמנית', team: '', lost: false },
+      { number: 6, holder: 'תקול', team: 'Beta', lost: false },
+    ],
+  };
+  vi.mocked(fetchRadios).mockResolvedValue(mixedFleet);
+  render(
+    <DialogStackProvider>
+      <Radios active showToast={vi.fn()} />
+    </DialogStackProvider>,
+  );
+  await screen.findByText('Alice');
+  const rows = screen.getAllByRole('row').slice(1);
+  expect(rows.map((row) => within(row).getAllByRole('cell')[0]!.textContent)).toEqual([
+    '2',
+    '4',
+    '5',
+    '1',
+    '3',
+    '6',
+  ]);
+  expect(rows.map((row) => row.classList.contains('radio-row-faulty'))).toEqual([
+    false,
+    false,
+    false,
+    true,
+    true,
+    true,
+  ]);
+  expect(mixedFleet.radios.map((radio) => radio.number)).toEqual([1, 2, 3, 4, 5, 6]);
+  expect(within(rows[3]!).getAllByRole('cell')[3]!.textContent).toBe('תקול');
+  expect(
+    within(rows[3]!).getByRole('button', { name: 'עדכון מיקום' }).hasAttribute('disabled'),
+  ).toBe(false);
+  expect(within(rows[4]!).getByText('אבוד')).toBeTruthy();
+  expect(
+    within(rows[4]!).getByRole('button', { name: 'עדכון מיקום' }).hasAttribute('disabled'),
+  ).toBe(true);
+});
+
+it.each(['return home', 'reassign'] as const)(
+  'reorders and restyles a radio immediately after location updates and %s',
+  async (recovery) => {
+    const initialFleet: RadioFleet = {
+      ...fleet,
+      count: 2,
+      radios: [fleet.radios[0]!, { number: 2, holder: 'Bob', team: '', lost: false }],
+    };
+    vi.mocked(fetchRadios).mockResolvedValue(initialFleet);
+    vi.mocked(radioCommand)
+      .mockResolvedValueOnce({
+        ...initialFleet,
+        radios: [{ ...initialFleet.radios[0]!, holder: 'תקול', team: '' }, initialFleet.radios[1]!],
+      })
+      .mockResolvedValueOnce({
+        ...initialFleet,
+        radios: [
+          {
+            ...initialFleet.radios[0]!,
+            holder: recovery === 'return home' ? 'צוללת' : 'Carol',
+            team: recovery === 'return home' ? '' : 'New',
+          },
+          initialFleet.radios[1]!,
+        ],
+      });
+    render(
+      <DialogStackProvider>
+        <Radios active showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getAllByRole('button', { name: 'עדכון מיקום' })[0]!);
+    fireEvent.change(screen.getByRole('textbox', { name: 'מחזיק/ה' }), {
+      target: { value: 'תקול' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => within(row).getAllByRole('cell')[0]!.textContent),
+    ).toEqual(['2', '1']);
+    expect(screen.getAllByRole('row')[2]!.classList.contains('radio-row-faulty')).toBe(true);
+    fireEvent.click(screen.getAllByRole('button', { name: 'עדכון מיקום' })[1]!);
+    if (recovery === 'return home') {
+      fireEvent.click(screen.getByRole('button', { name: 'החזרה לצוללת' }));
+    } else {
+      fireEvent.change(screen.getByRole('textbox', { name: 'מחזיק/ה' }), {
+        target: { value: 'Carol' },
+      });
+      fireEvent.change(screen.getByRole('textbox', { name: 'צוות' }), {
+        target: { value: 'New' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'שמירה' }));
+    }
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => within(row).getAllByRole('cell')[0]!.textContent),
+    ).toEqual(['1', '2']);
+    expect(
+      screen.getAllByRole('row').every((row) => !row.classList.contains('radio-row-faulty')),
+    ).toBe(true);
+    expect(within(screen.getAllByRole('row')[1]!).getByText('תקין')).toBeTruthy();
+    if (recovery === 'reassign') {
+      expect(radioCommand).toHaveBeenLastCalledWith('/radios/1/custody', 'PUT', {
+        generation: 4,
+        holder: 'Carol',
+        team: 'New',
+      });
+      expect(within(screen.getAllByRole('row')[1]!).getByText('New')).toBeTruthy();
+    }
+  },
+);
+
 it('clears the previous team once and retains a newly entered team through later holder edits', async () => {
   vi.mocked(fetchRadios).mockResolvedValue(fleet);
   vi.mocked(radioCommand).mockResolvedValue(fleet);
