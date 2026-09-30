@@ -35,6 +35,8 @@ function setup(
   initialItems: Item[] = [hammer],
   initialBorrowers: Borrower[] = [],
   storageUnavailable = false,
+  createBorrower?: (body: Record<string, unknown>) => Promise<Response>,
+  failBorrowerRefresh = false,
 ) {
   let currentRole = role;
   let items: Item[] = initialItems;
@@ -59,7 +61,11 @@ function setup(
         deadline: currentRole === 'admin' ? Date.now() + 600_000 : null,
       });
     if (path === '/api/items' || path === '/api/items?all=1') return response(items);
-    if (path === '/api/borrowers?all=1') return response(borrowers);
+    if (path === '/api/borrowers?all=1') {
+      if (failBorrowerRefresh && borrowers.length > initialBorrowers.length)
+        return response({ error: 'server_error', message: 'Refresh unavailable' }, 500);
+      return response(borrowers);
+    }
     const deletionStatus = path.match(/^\/api\/borrowers\/(\d+)\/deletion-status$/);
     if (deletionStatus) {
       const borrower = borrowers.find((entry) => entry.id === Number(deletionStatus[1]));
@@ -71,6 +77,23 @@ function setup(
       const borrowerId = Number(deletion[1]);
       borrowers = borrowers.filter((entry) => entry.id !== borrowerId);
       return response({ outcome: 'committed', action: 'delete_borrower', borrowerId });
+    }
+    if (path === '/api/borrowers' && method === 'POST') {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (createBorrower) {
+        const result = await createBorrower(body);
+        if (!result.ok) return result;
+      }
+      const borrower: Borrower = {
+        id: 44,
+        name: String(body.name),
+        username: String(body.username),
+        contact: String(body.contact),
+        type: body.type as Borrower['type'],
+        archived: false,
+      };
+      borrowers = [...borrowers, borrower];
+      return response({ outcome: 'committed', borrower }, 201);
     }
     if (path === '/api/locations?all=1') return response([location]);
     if (path === '/api/inventory/epoch') return response({ ledgerEpoch: 1 });
@@ -141,6 +164,103 @@ afterEach(() => {
 });
 
 describe('inventory management in App', () => {
+  it('creates a borrower from a dialog and refreshes the catalog', async () => {
+    const { user, requests } = setup();
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+    expect(screen.queryByRole('textbox', { name: 'שם משתמש' })).toBeNull();
+    const trigger = screen.getByRole('button', { name: 'יצירת שואל חדש' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'יצירת שואל חדש' });
+    expect(document.activeElement).toBe(within(dialog).getByRole('textbox', { name: 'שם' }));
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם' }), 'נועה');
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם משתמש' }), 'noa');
+    await user.type(within(dialog).getByRole('textbox', { name: 'פרטי קשר' }), '0501234567');
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'סוג' }), 'other');
+    await user.click(within(dialog).getByRole('button', { name: 'יצירה' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(requests.find((request) => request.path === '/api/borrowers')?.body).toEqual({
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      name: 'נועה',
+      username: 'noa',
+      contact: '0501234567',
+      type: 'other',
+    });
+    expect(screen.getByRole('cell', { name: 'נועה' })).toBeTruthy();
+    expect(screen.getByText('הפעולה הושלמה בהצלחה')).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('preserves creation fields after rejection and blocks dismissal while pending', async () => {
+    let rejectCreation!: (result: Response) => void;
+    const { user, requests } = setup(
+      'admin',
+      '/management',
+      [hammer],
+      [],
+      false,
+      () =>
+        new Promise<Response>((resolve) => {
+          rejectCreation = resolve;
+        }),
+    );
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+    const trigger = screen.getByRole('button', { name: 'יצירת שואל חדש' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'יצירת שואל חדש' });
+    const name = within(dialog).getByRole('textbox', { name: 'שם' });
+    await user.type(name, 'נועה');
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם משתמש' }), 'noa');
+    await user.type(within(dialog).getByRole('textbox', { name: 'פרטי קשר' }), '0501234567');
+    await user.click(within(dialog).getByRole('button', { name: 'יצירה' }));
+    await waitFor(() => expect(rejectCreation).toBeTypeOf('function'));
+    expect(name.closest('fieldset')?.disabled).toBe(true);
+    expect(within(dialog).getByRole('button', { name: 'ביטול' })).toHaveProperty('disabled', true);
+    fireEvent.submit(within(dialog).getByRole('textbox', { name: 'שם' }).closest('form')!);
+    await user.keyboard('{Escape}');
+    fireEvent.mouseDown(dialog.parentElement!);
+    window.history.replaceState({}, '', '/summary');
+    fireEvent.popState(window);
+    expect(window.location.pathname).toBe('/management');
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(requests.filter((request) => request.path === '/api/borrowers')).toHaveLength(1);
+    rejectCreation(response({ error: 'validation_error', message: 'שם המשתמש כבר קיים' }, 400));
+    await screen.findByText('שם המשתמש כבר קיים');
+    expect(name).toHaveProperty('value', 'נועה');
+    expect(within(dialog).getByRole('textbox', { name: 'שם משתמש' })).toHaveProperty(
+      'value',
+      'noa',
+    );
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await user.click(trigger);
+    expect(screen.getByRole('textbox', { name: 'שם' })).toHaveProperty('value', '');
+  });
+
+  it('closes after committed creation even when catalog refresh fails', async () => {
+    const { user, requests } = setup('admin', '/management', [hammer], [], false, undefined, true);
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+    await user.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
+    await user.type(screen.getByRole('textbox', { name: 'שם' }), 'נועה');
+    await user.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'noa');
+    await user.type(screen.getByRole('textbox', { name: 'פרטי קשר' }), '0501234567');
+    await user.click(screen.getByRole('button', { name: 'יצירה' }));
+    await screen.findByText(/הפעולה הושלמה, אך התצוגה לא התרעננה/);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(requests.filter((request) => request.path === '/api/borrowers')).toHaveLength(1);
+  });
+
+  it('closes an idle creation dialog when browser navigation leaves management', async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+    await user.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
+    window.history.replaceState({}, '', '/summary');
+    fireEvent.popState(window);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(window.location.pathname).toBe('/summary');
+  });
+
   it('keeps a borrower draft during navigation and follows the destination after discard', async () => {
     const { user } = setup('operator', '/');
     await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
