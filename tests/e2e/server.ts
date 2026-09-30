@@ -2,7 +2,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createViteServer } from 'vite';
-import { openDatabase } from '../../src/db/database.js';
+import { openDatabase, transaction } from '../../src/db/database.js';
+import { allocateIdentity } from '../../src/db/identity-high-water.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 import { periodBounds, todayInIsrael } from '../../src/domain/period-summary.js';
 import { createApp } from '../../src/server/index.js';
@@ -81,17 +82,21 @@ app.post('/__e2e__/period-summary/history/:borrowerId/:itemId', (request, respon
     .toISOString()
     .slice(0, 10);
   const { startUtc } = periodBounds(yesterday, yesterday);
-  database
-    .prepare(
-      "INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,created_at,note) VALUES ('checked_out',?,?,?,?,?)",
-    )
-    .run(
-      Number(request.params.itemId),
-      Number(request.params.borrowerId),
-      2,
-      startUtc,
-      'e2e historical summary',
-    );
+  transaction(database, () => {
+    const eventId = allocateIdentity(database, 'event');
+    database
+      .prepare(
+        "INSERT INTO inventory_events(id,kind,item_id,borrower_id,quantity,created_at,note) VALUES (?,'checked_out',?,?,?,?,?)",
+      )
+      .run(
+        eventId,
+        Number(request.params.itemId),
+        Number(request.params.borrowerId),
+        2,
+        startUtc,
+        'e2e historical summary',
+      );
+  });
   response.json({ date: yesterday });
 });
 app.post(

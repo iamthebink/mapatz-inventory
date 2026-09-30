@@ -190,6 +190,7 @@ test('returning today from a historical-period card leaves that period unchanged
   expect(response.ok()).toBeTruthy();
   const { date } = (await response.json()) as { date: string };
   await page.goto('/summary');
+  await page.locator('.period-summary-advanced summary').click();
   await page.getByLabel('מתאריך').fill(date);
   await page.getByLabel('עד תאריך').fill(date);
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
@@ -227,4 +228,37 @@ test('returning today from a historical-period card leaves that period unchanged
   await expect(page.getByLabel('עד תאריך')).toHaveValue(date);
   await expect(search).toHaveValue(seed.borrower.username);
   await expect(row.locator('td').nth(3)).toHaveText('2');
+});
+
+test('switches between all ledger history and today while keeping borrower search', async ({
+  page,
+  request,
+  seed,
+}) => {
+  const response = await request.post(
+    `/__e2e__/period-summary/history/${seed.borrower.id}/${seed.item.id}`,
+  );
+  expect(response.ok()).toBeTruthy();
+  await page.goto('/summary');
+  const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
+  await search.fill(seed.borrower.username);
+  const row = page
+    .locator('.period-summary-table tbody tr')
+    .filter({ hasText: seed.borrower.name })
+    .first();
+  await expect(page.getByLabel('מתאריך')).toBeHidden();
+  await expect(row.locator('td').nth(3)).toHaveText('2');
+  await page.getByRole('button', { name: 'הכל', exact: true }).click();
+  await expect(row.locator('td').nth(3)).toHaveText('4');
+  await expect(search).toHaveValue(seed.borrower.username);
+  await expect(page.locator('.period-summary-selection')).toContainText('הכל עד');
+  await expect(page.locator('.period-summary')).not.toContainText('0001-01-01');
+  await page.getByRole('button', { name: 'היום', exact: true }).click();
+  await expect(row.locator('td').nth(3)).toHaveText('2');
+  await expect(search).toHaveValue(seed.borrower.username);
+  const disclosure = page.locator('.period-summary-advanced summary');
+  await disclosure.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('מתאריך')).toBeVisible();
+  await expect(page.getByLabel('עד תאריך')).toBeVisible();
 });

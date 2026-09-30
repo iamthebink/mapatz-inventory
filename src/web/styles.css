@@ -201,6 +201,27 @@
   .period-summary-controls label {
     @apply flex min-w-40 flex-col gap-1 text-sm font-medium;
   }
+  .period-summary-shortcuts {
+    @apply flex flex-wrap items-center gap-2;
+  }
+  .period-summary-shortcuts [aria-pressed='true'] {
+    @apply border-ctp-lavender bg-ctp-lavender/10 text-ctp-text;
+  }
+  .period-summary-selection {
+    @apply px-2 text-sm text-ctp-subtext;
+  }
+  .period-summary-advanced {
+    @apply rounded-lg border border-ctp-surface px-3 py-2 text-sm text-ctp-subtext;
+  }
+  .period-summary-advanced summary {
+    @apply w-fit cursor-pointer rounded-sm;
+  }
+  .period-summary-advanced summary:focus-visible {
+    @apply outline-2 outline-offset-2 outline-ctp-lavender;
+  }
+  .period-summary-advanced[open] .period-summary-controls {
+    @apply pt-3;
+  }
   .period-summary-table,
   .period-summary-items {
     @apply w-full border-collapse text-right text-sm;

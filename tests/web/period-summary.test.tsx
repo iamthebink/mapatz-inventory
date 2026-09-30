@@ -52,7 +52,212 @@ function view(returnRevision = 0) {
   return { ...rendered, openCard, showToast };
 }
 
+function openDates() {
+  fireEvent.click(screen.getByText('טווח תאריכים', { selector: 'summary' }));
+}
+
 describe('period summary view', () => {
+  it('starts with today selected and custom dates behind a collapsed disclosure', async () => {
+    vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
+    view();
+    await screen.findByText('אלף');
+    expect(screen.getByRole('button', { name: 'היום' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('false');
+    const disclosure = screen
+      .getByText('טווח תאריכים', { selector: 'summary' })
+      .closest('details')!;
+    expect(disclosure.open).toBe(false);
+    openDates();
+    expect(disclosure.open).toBe(true);
+    expect((screen.getByLabelText('מתאריך') as HTMLInputElement).value).toBe(todayInIsrael());
+    expect((screen.getByLabelText('עד תאריך') as HTMLInputElement).value).toBe(todayInIsrael());
+  });
+
+  it('selects all history and today from custom dates without clearing search or expansion', async () => {
+    vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
+    view();
+    await screen.findByText('אלף');
+    fireEvent.click(screen.getByRole('button', { name: 'הצגת ציוד של אלף' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'חיפוש שואל' }), {
+      target: { value: 'user-1' },
+    });
+    openDates();
+    fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-21' } });
+    fireEvent.change(screen.getByLabelText('עד תאריך'), { target: { value: '2026-09-22' } });
+    await screen.findByText('אלף');
+    fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+    await screen.findByText('אלף');
+    expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual(['0001-01-01', todayInIsrael()]);
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('true');
+    expect(document.body.textContent).not.toContain('0001-01-01');
+    expect((screen.getByLabelText('מתאריך') as HTMLInputElement).value).toBe(todayInIsrael());
+    fireEvent.click(screen.getByRole('button', { name: 'היום' }));
+    await screen.findByText('אלף');
+    expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual([todayInIsrael(), todayInIsrael()]);
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('user-1');
+    expect(screen.getByRole('button', { name: 'הסתרת ציוד של אלף' })).toBeTruthy();
+    expect(screen.queryByText('בית')).toBeNull();
+  });
+
+  it('validates custom date edits from all history against the displayed dates', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-30T12:00:00Z'));
+    vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
+    const { showToast } = view();
+    await screen.findByText('אלף');
+    fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+    await screen.findByText('אלף');
+    openDates();
+    expect(screen.getByText('בחירת טווח תאריכים מותאם אישית')).toBeTruthy();
+    expect((screen.getByLabelText('מתאריך') as HTMLInputElement).value).toBe('2026-09-30');
+    expect((screen.getByLabelText('עד תאריך') as HTMLInputElement).value).toBe('2026-09-30');
+    const calls = vi.mocked(fetchPeriodSummary).mock.calls.length;
+    fireEvent.change(screen.getByLabelText('עד תאריך'), { target: { value: '2026-09-22' } });
+    expect(showToast).toHaveBeenCalledWith('טווח תאריכים', expect.any(String), 'warning');
+    expect(vi.mocked(fetchPeriodSummary).mock.calls).toHaveLength(calls);
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('true');
+    expect((screen.getByLabelText('עד תאריך') as HTMLInputElement).value).toBe('2026-09-30');
+    fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-21' } });
+    await screen.findByText('אלף');
+    expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual(['2026-09-21', '2026-09-30']);
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByText('טווח:', { exact: false }).textContent).toBe(
+      'טווח: 2026-09-21 – 2026-09-30',
+    );
+    expect((screen.getByLabelText('מתאריך') as HTMLInputElement).value).toBe('2026-09-21');
+    expect((screen.getByLabelText('עד תאריך') as HTMLInputElement).value).toBe('2026-09-30');
+    expect(document.body.textContent).not.toContain('0001-01-01');
+  });
+
+  it('ignores a superseded rejection without a toast or changing the newer result', async () => {
+    let rejectOld!: (reason: Error) => void;
+    vi.mocked(fetchPeriodSummary)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectOld = reject;
+          }),
+      )
+      .mockResolvedValueOnce({ ...result, borrowers: [result.borrowers[1]!] });
+    const { showToast } = view();
+    fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+    await screen.findByText('בית');
+    await act(async () => {
+      rejectOld(new Error('superseded request failed'));
+      await Promise.resolve();
+    });
+    expect(showToast).not.toHaveBeenCalled();
+    expect(screen.getByText('בית')).toBeTruthy();
+    expect(screen.queryByText('אלף')).toBeNull();
+    expect(screen.queryByText('טוען סיכום…')).toBeNull();
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('retries the same all-history bounds after a failed request', async () => {
+    vi.mocked(fetchPeriodSummary)
+      .mockResolvedValueOnce(result)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(result);
+    const { showToast } = view();
+    await screen.findByText('אלף');
+    fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('טעינת סיכום', 'offline', 'error'));
+    expect(screen.queryByText('אלף')).toBeNull();
+    expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual(['0001-01-01', todayInIsrael()]);
+    fireEvent.click(screen.getByRole('button', { name: 'רענון' }));
+    await screen.findByText('אלף');
+    expect(vi.mocked(fetchPeriodSummary).mock.calls.slice(1)).toEqual([
+      ['0001-01-01', todayInIsrael()],
+      ['0001-01-01', todayInIsrael()],
+    ]);
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('invalidates a pending response synchronously when selecting a shortcut', async () => {
+    let resolveOld!: (value: Result) => void;
+    let resolveNew!: (value: Result) => void;
+    vi.mocked(fetchPeriodSummary)
+      .mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolveOld = done;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolveNew = done;
+          }),
+      );
+    view();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+      resolveOld({ ...result, borrowers: [result.borrowers[0]!] });
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('אלף')).toBeNull();
+    expect(screen.getByText('טוען סיכום…')).toBeTruthy();
+    resolveNew({ ...result, borrowers: [result.borrowers[1]!] });
+    await screen.findByText('בית');
+    expect(screen.queryByText('אלף')).toBeNull();
+  });
+
+  it('advances all history on visibility resume and keeps its lower bound internal', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-23T20:59:59Z'));
+    vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
+    view();
+    await screen.findByText('אלף');
+    fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+    await screen.findByText('אלף');
+    expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual(['0001-01-01', '2026-09-23']);
+    act(() => {
+      vi.setSystemTime(new Date('2026-09-23T21:00:01Z'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() =>
+      expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual(['0001-01-01', '2026-09-24']),
+    );
+    expect(screen.getByRole('button', { name: 'הכל' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText('הכל עד', { exact: false })).toHaveProperty(
+      'textContent',
+      'הכל עד 2026-09-24',
+    );
+  });
+
+  it('fetches a shortcut clicked after midnight before the rollover check', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-23T20:59:59Z'));
+    vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
+    view();
+    await screen.findByText('אלף');
+    vi.setSystemTime(new Date('2026-09-23T21:00:01Z'));
+    fireEvent.click(screen.getByRole('button', { name: 'הכל' }));
+    await screen.findByText('אלף');
+    expect(vi.mocked(fetchPeriodSummary).mock.lastCall).toEqual(['0001-01-01', '2026-09-24']);
+  });
+
+  it('keeps a custom range fixed even when its dates happen to match today', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-23T20:59:59Z'));
+    vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
+    view();
+    await screen.findByText('אלף');
+    openDates();
+    fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-22' } });
+    fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-23' } });
+    await screen.findByText('אלף');
+    const calls = vi.mocked(fetchPeriodSummary).mock.calls.length;
+    act(() => {
+      vi.setSystemTime(new Date('2026-09-23T21:00:01Z'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(vi.mocked(fetchPeriodSummary).mock.calls).toHaveLength(calls);
+    expect((screen.getByLabelText('מתאריך') as HTMLInputElement).value).toBe('2026-09-23');
+    expect((screen.getByLabelText('עד תאריך') as HTMLInputElement).value).toBe('2026-09-23');
+    expect(screen.getByRole('button', { name: 'היום' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('searches current borrower metadata and keeps multiple accordion rows open', async () => {
     vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
     const { openCard } = view();
@@ -137,6 +342,7 @@ describe('period summary view', () => {
       borrowers: [result.borrowers[1]!],
     });
     view();
+    openDates();
     fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-21' } });
     // The end remains today, so the edited range is valid.
     expect(await screen.findByText('בית')).toBeTruthy();
@@ -162,6 +368,7 @@ describe('period summary view', () => {
           }),
       );
     view();
+    openDates();
     await act(async () => {
       fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-21' } });
       resolveOld({ ...result, borrowers: [result.borrowers[0]!] });
@@ -178,6 +385,7 @@ describe('period summary view', () => {
     vi.mocked(fetchPeriodSummary).mockResolvedValue(result);
     const { showToast } = view();
     await screen.findByText('אלף');
+    openDates();
     const priorCalls = vi.mocked(fetchPeriodSummary).mock.calls.length;
     fireEvent.change(screen.getByLabelText('עד תאריך'), { target: { value: '2099-01-01' } });
     expect(showToast).toHaveBeenCalledWith('טווח תאריכים', expect.any(String), 'warning');
@@ -206,6 +414,7 @@ describe('period summary view', () => {
     vi.setSystemTime(new Date('2026-09-24T20:59:59Z'));
     view();
     await screen.findByText('אלף');
+    openDates();
     fireEvent.change(screen.getByLabelText('מתאריך'), { target: { value: '2026-09-21' } });
     fireEvent.change(screen.getByLabelText('עד תאריך'), { target: { value: '2026-09-22' } });
     await waitFor(() =>
