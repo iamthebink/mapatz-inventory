@@ -167,6 +167,7 @@ export function App() {
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
+  const [borrowerCreateOpen, setBorrowerCreateOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [adminRecoveryOpen, setAdminRecoveryOpen] = useState(false);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog | null>(null);
@@ -183,6 +184,8 @@ export function App() {
   const toastIdRef = useRef(0);
   const sessionRequestRef = useRef(0);
   const activityRequestRef = useRef<Promise<void> | null>(null);
+  const borrowerCreateNameRef = useRef<HTMLInputElement>(null);
+  const borrowerCreateTriggerRef = useRef<HTMLButtonElement>(null);
   const adminControlRef = useRef<HTMLButtonElement>(null);
   const managementTabRef = useRef<HTMLAnchorElement>(null);
   const dialogReturnFocusRef = useRef<HTMLElement>(null);
@@ -224,11 +227,13 @@ export function App() {
       '',
       tabRoutes[nextTab].path,
     );
+    setBorrowerCreateOpen(false);
     setTab(nextTab);
   }, []);
 
   const navigateToTab = useCallback(
     (nextTab: Tab) => {
+      if (borrowerCreateOpen && pendingRef.current) return;
       if (
         tabRef.current === 'desk' &&
         nextTab !== 'desk' &&
@@ -245,7 +250,7 @@ export function App() {
         return;
       performNavigation(nextTab);
     },
-    [performNavigation],
+    [borrowerCreateOpen, performNavigation],
   );
 
   const selectDeskView = (nextView: DeskView) => {
@@ -328,6 +333,17 @@ export function App() {
   useEffect(() => {
     const syncTabToLocation = () => {
       const nextTab = tabFromPath(window.location.pathname);
+      if (borrowerCreateOpen && nextTab !== 'catalogs') {
+        if (pendingRef.current) {
+          window.history.replaceState(
+            { ...window.history.state, mapatzTab: 'catalogs' },
+            '',
+            tabRoutes.catalogs.path,
+          );
+          return;
+        }
+        setBorrowerCreateOpen(false);
+      }
       if (nextTab) {
         if (
           tabRef.current === 'desk' &&
@@ -371,7 +387,7 @@ export function App() {
     syncTabToLocation();
     window.addEventListener('popstate', syncTabToLocation);
     return () => window.removeEventListener('popstate', syncTabToLocation);
-  }, [performNavigation]);
+  }, [borrowerCreateOpen, performNavigation]);
   useEffect(() => {
     const auth = () => refresh().catch((error) => showError('רענון הרשאות', error));
     window.addEventListener('mapatz-auth-stale', auth);
@@ -508,6 +524,28 @@ export function App() {
       setPending(false);
     }
   }
+  async function submitBorrowerCreation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (pendingRef.current) return;
+    const form = new FormData(event.currentTarget);
+    const succeeded = await action('הוספת שואל חדש', async () => {
+      const { ledgerEpoch } = await api<{ ledgerEpoch: number }>('/borrowers/search?q=');
+      return api('/borrowers', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({
+          contractVersion: 1,
+          ledgerEpoch,
+          username: form.get('username'),
+          name: form.get('name'),
+          contact: form.get('contact'),
+          type: form.get('type'),
+        }),
+      });
+    });
+    if (succeeded) setBorrowerCreateOpen(false);
+  }
+
   async function inspectBorrowerForDeletion(borrower: Borrower) {
     if (!adminActionsEnabled || pendingRef.current || borrowerDeletionAttempt) return;
     pendingRef.current = true;
@@ -1051,44 +1089,17 @@ export function App() {
               )}
               {managementTab === 'borrowers' && (
                 <div className="space-y-7">
-                  <div className="max-w-2xl">
-                    <ActionCard
-                      title="שואל חדש"
-                      description="אדם או ארגון שמקבל ציוד"
-                      icon={UserPlus}
+                  <div className="flex justify-end">
+                    <button
+                      ref={borrowerCreateTriggerRef}
+                      type="button"
+                      className="secondary-button"
                       disabled={pending}
-                      onSubmit={(form) =>
-                        action('הוספת שואל חדש', async () => {
-                          const { ledgerEpoch } = await api<{ ledgerEpoch: number }>(
-                            '/borrowers/search?q=',
-                          );
-                          return api('/borrowers', {
-                            method: 'POST',
-                            headers: { 'Idempotency-Key': crypto.randomUUID() },
-                            body: JSON.stringify({
-                              contractVersion: 1,
-                              ledgerEpoch,
-                              username: form.get('username'),
-                              name: form.get('name'),
-                              contact: form.get('contact'),
-                              type: form.get('type'),
-                            }),
-                          });
-                        })
-                      }
+                      onClick={() => setBorrowerCreateOpen(true)}
                     >
-                      <Field name="name" label="שם" />
-                      <Field name="username" label="שם משתמש" ltr />
-                      <Field name="contact" label="פרטי קשר" />
-                      <label className="field-label">
-                        סוג
-                        <select name="type" className="input-field">
-                          <option value="individual">יחיד</option>
-                          <option value="camp_organization">ארגון מחנה</option>
-                          <option value="other">אחר</option>
-                        </select>
-                      </label>
-                    </ActionCard>
+                      <UserPlus className="size-4" />
+                      יצירת שואל חדש
+                    </button>
                   </div>
                   {borrowerDeletionAttempt && (
                     <section className="rounded-2xl border border-ctp-yellow/40 bg-ctp-yellow/5 p-4">
@@ -1283,6 +1294,64 @@ export function App() {
           </PageSection>
         )}
       </main>
+      {borrowerCreateOpen && (
+        <Dialog
+          title="יצירת שואל חדש"
+          description="אדם או ארגון שמקבל ציוד"
+          level="root"
+          role="dialog"
+          variant="standard"
+          busy={pending}
+          dismissible={!pending}
+          onClose={() => setBorrowerCreateOpen(false)}
+          initialFocusRef={borrowerCreateNameRef}
+          returnFocusRef={borrowerCreateTriggerRef}
+          returnFocusFallbackRef={managementTabRef}
+          actions={
+            <>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={pending}
+                onClick={() => setBorrowerCreateOpen(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="submit"
+                form="management-create-borrower-form"
+                className="primary-button"
+                disabled={pending}
+              >
+                יצירה
+              </button>
+            </>
+          }
+        >
+          <form
+            id="management-create-borrower-form"
+            className="dialog-form"
+            onSubmit={(event) => void submitBorrowerCreation(event)}
+          >
+            <fieldset className="grid gap-3" disabled={pending}>
+              <label className="field-label">
+                שם
+                <input ref={borrowerCreateNameRef} className="input-field" name="name" required />
+              </label>
+              <Field name="username" label="שם משתמש" ltr />
+              <Field name="contact" label="פרטי קשר" />
+              <label className="field-label">
+                סוג
+                <select name="type" className="input-field">
+                  <option value="individual">יחיד</option>
+                  <option value="camp_organization">ארגון מחנה</option>
+                  <option value="other">אחר</option>
+                </select>
+              </label>
+            </fieldset>
+          </form>
+        </Dialog>
+      )}
       {adminDialogOpen && (
         <AdminPasswordDialog
           pending={pending}

@@ -9,7 +9,7 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { Check, ClipboardCheck, TriangleAlert, Undo2 } from 'lucide-react';
+import { Check, ClipboardCheck, TriangleAlert, Undo2, UserPlus } from 'lucide-react';
 import type { Borrower } from '../domain/types';
 import type { BorrowerDeskSnapshot } from '../contracts/borrower-workflow';
 import { fetchBorrowerDeskSnapshot, fetchBorrowerSearch, sendFrozenBorrowerAttempt } from './api';
@@ -1208,6 +1208,7 @@ export const BorrowerWorkflow = forwardRef<
           disabled={!searchSnapshot || deskBlocked}
           onClick={beginCreate}
         >
+          <UserPlus className="size-4" />
           יצירת שואל חדש
         </button>
       </div>

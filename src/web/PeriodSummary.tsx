@@ -13,8 +13,17 @@ type Props = {
   showToast: (title: string, message: string, tone: ToastTone) => void;
 };
 
+type Selection = { mode: 'today' | 'all' | 'custom'; start: string; end: string };
+
+const HISTORY_START = '0001-01-01';
+
 export function PeriodSummary({ active, returnRevision, openCard, showToast }: Props) {
-  const [range, setRange] = useState(() => ({ start: todayInIsrael(), end: todayInIsrael() }));
+  const [range, setRange] = useState<Selection>(() => {
+    const today = todayInIsrael();
+    return { mode: 'today', start: today, end: today };
+  });
+  const selectionRef = useRef(range);
+  const [calendarToday, setCalendarToday] = useState(range.end);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const [result, setResult] = useState<PeriodSummaryResult | null>(null);
@@ -27,17 +36,32 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
   const returnFocusRef = useRef<number | null>(null);
   const lastReturnRevisionRef = useRef(returnRevision);
 
+  const selectPeriod = useCallback((next: Selection) => {
+    const current = selectionRef.current;
+    if (current.mode === next.mode && current.start === next.start && current.end === next.end)
+      return;
+    // Invalidate synchronously: an old response may settle before React runs the next effect.
+    requestRef.current += 1;
+    selectionRef.current = next;
+    setResult(null);
+    setStatus('loading');
+    setRange(next);
+  }, []);
+
   const checkRollover = useCallback(() => {
     const currentToday = todayInIsrael();
-    if (currentToday === priorTodayRef.current) return;
-    const previousToday = priorTodayRef.current;
+    if (currentToday === priorTodayRef.current) return false;
     priorTodayRef.current = currentToday;
-    setRange((current) =>
-      current.start === previousToday && current.end === previousToday
-        ? { start: currentToday, end: currentToday }
-        : current,
-    );
-  }, []);
+    setCalendarToday(currentToday);
+    const current = selectionRef.current;
+    if (current.mode === 'custom' || current.end === currentToday) return false;
+    selectPeriod({
+      mode: current.mode,
+      start: current.mode === 'all' ? HISTORY_START : currentToday,
+      end: currentToday,
+    });
+    return true;
+  }, [selectPeriod]);
 
   useEffect(() => {
     const timer = window.setInterval(checkRollover, 30_000);
@@ -58,7 +82,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
       requestRef.current += 1;
       return;
     }
-    checkRollover();
+    if (checkRollover()) return;
     const requestId = ++requestRef.current;
     setStatus('loading');
     setResult(null);
@@ -90,7 +114,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
     return () => {
       requestRef.current += 1;
     };
-  }, [active, checkRollover, range.start, range.end, reload, showToast]);
+  }, [active, checkRollover, range.mode, range.start, range.end, reload, showToast]);
 
   useEffect(() => {
     if (status !== 'ready' || !result || returnFocusRef.current === null) return;
@@ -116,14 +140,14 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
     );
   }, [result, search]);
 
+  // The technical history bound is never exposed in the custom date controls.
+  const editableRange = range.mode === 'all' ? { start: range.end, end: range.end } : range;
+
   function updateDate(key: 'start' | 'end', value: string) {
-    const next = { ...range, [key]: value };
+    const next: Selection = { ...editableRange, mode: 'custom', [key]: value };
     try {
       periodBounds(next.start, next.end);
-      requestRef.current += 1;
-      setResult(null);
-      setStatus('loading');
-      setRange(next);
+      selectPeriod(next);
     } catch (error) {
       showToast(
         'טווח תאריכים',
@@ -140,26 +164,39 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
       </h2>
       <p>מאזן השאלות נטו בתקופה שנבחרה; אינו מציג את הציוד המוחזק כעת בידי השואל.</p>
       <div className="period-summary-controls">
-        <label>
-          מתאריך{' '}
-          <input
-            className="input-field"
-            type="date"
-            value={range.start}
-            max={todayInIsrael()}
-            onChange={(event) => updateDate('start', event.target.value)}
-          />
-        </label>
-        <label>
-          עד תאריך{' '}
-          <input
-            className="input-field"
-            type="date"
-            value={range.end}
-            max={todayInIsrael()}
-            onChange={(event) => updateDate('end', event.target.value)}
-          />
-        </label>
+        <div className="period-summary-shortcuts" role="group" aria-label="תקופת הסיכום">
+          <button
+            type="button"
+            className="secondary-button"
+            aria-pressed={range.mode === 'today'}
+            onClick={() => {
+              const today = todayInIsrael();
+              selectPeriod({ mode: 'today', start: today, end: today });
+            }}
+          >
+            היום
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            aria-pressed={range.mode === 'all'}
+            onClick={() =>
+              selectPeriod({ mode: 'all', start: HISTORY_START, end: todayInIsrael() })
+            }
+          >
+            הכל
+          </button>
+          <span className="period-summary-selection" aria-live="polite">
+            {range.mode === 'all' ? 'הכל עד ' : range.mode === 'today' ? 'היום: ' : 'טווח: '}
+            {range.mode === 'custom' && (
+              <>
+                <bdi>{range.start}</bdi>
+                {' – '}
+              </>
+            )}
+            <bdi>{range.end}</bdi>
+          </span>
+        </div>
         <label>
           חיפוש שואל{' '}
           <input
@@ -179,6 +216,32 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
           רענון
         </button>
       </div>
+      <details className="period-summary-advanced">
+        <summary>טווח תאריכים</summary>
+        <p>בחירת טווח תאריכים מותאם אישית</p>
+        <div className="period-summary-controls">
+          <label>
+            מתאריך{' '}
+            <input
+              className="input-field"
+              type="date"
+              value={editableRange.start}
+              max={calendarToday}
+              onChange={(event) => updateDate('start', event.target.value)}
+            />
+          </label>
+          <label>
+            עד תאריך{' '}
+            <input
+              className="input-field"
+              type="date"
+              value={editableRange.end}
+              max={calendarToday}
+              onChange={(event) => updateDate('end', event.target.value)}
+            />
+          </label>
+        </div>
+      </details>
       {status === 'loading' && <p role="status">טוען סיכום…</p>}
       {status === 'ready' &&
         result &&
