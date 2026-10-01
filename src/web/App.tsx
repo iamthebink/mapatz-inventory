@@ -888,9 +888,13 @@ export function App() {
       <header className="app-header">
         <div className="app-header-inner">
           <div className="app-brand">
-            <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-ctp-lavender text-white shadow-sm">
-              <Boxes className="size-6" />
-            </div>
+            <img
+              src="/mapatz-2026-logo.jpeg"
+              alt="סמל מפ״צ 2026"
+              width={56}
+              height={56}
+              className="size-14 shrink-0 rounded-xl object-contain"
+            />
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight">מלאי מפ״צ</h1>
               <p className={`connectivity-status ${isAdmin ? 'admin-active' : ''}`}>
