@@ -408,7 +408,6 @@ export function InventoryManagement({
         key: crypto.randomUUID(),
         ledgerEpoch,
         expectedStockRevision: item.stockRevision,
-        expectedCode: item.code,
         expectedName: item.name,
         expectedLocationId: item.locationId,
       },
@@ -507,7 +506,6 @@ export function InventoryManagement({
     );
   }, [locations, locationQuery]);
   const columns: TableColumn<Item>[] = [
-    { key: 'code', label: 'קוד', render: (item) => item.code, sortValue: (item) => item.code },
     {
       key: 'name',
       label: 'פריט',
@@ -692,8 +690,8 @@ export function InventoryManagement({
           rows={filtered}
           columns={columns}
           rowKey={(item) => item.id}
-          searchText={(item) => [item.name, item.code, ...item.aliases].join(' ')}
-          searchPlaceholder="חיפוש שם, כינוי או קוד…"
+          searchText={(item) => [item.name, ...item.aliases].join(' ')}
+          searchPlaceholder="חיפוש שם או כינוי…"
           toolbar={
             <>
               <label className="inventory-filter">
@@ -841,12 +839,7 @@ export function InventoryManagement({
           {editor.kind === 'item' && (
             <form className="dialog-form" onSubmit={saveItem}>
               <div className="dialog-fields">
-                {selected && (
-                  <p>
-                    קוד: {selected.code} · סוג: {kinds[selected.kind]}
-                  </p>
-                )}
-                {!selected && <p>קוד פריט ייווצר בעת השמירה.</p>}
+                {selected && <p>סוג: {kinds[selected.kind]}</p>}
                 {!selected && (
                   <label className="field-label">
                     סוג
@@ -1197,9 +1190,7 @@ export function InventoryManagement({
           returnFocusFallbackRef={fallbackRef}
         >
           <div className="dialog-fields">
-            <p>
-              קוד {deleteConfirm.code} · זמין למחיקה: {deleteConfirm.available}
-            </p>
+            <p>זמין למחיקה: {deleteConfirm.available}</p>
             {(deleteConfirm.borrowed || deleteConfirm.damaged || deleteConfirm.lost) > 0 && (
               <p role="alert">
                 המחיקה חסומה: מושאל {deleteConfirm.borrowed}, פגום {deleteConfirm.damaged}, אבוד{' '}

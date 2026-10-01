@@ -32,7 +32,6 @@ function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSn
     inventory: [
       {
         id: 11,
-        code: 101,
         name: 'Tent',
         kind: 'non_consumable',
         lotSize: null,
@@ -64,7 +63,6 @@ describe('borrower operation state', () => {
     const consumable = {
       ...snapshot().inventory[0]!,
       id: 12,
-      code: 102,
       name: 'Ties',
       kind: 'consumable' as const,
       available: 5,

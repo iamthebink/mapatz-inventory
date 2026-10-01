@@ -19,7 +19,7 @@ export interface TransferLocation {
 }
 
 export interface TransferItem {
-  code: number;
+  id: number;
   name: string;
   kind: ItemKind;
   location: string | null;
@@ -39,7 +39,7 @@ export interface TransferItem {
 
 export interface TransferLoan {
   checkoutId: number;
-  itemCode: number;
+  itemId: number;
   borrowerUsername: string;
   quantity: number;
   createdAt: string;
@@ -59,7 +59,7 @@ export interface TransferBorrower {
 export interface TransferEvent {
   id: number;
   kind: EventKind;
-  itemCode: number;
+  itemId: number;
   borrowerUsername: string | null;
   quantity: number;
   relatedEventId: number | null;
@@ -74,14 +74,12 @@ export interface InventoryTransferSnapshot {
   events: TransferEvent[];
   loans: TransferLoan[];
   stateRevision: number;
-  nextItemCode: number;
   identityHighWater: IdentityHighWater;
   radioCount: number;
   radios: Radio[];
 }
 
 export interface ResetItem {
-  code: number;
   name: string;
   kind: ItemKind;
   location: string | null;
@@ -105,21 +103,18 @@ export interface RecoveryPayload {
   events: TransferEvent[];
   loans: TransferLoan[];
   stateRevision: number;
-  nextItemCode: number;
   identityHighWater: IdentityHighWater;
   radioCount: number;
   radios: Radio[];
 }
 
 export interface UnresolvedDamageReportRow {
-  itemCode: number;
   itemName: string;
   location: string | null;
   unresolvedDamagedQuantity: number;
 }
 
 export interface ConsumablesUsageReportRow {
-  itemCode: number;
   itemName: string;
   location: string | null;
   startOfCycleStock: number;
@@ -134,7 +129,6 @@ export function unresolvedDamageReport(
   return snapshot.items
     .filter((item) => item.kind === 'non_consumable' && item.damaged > 0)
     .map((item) => ({
-      itemCode: item.code,
       itemName: item.name,
       location: item.location,
       unresolvedDamagedQuantity: item.damaged,
@@ -150,12 +144,11 @@ export function consumablesUsageReport(
       let addedDuringCycle = 0;
       let usage = 0;
       for (const event of snapshot.events) {
-        if (event.itemCode !== item.code || event.id <= item.baselineThroughEventId) continue;
+        if (event.itemId !== item.id || event.id <= item.baselineThroughEventId) continue;
         if (event.kind === 'stock_added') addedDuringCycle += event.quantity;
         if (event.kind === 'issued') usage += event.quantity;
       }
       return {
-        itemCode: item.code,
         itemName: item.name,
         location: item.location,
         startOfCycleStock: item.startingStock,
@@ -218,8 +211,6 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     !Array.isArray(payload.loans) ||
     !Number.isSafeInteger(payload.stateRevision) ||
     payload.stateRevision < 0 ||
-    !Number.isSafeInteger(payload.nextItemCode) ||
-    payload.nextItemCode < 100 ||
     !payload.identityHighWater ||
     typeof payload.identityHighWater !== 'object' ||
     Array.isArray(payload.identityHighWater) ||
@@ -245,7 +236,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   const items = new Map<number, RecoveryItem>();
   const itemNames = new Set<string>();
   for (const item of payload.items) {
-    safe(item.code, 'Item Code', true);
+    safe(item.id, 'Item ID', true);
     for (const field of [
       'available',
       'borrowed',
@@ -255,39 +246,38 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       'startingStock',
       'baselineThroughEventId',
     ] as const)
-      safe(item[field], `Recovery item ${item.code} ${field}`);
+      safe(item[field], `Recovery item ${item.id} ${field}`);
     if (item.revision > payload.stateRevision)
-      invalidWorkbook(`Recovery item ${item.code} revision exceeds the state revision`);
-    if (items.has(item.code))
-      invalidWorkbook(`Recovery Items contains duplicate Item Code ${item.code}`);
+      invalidWorkbook(`Recovery item ${item.id} revision exceeds the state revision`);
+    if (items.has(item.id)) invalidWorkbook(`Recovery Items contains duplicate Item ID ${item.id}`);
     const nameKey = normalizeItemName(item.name);
     if (itemNames.has(nameKey))
       invalidWorkbook(`Recovery Items contains duplicate Name "${item.name}"`);
     const location =
       item.location == null ? undefined : locations.get(item.location.toLocaleLowerCase());
     if (item.location != null && !location)
-      invalidWorkbook(`Recovery item ${item.code} references unknown Location "${item.location}"`);
+      invalidWorkbook(`Recovery item ${item.id} references unknown Location "${item.location}"`);
     if (location?.archived)
-      invalidWorkbook(`Recovery item ${item.code} references an archived location`);
+      invalidWorkbook(`Recovery item ${item.id} references an archived location`);
     const resetTotal =
       item.kind === 'consumable'
         ? item.available
         : item.available + item.borrowed + item.damaged + item.lost;
     if (!Number.isSafeInteger(resetTotal))
-      invalidWorkbook(`Recovery item ${item.code} reset total exceeds safe integer range`);
+      invalidWorkbook(`Recovery item ${item.id} reset total exceeds safe integer range`);
     if (item.kind !== 'consumable' && item.lotSize != null)
-      invalidWorkbook(`Recovery item ${item.code} defines a Lot Size but is not consumable`);
+      invalidWorkbook(`Recovery item ${item.id} defines a Lot Size but is not consumable`);
     if (
       item.kind === 'consumable' &&
       (item.borrowed !== 0 || item.damaged !== 0 || item.lost !== 0)
     )
-      invalidWorkbook(`Recovery consumable ${item.code} has unsupported balances`);
+      invalidWorkbook(`Recovery consumable ${item.id} has unsupported balances`);
     if (
       item.archived &&
       (item.available !== 0 || item.borrowed !== 0 || item.damaged !== 0 || item.lost !== 0)
     )
-      invalidWorkbook(`Recovery item ${item.code} is archived with unresolved inventory state`);
-    items.set(item.code, item);
+      invalidWorkbook(`Recovery item ${item.id} is archived with unresolved inventory state`);
+    items.set(item.id, item);
     itemNames.add(nameKey);
   }
   const borrowers = new Map<string, TransferBorrower>();
@@ -332,13 +322,11 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery event ${event.id} occurs before the preceding event timestamp`);
     previousId = event.id;
     previousTimestamp = timestamp;
-    const item = items.get(event.itemCode);
+    const item = items.get(event.itemId);
     if (!item)
-      invalidWorkbook(`Recovery event ${event.id} references unknown Item Code ${event.itemCode}`);
+      invalidWorkbook(`Recovery event ${event.id} references unknown Item ID ${event.itemId}`);
     if (timestamp < utcTimestamp(item.createdAt))
-      invalidWorkbook(
-        `Recovery event ${event.id} occurs before item ${event.itemCode} was created`,
-      );
+      invalidWorkbook(`Recovery event ${event.id} occurs before item ${event.itemId} was created`);
     const borrower =
       event.borrowerUsername == null
         ? null
@@ -359,7 +347,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       if (
         !related ||
         related.kind !== 'checked_out' ||
-        related.itemCode !== event.itemCode ||
+        related.itemId !== event.itemId ||
         related.borrowerUsername?.toLocaleLowerCase() !==
           event.borrowerUsername?.toLocaleLowerCase()
       )
@@ -370,21 +358,13 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
     events.set(event.id, event);
   }
-  const highestGeneratedCode = payload.items.reduce(
-    (highest, item) => Math.max(highest, item.code >= 100 ? item.code : 99),
-    99,
-  );
-  if (payload.nextItemCode <= highestGeneratedCode)
-    invalidWorkbook(
-      'Recovery Item Code high-water mark must be greater than every generated item code',
-    );
   if (payload.identityHighWater.nextEventId <= previousId)
     invalidWorkbook('Recovery Event ID high-water mark must be greater than every retained event');
   for (const item of payload.items) {
     const anchor = events.get(item.baselineThroughEventId);
-    if (item.baselineThroughEventId !== 0 && anchor && anchor.itemCode !== item.code)
+    if (item.baselineThroughEventId !== 0 && anchor && anchor.itemId !== item.id)
       invalidWorkbook(
-        `Recovery item ${item.code} references Baseline Through Event ID ${item.baselineThroughEventId} for another item`,
+        `Recovery item ${item.id} references Baseline Through Event ID ${item.baselineThroughEventId} for another item`,
       );
     // A deleted event may leave a numeric reporting cursor. It is not a foreign key:
     // its value remains the exact cutoff and event ids are never allocated below it.
@@ -394,7 +374,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       item.baselineThroughEventId >= payload.identityHighWater.nextEventId
     )
       invalidWorkbook(
-        `Recovery item ${item.code} has Baseline Through Event ID beyond the event high-water mark`,
+        `Recovery item ${item.id} has Baseline Through Event ID beyond the event high-water mark`,
       );
   }
 
@@ -402,14 +382,14 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   const totals = new Map<number, { borrowed: number; lost: number }>();
   for (const loan of payload.loans) {
     safe(loan.checkoutId, 'Recovery Loan Checkout ID', true);
-    safe(loan.itemCode, `Recovery loan ${loan.checkoutId} Item Code`, true);
+    safe(loan.itemId, `Recovery loan ${loan.checkoutId} Item ID`, true);
     safe(loan.quantity, `Recovery loan ${loan.checkoutId} Quantity`, true);
     safe(loan.outstanding, `Recovery loan ${loan.checkoutId} Outstanding`);
     safe(loan.lost, `Recovery loan ${loan.checkoutId} Lost`);
     if (loans.has(loan.checkoutId))
       invalidWorkbook(`Recovery Loans contains duplicate checkout ${loan.checkoutId}`);
     loans.add(loan.checkoutId);
-    const item = items.get(loan.itemCode);
+    const item = items.get(loan.itemId);
     const borrower = borrowers.get(loan.borrowerUsername.toLocaleLowerCase());
     const checkout = events.get(loan.checkoutId);
     if (
@@ -417,7 +397,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       !borrower ||
       !checkout ||
       checkout.kind !== 'checked_out' ||
-      checkout.itemCode !== loan.itemCode ||
+      checkout.itemId !== loan.itemId ||
       checkout.borrowerUsername?.toLocaleLowerCase() !==
         loan.borrowerUsername.toLocaleLowerCase() ||
       checkout.quantity !== loan.quantity
@@ -432,20 +412,20 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery loan ${loan.checkoutId} exceeds its original quantity`);
     if (borrower.archived && loan.outstanding > 0)
       invalidWorkbook(`Recovery borrower "${borrower.username}" is archived with unresolved loans`);
-    const aggregate = totals.get(loan.itemCode) ?? { borrowed: 0, lost: 0 };
+    const aggregate = totals.get(loan.itemId) ?? { borrowed: 0, lost: 0 };
     aggregate.borrowed += loan.outstanding;
     aggregate.lost += loan.lost;
     if (!Number.isSafeInteger(aggregate.borrowed) || !Number.isSafeInteger(aggregate.lost))
-      invalidWorkbook(`Recovery item ${loan.itemCode} loan totals exceed safe integer range`);
-    totals.set(loan.itemCode, aggregate);
+      invalidWorkbook(`Recovery item ${loan.itemId} loan totals exceed safe integer range`);
+    totals.set(loan.itemId, aggregate);
   }
   for (const event of payload.events)
     if (event.kind === 'checked_out' && !loans.has(event.id))
       invalidWorkbook(`Recovery checkout ${event.id} has no operational loan state`);
   for (const item of payload.items) {
-    const aggregate = totals.get(item.code) ?? { borrowed: 0, lost: 0 };
+    const aggregate = totals.get(item.id) ?? { borrowed: 0, lost: 0 };
     if (item.borrowed !== aggregate.borrowed || item.lost !== aggregate.lost)
-      invalidWorkbook(`Recovery item ${item.code} balances do not match operational loans`);
+      invalidWorkbook(`Recovery item ${item.id} balances do not match operational loans`);
   }
   return payload;
 }
@@ -478,7 +458,7 @@ export class InventoryTransferService {
           s.available,s.borrowed,s.damaged,s.lost,s.revision
           FROM items i LEFT JOIN locations l ON l.id=i.location_id
           LEFT JOIN inventory_baselines b ON b.item_id=i.id
-          LEFT JOIN item_state s ON s.item_id=i.id ORDER BY i.code`,
+          LEFT JOIN item_state s ON s.item_id=i.id ORDER BY i.name COLLATE NOCASE`,
         )
         .all() as Row[]
     ).map((row) => {
@@ -498,7 +478,7 @@ export class InventoryTransferService {
         )
           throw new DomainError(
             'integrity_error',
-            `Missing or invalid ${field} for item ${row.code}`,
+            `Missing or invalid ${field} for item ${row.id}`,
             500,
           );
       const available = Number(row.available);
@@ -509,7 +489,7 @@ export class InventoryTransferService {
       if (!Number.isSafeInteger(resetTotal))
         throw new DomainError('integrity_error', 'Reset total exceeds safe integer range', 500);
       return {
-        code: Number(row.code),
+        id: Number(row.id),
         name: String(row.name),
         kind: row.kind as ItemKind,
         location: row.location_name == null ? null : String(row.location_name),
@@ -540,7 +520,7 @@ export class InventoryTransferService {
     const events = (
       this.db
         .prepare(
-          `SELECT e.id,e.kind,i.code item_code,b.username borrower_username,e.quantity,
+          `SELECT e.id,e.kind,i.id item_id,b.username borrower_username,e.quantity,
           e.related_event_id,e.note,e.created_at FROM inventory_events e
           JOIN items i ON i.id=e.item_id LEFT JOIN borrowers b ON b.id=e.borrower_id ORDER BY e.id`,
         )
@@ -548,7 +528,7 @@ export class InventoryTransferService {
     ).map((row) => ({
       id: Number(row.id),
       kind: row.kind as EventKind,
-      itemCode: Number(row.item_code),
+      itemId: Number(row.item_id),
       borrowerUsername: row.borrower_username == null ? null : String(row.borrower_username),
       quantity: Number(row.quantity),
       relatedEventId: row.related_event_id == null ? null : Number(row.related_event_id),
@@ -558,7 +538,7 @@ export class InventoryTransferService {
     const loans = (
       this.db
         .prepare(
-          `SELECT l.checkout_id,i.code item_code,b.username borrower_username,
+          `SELECT l.checkout_id,i.id item_id,b.username borrower_username,
         l.quantity,l.created_at,l.outstanding,l.lost
         FROM loan_state l JOIN items i ON i.id=l.item_id
         JOIN borrowers b ON b.id=l.borrower_id ORDER BY l.checkout_id`,
@@ -566,7 +546,7 @@ export class InventoryTransferService {
         .all() as Row[]
     ).map((row) => ({
       checkoutId: Number(row.checkout_id),
-      itemCode: Number(row.item_code),
+      itemId: Number(row.item_id),
       borrowerUsername: String(row.borrower_username),
       quantity: Number(row.quantity),
       createdAt: String(row.created_at),
@@ -577,10 +557,6 @@ export class InventoryTransferService {
       Row | undefined;
     if (!clock || typeof clock.revision !== 'number' || !Number.isSafeInteger(clock.revision))
       throw new DomainError('integrity_error', 'State revision is missing or invalid', 500);
-    const nextItemCode = Number(
-      (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
-        .next_code,
-    );
     const identityHighWater = getIdentityHighWater(this.db);
     const fleet = new RadioService(this.db).fleet();
     return {
@@ -590,7 +566,6 @@ export class InventoryTransferService {
       events,
       loans,
       stateRevision: Number(clock.revision),
-      nextItemCode,
       identityHighWater,
       radioCount: fleet.count,
       radios: fleet.radios,
@@ -600,13 +575,9 @@ export class InventoryTransferService {
   replaceWithReset(payload: ResetPayload): void {
     for (const item of payload.items)
       if (!Number.isSafeInteger(item.total) || item.total < 0 || (item.archived && item.total > 0))
-        invalidWorkbook(`Reset item ${item.code} has invalid total or archived stock`);
+        invalidWorkbook(`Reset item ${item.name} has invalid total or archived stock`);
     transaction(this.db, () => {
       const previousHighWater = getIdentityHighWater(this.db);
-      const previousNextCode = Number(
-        (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
-          .next_code,
-      );
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
       this.db.prepare('DELETE FROM inventory_command_receipts').run();
@@ -637,7 +608,7 @@ export class InventoryTransferService {
       });
 
       const insertItem = this.db.prepare(
-        'INSERT INTO items(id,code,name,kind,lot_size,location_id,archived) VALUES (?,?,?,?,?,?,?)',
+        'INSERT INTO items(id,name,kind,lot_size,location_id,archived) VALUES (?,?,?,?,?,?)',
       );
       const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
       const insertEvent = this.db.prepare(
@@ -651,7 +622,6 @@ export class InventoryTransferService {
         const itemId = allocateIdentity(this.db, 'item');
         insertItem.run(
           itemId,
-          item.code,
           item.name,
           item.kind,
           item.lotSize,
@@ -666,13 +636,6 @@ export class InventoryTransferService {
         insertBaseline.run(itemId, item.total, baselineEventId);
       }
       this.db.prepare('UPDATE state_clock SET revision=0 WHERE singleton=1').run();
-      const highestGeneratedRangeCode = payload.items.reduce(
-        (highest, item) => (item.code >= 100 ? Math.max(highest, item.code) : highest),
-        99,
-      );
-      this.db
-        .prepare('UPDATE code_sequence SET next_code=? WHERE singleton=1')
-        .run(Math.max(100, previousNextCode, highestGeneratedRangeCode + 1));
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
     });
   }
@@ -681,10 +644,6 @@ export class InventoryTransferService {
     payload = validateRecoveryPayload(payload);
     transaction(this.db, () => {
       const previousHighWater = getIdentityHighWater(this.db);
-      const previousNextCode = Number(
-        (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
-          .next_code,
-      );
       new RadioService(this.db).restore(payload.radioCount, payload.radios);
       this.rotateLedgerEpoch();
       this.db.prepare('DELETE FROM idempotency_receipts').run();
@@ -728,8 +687,8 @@ export class InventoryTransferService {
 
       const itemIds = new Map<number, number>();
       const insertItem = this.db.prepare(
-        `INSERT INTO items(id,code,name,kind,lot_size,location_id,archived,created_at)
-        VALUES (?,?,?,?,?,?,?,?)`,
+        `INSERT INTO items(id,name,kind,lot_size,location_id,archived,created_at)
+        VALUES (?,?,?,?,?,?,?)`,
       );
       const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
       const insertState = this.db
@@ -739,7 +698,6 @@ export class InventoryTransferService {
         const itemId = allocateIdentity(this.db, 'item');
         insertItem.run(
           itemId,
-          item.code,
           item.name,
           item.kind,
           item.lotSize,
@@ -747,7 +705,7 @@ export class InventoryTransferService {
           Number(item.archived),
           item.createdAt,
         );
-        itemIds.set(item.code, itemId);
+        itemIds.set(item.id, itemId);
         insertState.run(
           itemId,
           item.available,
@@ -786,7 +744,7 @@ export class InventoryTransferService {
         insertEvent.run(
           event.id,
           event.kind,
-          itemIds.get(event.itemCode)!,
+          itemIds.get(event.itemId)!,
           event.borrowerUsername == null
             ? null
             : borrowerIds.get(event.borrowerUsername.toLocaleLowerCase())!,
@@ -802,7 +760,7 @@ export class InventoryTransferService {
       for (const loan of payload.loans)
         insertLoan.run(
           loan.checkoutId,
-          itemIds.get(loan.itemCode)!,
+          itemIds.get(loan.itemId)!,
           borrowerIds.get(loan.borrowerUsername.toLocaleLowerCase())!,
           loan.quantity,
           loan.createdAt,
@@ -823,19 +781,12 @@ export class InventoryTransferService {
             ? item.createdAt
             : (anchor?.createdAt ?? item.createdAt);
         insertBaseline.run(
-          itemIds.get(item.code)!,
+          itemIds.get(item.id)!,
           item.startingStock,
           item.baselineThroughEventId,
           establishedAt,
         );
       }
-      const highestGeneratedRangeCode = payload.items.reduce(
-        (highest, item) => (item.code >= 100 ? Math.max(highest, item.code) : highest),
-        99,
-      );
-      this.db
-        .prepare('UPDATE code_sequence SET next_code=? WHERE singleton=1')
-        .run(Math.max(100, previousNextCode, payload.nextItemCode, highestGeneratedRangeCode + 1));
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
     });
   }

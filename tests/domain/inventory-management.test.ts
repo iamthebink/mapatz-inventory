@@ -81,7 +81,6 @@ describe('inventory management commands', () => {
           ledgerEpoch,
           itemId: item.id,
           expectedStockRevision: preview.stockRevision,
-          expectedCode: preview.code,
           expectedName: preview.name,
           expectedLocationId: preview.locationId,
         }),
@@ -467,7 +466,7 @@ describe('inventory management commands', () => {
     db.close();
   });
 
-  it('deletes an eligible item atomically, replays its receipt, and never reuses its code or id', () => {
+  it('deletes an eligible item atomically, replays its receipt, and never reuses its internal id', () => {
     const { db, inventory } = setup();
     const item = inventory.createItem({ name: 'Reusable name', kind: 'consumable' });
     inventory.addStock(item.id, 3);
@@ -481,7 +480,6 @@ describe('inventory management commands', () => {
       ledgerEpoch: inventory.inventoryEpoch(),
       itemId: item.id,
       expectedStockRevision: before.stockRevision,
-      expectedCode: before.code,
       expectedName: before.name,
       expectedLocationId: before.locationId,
     };
@@ -515,8 +513,7 @@ describe('inventory management commands', () => {
     inventory.addStock(replacement.id, 1);
     const replacementStockEvent = inventory.listLedger()[0]!;
     expect(replacement.id).toBeGreaterThan(item.id);
-    expect(replacement.code).toBeGreaterThan(item.code);
-    expect(replacementStockEvent.itemCode).toBe(replacement.code);
+    expect(replacementStockEvent.item_id).toBe(replacement.id);
     expect(replacementStockEvent.id).toBeGreaterThan(maxEventIdBeforeDelete);
     expect(inventory.deleteItemCommand(command)).toEqual(committed);
     expect(inventory.listItems('Reusable name')[0]).toMatchObject({
@@ -552,7 +549,6 @@ describe('inventory management commands', () => {
       ledgerEpoch: inventory.inventoryEpoch(),
       itemId: item.id,
       expectedStockRevision: preview.stockRevision,
-      expectedCode: preview.code,
       expectedName: preview.name,
       expectedLocationId: preview.locationId,
     };
@@ -605,7 +601,6 @@ describe('inventory management commands', () => {
         ledgerEpoch: inventory.inventoryEpoch(),
         itemId: item.id,
         expectedStockRevision: preview.stockRevision,
-        expectedCode: preview.code,
         expectedName: preview.name,
         expectedLocationId: preview.locationId,
       };
@@ -954,7 +949,6 @@ describe('inventory management commands', () => {
       ledgerEpoch: inventory.inventoryEpoch(),
       itemId: item.id,
       expectedStockRevision: itemPreview.stockRevision,
-      expectedCode: itemPreview.code,
       expectedName: itemPreview.name,
       expectedLocationId: itemPreview.locationId,
     };

@@ -68,7 +68,6 @@ type LedgerEvent = {
   id: number;
   created_at: string;
   kind: string;
-  itemCode?: number;
   itemName?: string;
   borrowerName?: string;
   quantity: number;
@@ -855,12 +854,7 @@ export function App() {
     {
       key: 'item',
       label: 'פריט',
-      render: (event) => (
-        <>
-          <span className="code-pill me-1">{event.itemCode ?? '—'}</span>
-          {event.itemName}
-        </>
-      ),
+      render: (event) => <>{event.itemName}</>,
       sortValue: (event) => event.itemName ?? '',
     },
     {
@@ -1285,7 +1279,6 @@ export function App() {
                   event.created_at,
                   event.kind,
                   ledgerEventName(event),
-                  event.itemCode,
                   event.itemName,
                   event.borrowerName,
                   event.quantity,

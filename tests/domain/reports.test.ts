@@ -56,7 +56,6 @@ describe('inventory workbook reports', () => {
     expect(snapshot.items[0]).toMatchObject({ resetTotal: 2 });
     expect(unresolvedDamageReport(snapshot)).toEqual([
       {
-        itemCode: item.code,
         itemName: item.name,
         location: null,
         unresolvedDamagedQuantity: 1,
@@ -64,7 +63,7 @@ describe('inventory workbook reports', () => {
     ]);
     const workbook = await load(await exportWorkbook(snapshot));
     expect(
-      workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.unresolvedDamage.name)!.getRow(2).getCell(4)
+      workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.unresolvedDamage.name)!.getRow(2).getCell(3)
         .value,
     ).toBe(1);
     db.close();
@@ -77,7 +76,6 @@ describe('inventory workbook reports', () => {
       locations: [{ name: 'Workshop', archived: false }],
       items: [
         {
-          code: 201,
           name: 'Still damaged',
           kind: 'non_consumable',
           location: 'Workshop',
@@ -87,7 +85,6 @@ describe('inventory workbook reports', () => {
           total: 3,
         },
         {
-          code: 202,
           name: 'Repaired',
           kind: 'non_consumable',
           location: 'Workshop',
@@ -97,7 +94,6 @@ describe('inventory workbook reports', () => {
           total: 2,
         },
         {
-          code: 203,
           name: 'Written off',
           kind: 'non_consumable',
           location: null,
@@ -118,15 +114,14 @@ describe('inventory workbook reports', () => {
     for (const item of items) {
       const checkout = inventory.checkout(item.id, borrower.id, 2);
       inventory.returnCheckout(checkout, 0, 2);
-      if (item.code === 201) inventory.resolveDamage(item.id, 1, true);
-      if (item.code === 202) inventory.resolveDamage(item.id, 2, true);
-      if (item.code === 203) inventory.resolveDamage(item.id, 2, false);
+      if (item.name === 'Still damaged') inventory.resolveDamage(item.id, 1, true);
+      if (item.name === 'Repaired') inventory.resolveDamage(item.id, 2, true);
+      if (item.name === 'Written off') inventory.resolveDamage(item.id, 2, false);
     }
 
     const snapshot = transfers.snapshot();
     expect(unresolvedDamageReport(snapshot)).toEqual([
       {
-        itemCode: 201,
         itemName: 'Still damaged',
         location: 'Workshop',
         unresolvedDamagedQuantity: 1,
@@ -135,7 +130,6 @@ describe('inventory workbook reports', () => {
     const workbook = await load(await exportWorkbook(snapshot));
     const reportSheet = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.unresolvedDamage.name)!;
     expect((reportSheet.getRow(2).values as unknown[]).slice(1)).toEqual([
-      201,
       'Still damaged',
       'Workshop',
       1,
@@ -154,7 +148,7 @@ describe('inventory workbook reports', () => {
         unresolvedFromRecovery.set(code, (unresolvedFromRecovery.get(code) ?? 0) - quantity);
     }
     expect([...unresolvedFromRecovery.entries()].filter(([, quantity]) => quantity > 0)).toEqual([
-      [201, 1],
+      [inventory.listItems('Still damaged')[0]!.id, 1],
     ]);
     db.close();
   });
@@ -166,7 +160,6 @@ describe('inventory workbook reports', () => {
       locations: [{ name: 'Stores', archived: false }],
       items: [
         {
-          code: 100,
           name: 'Correction example',
           kind: 'consumable',
           location: 'Stores',
@@ -176,7 +169,6 @@ describe('inventory workbook reports', () => {
           total: 100,
         },
         {
-          code: 101,
           name: 'Planning example',
           kind: 'consumable',
           location: null,
@@ -186,7 +178,6 @@ describe('inventory workbook reports', () => {
           total: 100,
         },
         {
-          code: 102,
           name: 'Archived zero stock',
           kind: 'consumable',
           location: 'Stores',
@@ -208,7 +199,14 @@ describe('inventory workbook reports', () => {
     const snapshot = sourceTransfers.snapshot();
     expect(consumablesUsageReport(snapshot)).toEqual([
       {
-        itemCode: 100,
+        itemName: 'Archived zero stock',
+        location: 'Stores',
+        startOfCycleStock: 0,
+        addedDuringCycle: 0,
+        usage: 0,
+        left: 0,
+      },
+      {
         itemName: 'Correction example',
         location: 'Stores',
         startOfCycleStock: 100,
@@ -217,7 +215,6 @@ describe('inventory workbook reports', () => {
         left: 90,
       },
       {
-        itemCode: 101,
         itemName: 'Planning example',
         location: null,
         startOfCycleStock: 100,
@@ -225,22 +222,12 @@ describe('inventory workbook reports', () => {
         usage: 0,
         left: 120,
       },
-      {
-        itemCode: 102,
-        itemName: 'Archived zero stock',
-        location: 'Stores',
-        startOfCycleStock: 0,
-        addedDuringCycle: 0,
-        usage: 0,
-        left: 0,
-      },
     ]);
 
     const exported = await exportWorkbook(snapshot);
     const workbook = await load(exported);
     const reportSheet = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.consumablesUsage.name)!;
-    expect((reportSheet.getRow(2).values as unknown[]).slice(1)).toEqual([
-      100,
+    expect((reportSheet.getRow(3).values as unknown[]).slice(1)).toEqual([
       'Correction example',
       'Stores',
       100,
@@ -261,27 +248,30 @@ describe('inventory workbook reports', () => {
     const resetTransfers = new InventoryTransferService(reset);
     resetTransfers.replaceWithReset(await parseResetWorkbook(exported));
     expect(consumablesUsageReport(resetTransfers.snapshot())).toEqual([
-      expect.objectContaining({
-        itemCode: 100,
-        startOfCycleStock: 90,
-        addedDuringCycle: 0,
-        usage: 0,
-        left: 90,
-      }),
-      expect.objectContaining({
-        itemCode: 101,
-        startOfCycleStock: 120,
-        addedDuringCycle: 0,
-        usage: 0,
-        left: 120,
-      }),
-      expect.objectContaining({
-        itemCode: 102,
+      {
+        itemName: 'Archived zero stock',
+        location: 'Stores',
         startOfCycleStock: 0,
         addedDuringCycle: 0,
         usage: 0,
         left: 0,
-      }),
+      },
+      {
+        itemName: 'Correction example',
+        location: 'Stores',
+        startOfCycleStock: 90,
+        addedDuringCycle: 0,
+        usage: 0,
+        left: 90,
+      },
+      {
+        itemName: 'Planning example',
+        location: null,
+        startOfCycleStock: 120,
+        addedDuringCycle: 0,
+        usage: 0,
+        left: 120,
+      },
     ]);
     source.close();
     recovered.close();

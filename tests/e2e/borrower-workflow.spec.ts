@@ -188,7 +188,7 @@ test('keeps an emphasized maximum-length item identity legible at minimum width'
   seed,
 }) => {
   const longItemName =
-    `${seed.item.code} פריט VeryLongUnbrokenEquipmentIdentifierABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789`.slice(
+    `פריט VeryLongUnbrokenEquipmentIdentifierABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789`.slice(
       0,
       100,
     );

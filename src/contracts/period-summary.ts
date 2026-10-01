@@ -2,7 +2,6 @@ import type { Borrower } from '../domain/types.js';
 
 export type PeriodSummaryItem = {
   itemId: number;
-  code: number;
   name: string;
   quantity: number;
 };

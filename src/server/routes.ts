@@ -537,7 +537,6 @@ export function apiRouter(
             key: z.string().min(8).max(128),
             ledgerEpoch: positive,
             expectedStockRevision: z.number().int().min(0),
-            expectedCode: positive,
             expectedName: z.string().min(1).max(200),
             expectedLocationId: positive.nullable(),
           })

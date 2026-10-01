@@ -80,14 +80,14 @@ export function ConsumablesDesk({
   }, [attempt, busy, dirty]);
   const active = items.filter((item) => item.kind === 'consumable' && !item.archived);
   const visible = active.filter((item) =>
-    `${item.code} ${item.name} ${item.aliases.join(' ')}`
+    `${item.name} ${item.aliases.join(' ')}`
       .toLocaleLowerCase()
       .includes(query.trim().toLocaleLowerCase()),
   );
   const selected = active.find((item) => item.id === selectedId);
   const totalUnits = entries.reduce((sum, entry) => sum + entry.quantity, 0);
   const itemName = (itemId: number) =>
-    items.find((item) => item.id === itemId)?.name ?? `#${itemId}`;
+    items.find((item) => item.id === itemId)?.name ?? 'פריט לא זמין';
   const draftError = (): string | null => {
     if (entries.length === 0) return 'יש להוסיף פריט אחד לפחות.';
     const totals = new Map<number, number>();
@@ -322,7 +322,7 @@ export function ConsumablesDesk({
                 type="search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="שם, קוד או שם נוסף"
+                placeholder="שם או שם נוסף"
               />
             </div>
             <div className="table-shell consumables-table-scroll">
@@ -339,7 +339,6 @@ export function ConsumablesDesk({
                     <tr key={item.id}>
                       <th scope="row">
                         <strong>{item.name}</strong>
-                        <small>קוד {item.code}</small>
                       </th>
                       <td className="consumables-available">{item.available}</td>
                       <td>
@@ -387,10 +386,7 @@ export function ConsumablesDesk({
                     <div className="consumables-draft-top">
                       <div>
                         <strong>{itemName(entry.itemId)}</strong>
-                        <small>
-                          קוד {items.find((item) => item.id === entry.itemId)?.code ?? '—'}
-                          {entry.note && ` · ${entry.note}`}
-                        </small>
+                        {entry.note && <small>{entry.note}</small>}
                       </div>
                       <span className="consumables-quantity-chip">× {entry.quantity}</span>
                     </div>
@@ -469,7 +465,7 @@ export function ConsumablesDesk({
         >
           <div className="dialog-form" dir="rtl">
             <p>
-              <strong>{selected.name}</strong> · קוד {selected.code} · זמין {selected.available}
+              <strong>{selected.name}</strong> · זמין {selected.available}
             </p>
             <label className="field-label">
               כמות
@@ -552,9 +548,7 @@ export function ConsumablesDesk({
           <div className="borrower-review-list">
             {entries.map((entry, index) => (
               <p key={index}>
-                {itemName(entry.itemId)} · קוד{' '}
-                {items.find((item) => item.id === entry.itemId)?.code ?? '—'} · כמות{' '}
-                {entry.quantity}
+                {itemName(entry.itemId)} · כמות {entry.quantity}
                 {entry.note && ` · ${entry.note}`}
               </p>
             ))}

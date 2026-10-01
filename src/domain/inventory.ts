@@ -267,12 +267,12 @@ export class InventoryService {
     transaction(this.db, () => {
       if (input.archived) {
         const blockers = this.db
-          .prepare('SELECT code,name FROM items WHERE location_id=? ORDER BY code')
+          .prepare('SELECT name FROM items WHERE location_id=? ORDER BY name COLLATE NOCASE')
           .all(id) as Row[];
         if (blockers.length)
           throw new DomainError(
             'location_in_use',
-            `יש להעביר תחילה את הפריטים: ${blockers.map((item) => `${item.code} ${item.name}`).join(', ')}`,
+            `יש להעביר תחילה את הפריטים: ${blockers.map((item) => item.name).join(', ')}`,
             409,
           );
       }
@@ -324,12 +324,12 @@ export class InventoryService {
         if (!current) throw new DomainError('not_found', 'Location not found', 404);
         if (input.archived) {
           const blockers = this.db
-            .prepare('SELECT code,name FROM items WHERE location_id=? ORDER BY code')
+            .prepare('SELECT name FROM items WHERE location_id=? ORDER BY name COLLATE NOCASE')
             .all(locationId) as Row[];
           if (blockers.length)
             throw new DomainError(
               'location_in_use',
-              `יש להעביר תחילה את הפריטים: ${blockers.map((item) => `${item.code} ${item.name}`).join(', ')}`,
+              `יש להעביר תחילה את הפריטים: ${blockers.map((item) => item.name).join(', ')}`,
               409,
             );
         }
@@ -455,15 +455,10 @@ export class InventoryService {
       this.requireActiveLocation(input.locationId ?? null);
       const name = input.name.trim();
       this.requireUniqueItemName(name);
-      const code = Number(
-        (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
-          .next_code,
-      );
-      this.db.prepare('UPDATE code_sequence SET next_code=next_code+1 WHERE singleton=1').run();
       const id = allocateIdentity(this.db, 'item');
       this.db
-        .prepare('INSERT INTO items(id,code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?,?)')
-        .run(id, code, name, input.kind, input.lotSize ?? null, input.locationId ?? null);
+        .prepare('INSERT INTO items(id,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
+        .run(id, name, input.kind, input.lotSize ?? null, input.locationId ?? null);
       this.setAliases(id, input.aliases ?? []);
       this.db
         .prepare(
@@ -591,15 +586,10 @@ export class InventoryService {
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (input.lotSize != null) integer(input.lotSize, 'lotSize');
     this.requireUniqueItemName(input.name.trim());
-    const code = Number(
-      (this.db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get() as Row)
-        .next_code,
-    );
-    this.db.prepare('UPDATE code_sequence SET next_code=next_code+1 WHERE singleton=1').run();
     const id = allocateIdentity(this.db, 'item');
     this.db
-      .prepare('INSERT INTO items(id,code,name,kind,lot_size,location_id) VALUES (?,?,?,?,?,?)')
-      .run(id, code, input.name.trim(), input.kind, input.lotSize, input.locationId);
+      .prepare('INSERT INTO items(id,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
+      .run(id, input.name.trim(), input.kind, input.lotSize, input.locationId);
     this.setAliases(id, input.aliases);
     this.db
       .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)')
@@ -655,7 +645,6 @@ export class InventoryService {
     ledgerEpoch: number;
     itemId: number;
     expectedStockRevision: number;
-    expectedCode: number;
     expectedName: string;
     expectedLocationId: number | null;
   }): { outcome: 'committed'; action: 'delete_item'; itemId: number } {
@@ -674,11 +663,7 @@ export class InventoryService {
       }
       this.requireInventoryEpoch(input.ledgerEpoch);
       const item = this.getItem(input.itemId);
-      if (
-        item.code !== input.expectedCode ||
-        item.name !== input.expectedName ||
-        item.locationId !== input.expectedLocationId
-      )
+      if (item.name !== input.expectedName || item.locationId !== input.expectedLocationId)
         throw new DomainError('confirmation_changed', 'פרטי הפריט השתנו; יש לבדוק ולאשר שוב', 409);
       if (item.borrowed || item.damaged || item.lost)
         throw new DomainError(
@@ -1088,10 +1073,10 @@ export class InventoryService {
       .prepare(
         `SELECT i.*,${itemStateColumns}
       FROM items i LEFT JOIN item_state s ON s.item_id=i.id WHERE (? OR i.archived=0) AND (
-        CAST(i.code AS TEXT) LIKE ? OR i.name LIKE ? COLLATE NOCASE OR EXISTS(
-          SELECT 1 FROM item_aliases a WHERE a.item_id=i.id AND a.alias LIKE ? COLLATE NOCASE)) ORDER BY i.code`,
+        i.name LIKE ? COLLATE NOCASE OR EXISTS(
+          SELECT 1 FROM item_aliases a WHERE a.item_id=i.id AND a.alias LIKE ? COLLATE NOCASE)) ORDER BY i.name COLLATE NOCASE`,
       )
-      .all(Number(includeArchived), fragment, fragment, fragment) as Row[];
+      .all(Number(includeArchived), fragment, fragment) as Row[];
     return rows.map((row) => this.itemFromRow(row));
   }
 
@@ -1395,7 +1380,7 @@ export class InventoryService {
   listLoans(): Row[] {
     return this.db
       .prepare(
-        `SELECT l.checkout_id checkoutId,l.item_id itemId,i.code,i.name itemName,
+        `SELECT l.checkout_id checkoutId,l.item_id itemId,i.name itemName,
       l.borrower_id borrowerId,b.name borrowerName,l.quantity,l.outstanding,l.lost,
       l.created_at createdAt
       FROM loan_state l JOIN items i ON i.id=l.item_id JOIN borrowers b ON b.id=l.borrower_id
@@ -1412,7 +1397,7 @@ export class InventoryService {
           `
         SELECT e.borrower_id borrowerId, e.item_id itemId,
           b.username, b.name borrowerName, b.contact, b.type borrowerType,
-          b.archived borrowerArchived, i.code, i.name itemName,
+          b.archived borrowerArchived, i.name itemName,
           SUM(CASE e.kind WHEN 'checked_out' THEN e.quantity
             WHEN 'returned_usable' THEN -e.quantity
             WHEN 'returned_damaged' THEN -e.quantity
@@ -1424,7 +1409,7 @@ export class InventoryService {
           AND e.kind IN ('checked_out','returned_usable','returned_damaged','marked_lost')
         GROUP BY e.borrower_id,e.item_id
         HAVING balance > 0
-        ORDER BY b.name COLLATE NOCASE, e.borrower_id, i.code
+        ORDER BY b.name COLLATE NOCASE, e.borrower_id, i.name COLLATE NOCASE
       `,
         )
         .all(bounds.startUtc, bounds.endExclusiveUtc) as Row[];
@@ -1448,7 +1433,6 @@ export class InventoryService {
         }
         entry.items.push({
           itemId: row.itemId,
-          code: row.code,
           name: row.itemName,
           quantity: row.balance,
         });
@@ -1467,7 +1451,7 @@ export class InventoryService {
   listLedger(): Row[] {
     return this.db
       .prepare(
-        `SELECT e.*,i.code itemCode,i.name itemName,b.name borrowerName FROM inventory_events e
+        `SELECT e.*,i.name itemName,b.name borrowerName FROM inventory_events e
       JOIN items i ON i.id=e.item_id LEFT JOIN borrowers b ON b.id=e.borrower_id ORDER BY e.id DESC`,
       )
       .all();
@@ -2119,7 +2103,7 @@ export class InventoryService {
   private isItemReceiptFor(value: Record<string, unknown>, itemId: number): boolean {
     return (
       value.itemId === itemId ||
-      (value.id === itemId && typeof value.code === 'number' && typeof value.kind === 'string')
+      (value.id === itemId && typeof value.name === 'string' && typeof value.kind === 'string')
     );
   }
 
@@ -2182,14 +2166,13 @@ export class InventoryService {
         .prepare(
           `SELECT i.*,${itemStateColumns} FROM items i
           LEFT JOIN item_state s ON s.item_id=i.id
-          WHERE i.kind IN ('non_consumable','consumable') ORDER BY i.code`,
+          WHERE i.kind IN ('non_consumable','consumable') ORDER BY i.name COLLATE NOCASE`,
         )
         .all() as Row[]
     ).map((row) => {
       const item = this.itemFromRow(row);
       return {
         id: item.id,
-        code: item.code,
         name: item.name,
         kind: item.kind,
         lotSize: item.lotSize,
@@ -2209,7 +2192,7 @@ export class InventoryService {
           WHERE l.borrower_id=?
           GROUP BY l.item_id
           HAVING SUM(l.outstanding) > 0 OR SUM(l.lost) > 0
-          ORDER BY i.code`,
+          ORDER BY i.name COLLATE NOCASE`,
         )
         .all(borrowerId) as Row[]
     ).map((row) => ({
@@ -2264,7 +2247,6 @@ export class InventoryService {
 
   private itemFromRow = (row: Row): Item => ({
     id: Number(row.id),
-    code: Number(row.code),
     name: String(row.name),
     kind: row.kind,
     lotSize: row.lot_size == null ? null : Number(row.lot_size),

@@ -4,11 +4,6 @@ CREATE TABLE IF NOT EXISTS migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS code_sequence (
-  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  next_code INTEGER NOT NULL CHECK (next_code >= 100)
-);
-INSERT OR IGNORE INTO code_sequence(singleton, next_code) VALUES (1, 100);
 
 CREATE TABLE IF NOT EXISTS locations (
   id INTEGER PRIMARY KEY,
@@ -21,7 +16,6 @@ INSERT OR IGNORE INTO locations(code, name) VALUES
 
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY,
-  code INTEGER NOT NULL UNIQUE CHECK (code >= 100),
   name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
   kind TEXT NOT NULL CHECK (kind IN ('consumable','non_consumable')),
   lot_size INTEGER CHECK (lot_size IS NULL OR lot_size > 0),

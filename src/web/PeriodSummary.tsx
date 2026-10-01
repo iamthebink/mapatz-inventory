@@ -318,7 +318,6 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                         <table className="period-summary-items">
                           <thead>
                             <tr>
-                              <th scope="col">קוד ציוד</th>
                               <th scope="col">ציוד</th>
                               <th scope="col">כמות</th>
                             </tr>
@@ -326,7 +325,6 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                           <tbody>
                             {items.map((item) => (
                               <tr key={item.itemId}>
-                                <td>{item.code}</td>
                                 <td>{item.name}</td>
                                 <td>{item.quantity}</td>
                               </tr>

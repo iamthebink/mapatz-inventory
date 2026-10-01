@@ -276,7 +276,7 @@ describe('inventory domain', () => {
     unchanged.close();
   });
 
-  it('migrates idempotently, seeds locations, and persists monotonic codes and stored state', () => {
+  it('migrates idempotently, seeds locations, and persists monotonic identities and stored state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-domain-'));
     cleanup.push(directory);
     const filename = join(directory, 'inventory.sqlite');
@@ -286,7 +286,18 @@ describe('inventory domain', () => {
       expect.arrayContaining(['monster', 'kabira', 'submarine']),
     );
     const gloves = inventory.createItem({ name: 'כפפות', kind: 'consumable', aliases: ['Gloves'] });
-    expect(gloves.code).toBe(100);
+    expect(gloves.id).toBe(1);
+    expect(gloves).not.toHaveProperty('code');
+    expect(
+      db
+        .prepare('PRAGMA table_info(items)')
+        .all()
+        .map((column) => column.name),
+    ).not.toContain('code');
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='code_sequence'").get(),
+    ).toBeUndefined();
+    expect(inventory.listItems(String(gloves.id))).toEqual([]);
     inventory.addStock(gloves.id, 12);
     inventory.issue(gloves.id, 3);
     db.close();
@@ -297,8 +308,8 @@ describe('inventory domain', () => {
       (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
     ).toBe(9);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
-    expect(inventory.listItems('100')[0]?.available).toBe(9);
-    expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).code).toBe(101);
+    expect(inventory.listItems('Gloves')[0]?.available).toBe(9);
+    expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).id).toBe(2);
     expect(() => db.prepare('UPDATE inventory_events SET quantity=99 WHERE id=1').run()).toThrow(
       /immutable/,
     );
@@ -315,16 +326,22 @@ describe('inventory domain', () => {
       aliases: ['Shelter'],
     });
     inventory.archiveItem(original.id, true);
-    const nextCodeBeforeConflict = db
-      .prepare('SELECT next_code FROM code_sequence WHERE singleton=1')
+    const identityHighWaterBeforeConflict = db
+      .prepare(
+        "SELECT result_json FROM inventory_command_receipts WHERE key='system:identity-high-water'",
+      )
       .get();
 
     expect(() => inventory.createItem({ name: '\t  tént\n', kind: 'consumable' })).toThrow(
       expect.objectContaining({ code: 'duplicate_item_name', status: 409 }),
     );
-    expect(db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get()).toEqual(
-      nextCodeBeforeConflict,
-    );
+    expect(
+      db
+        .prepare(
+          "SELECT result_json FROM inventory_command_receipts WHERE key='system:identity-high-water'",
+        )
+        .get(),
+    ).toEqual(identityHighWaterBeforeConflict);
 
     const other = inventory.createItem({ name: 'Lantern', kind: 'non_consumable' });
     expect(() =>
@@ -341,7 +358,7 @@ describe('inventory domain', () => {
     expect(() =>
       db
         .prepare(
-          "INSERT INTO items(code,name,kind) VALUES (999,char(9) || 'tént' || char(10),'non_consumable')",
+          "INSERT INTO items(name,kind) VALUES (char(9) || 'tént' || char(10),'non_consumable')",
         )
         .run(),
     ).toThrow(/UNIQUE/);
@@ -356,7 +373,7 @@ describe('inventory domain', () => {
     const inventory = new InventoryService(db);
     const item = inventory.createItem({ name: 'שולחן קבוע', kind: 'camp_equipment' });
     inventory.addStock(item.id, 8);
-    expect(inventory.listItems(String(item.code))[0]).toMatchObject({
+    expect(inventory.listItems(item.name)[0]).toMatchObject({
       kind: 'camp_equipment',
       available: 8,
       damaged: 0,

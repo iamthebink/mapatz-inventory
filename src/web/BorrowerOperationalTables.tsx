@@ -185,7 +185,7 @@ export function BorrowerOperationalTables({
                   tabIndex={projection?.compatible ? undefined : -1}
                 >
                   <div>
-                    <strong>{inventory.get(group.itemId)?.name ?? `#${group.itemId}`}</strong>
+                    <strong>{inventory.get(group.itemId)?.name ?? 'פריט לא זמין'}</strong>
                     <p>
                       {(row.direction === 'damaged' || row.condition === 'damaged') && (
                         <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
@@ -259,8 +259,7 @@ export function BorrowerOperationalTables({
               </thead>
               <tbody>
                 {held.map((projection) => {
-                  const itemName =
-                    inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`;
+                  const itemName = inventory.get(projection.itemId)?.name ?? 'פריט לא זמין';
                   const menuOpen = openMenu === projection.itemId;
                   return (
                     <tr key={projection.itemId}>
@@ -384,8 +383,7 @@ export function BorrowerOperationalTables({
               </thead>
               <tbody>
                 {lost.map((projection) => {
-                  const itemName =
-                    inventory.get(projection.itemId)?.name ?? `#${projection.itemId}`;
+                  const itemName = inventory.get(projection.itemId)?.name ?? 'פריט לא זמין';
                   return (
                     <tr key={projection.itemId}>
                       <th scope="row">{itemName}</th>

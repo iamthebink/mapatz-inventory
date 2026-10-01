@@ -18,7 +18,6 @@ const borrower = {
 const archived = { ...borrower, id: 8, username: 'old', name: 'אור הישן', archived: true };
 const item = {
   id: 11,
-  code: 101,
   name: 'אוהל',
   kind: 'non_consumable' as const,
   lotSize: null,
@@ -290,7 +289,6 @@ describe('borrower desk workflow', () => {
     const ties = {
       ...item,
       id: 13,
-      code: 103,
       name: 'אזיקונים',
       kind: 'consumable' as const,
       available: 5,
@@ -344,7 +342,6 @@ describe('borrower desk workflow', () => {
     const ties = {
       ...item,
       id: 13,
-      code: 103,
       name: 'אזיקונים',
       kind: 'consumable' as const,
       available: 5,
@@ -377,7 +374,7 @@ describe('borrower desk workflow', () => {
     expect(screen.queryByRole('rowheader', { name: ties.name })).toBeNull();
   });
   it('keeps quantities and return actions aligned with their own item across both tables', async () => {
-    const secondItem = { ...item, id: 12, code: 102, name: 'מזרן', available: 5 };
+    const secondItem = { ...item, id: 12, name: 'מזרן', available: 5 };
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request) => {
@@ -875,15 +872,13 @@ describe('borrower desk workflow', () => {
   it('opens the non-archived borrow catalog on item-search focus and filters it', async () => {
     const secondItem = {
       ...item,
-      id: 12,
-      code: 102,
+      id: 87941,
       name: 'צילייה',
       aliases: ['Canopy'],
     };
     const archivedItem = {
       ...item,
       id: 13,
-      code: 103,
       name: 'פריט ישן',
       archived: true,
       selectable: false,
@@ -934,6 +929,14 @@ describe('borrower desk workflow', () => {
     const filteredCatalog = await screen.findByRole('listbox');
     expect(within(filteredCatalog).queryByRole('option', { name: /אוהל/ })).toBeNull();
     expect(within(filteredCatalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    await userEvent.clear(itemSearch);
+    await userEvent.type(itemSearch, String(secondItem.id));
+    expect(screen.queryByRole('option', { name: /צילייה/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /אוהל/ })).toBeNull();
+    await userEvent.clear(itemSearch);
+    await userEvent.type(itemSearch, secondItem.name);
+    expect(screen.getByRole('option', { name: /צילייה/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /אוהל/ })).toBeNull();
     await userEvent.clear(itemSearch);
     expect(within(filteredCatalog).getByRole('option', { name: /אוהל/ })).toBeTruthy();
     expect(within(filteredCatalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();

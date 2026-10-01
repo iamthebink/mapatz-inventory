@@ -158,14 +158,12 @@ export function isBorrowerDeskSnapshot(
   if (!Array.isArray(value.inventory) || !Array.isArray(value.holdings)) return false;
 
   const itemIds = new Set<number>();
-  const itemCodes = new Set<number>();
   const itemKinds = new Map<number, string>();
   for (const item of value.inventory) {
     if (
       !isRecord(item) ||
       !hasExactKeys(item, [
         'id',
-        'code',
         'name',
         'kind',
         'lotSize',
@@ -177,7 +175,6 @@ export function isBorrowerDeskSnapshot(
         'selectable',
       ]) ||
       !isSafePositive(item.id) ||
-      !isSafePositive(item.code) ||
       typeof item.name !== 'string' ||
       !['non_consumable', 'consumable'].includes(String(item.kind)) ||
       !(item.lotSize === null || isSafePositive(item.lotSize)) ||
@@ -189,12 +186,10 @@ export function isBorrowerDeskSnapshot(
       !isSafeNonNegative(item.damaged) ||
       typeof item.selectable !== 'boolean' ||
       item.selectable === item.archived ||
-      itemIds.has(Number(item.id)) ||
-      itemCodes.has(Number(item.code))
+      itemIds.has(Number(item.id))
     )
       return false;
     itemIds.add(Number(item.id));
-    itemCodes.add(Number(item.code));
     itemKinds.set(Number(item.id), String(item.kind));
   }
   const holdingIds = new Set<number>();

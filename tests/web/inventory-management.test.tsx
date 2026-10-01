@@ -9,7 +9,6 @@ import { installWindowStorage } from '../helpers/window-storage.js';
 
 const item: Item = {
   id: 1,
-  code: 100,
   name: 'Hammer',
   kind: 'non_consumable',
   lotSize: null,
@@ -64,6 +63,19 @@ afterEach(() => {
 });
 
 describe('inventory management UI', () => {
+  it('identifies and searches items by name and alias, excluding internal IDs', async () => {
+    const user = userEvent.setup();
+    view(true, [{ ...item, id: 87941 }]);
+    expect(screen.queryByRole('columnheader', { name: 'קוד' })).toBeNull();
+    expect(screen.queryByText('87941')).toBeNull();
+    const search = screen.getByPlaceholderText('חיפוש שם או כינוי…');
+    await user.type(search, '87941');
+    expect(screen.queryByRole('row', { name: /Hammer/ })).toBeNull();
+    await user.clear(search);
+    await user.type(search, 'Mallet');
+    expect(screen.getByRole('row', { name: /Hammer/ })).toBeTruthy();
+  });
+
   it('does not dispatch a management command when the browser storage getter throws', async () => {
     const eligible = { ...item, available: 0, damaged: 0 };
     const fetch = vi.spyOn(globalThis, 'fetch');
@@ -350,7 +362,6 @@ describe('inventory management UI', () => {
     expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
       ledgerEpoch: 1,
       expectedStockRevision: active.stockRevision,
-      expectedCode: active.code,
       expectedName: active.name,
       expectedLocationId: active.locationId,
     });

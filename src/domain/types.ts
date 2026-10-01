@@ -16,7 +16,6 @@ export type EventKind =
 
 export interface Item {
   id: number;
-  code: number;
   name: string;
   kind: ItemKind;
   lotSize: number | null;

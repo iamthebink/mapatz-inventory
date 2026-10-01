@@ -15,7 +15,7 @@ function fixture() {
     "INSERT INTO borrowers(id,username,name,contact,type) VALUES (1,'one','Alpha','555','individual'),(2,'two','Beta','','individual')",
   ).run();
   db.prepare(
-    "INSERT INTO items(id,code,name,kind) VALUES (1,100,'Chairs','non_consumable'),(2,101,'Drills','non_consumable')",
+    "INSERT INTO items(id,name,kind) VALUES (1,'Chairs','non_consumable'),(2,'Drills','non_consumable')",
   ).run();
   const add = (kind: string, itemId: number, borrowerId: number, quantity: number, at: string) =>
     db
@@ -74,8 +74,8 @@ describe('period summary ledger arithmetic', () => {
     expect(rows[0]?.borrower).toMatchObject({ id: 1, name: 'Archived Alpha', archived: true });
     expect(rows[0]?.total).toBe(3);
     expect(rows[0]?.items).toEqual([
-      { itemId: 1, code: 100, name: 'Chairs', quantity: 1 },
-      { itemId: 2, code: 101, name: 'Archived Drill', quantity: 2 },
+      { itemId: 2, name: 'Archived Drill', quantity: 2 },
+      { itemId: 1, name: 'Chairs', quantity: 1 },
     ]);
   });
 

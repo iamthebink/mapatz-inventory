@@ -28,12 +28,12 @@ const result: Result = {
     {
       borrower: borrower(1, 'אלף'),
       total: 2,
-      items: [{ itemId: 1, code: 100, name: 'כיסא', quantity: 2 }],
+      items: [{ itemId: 1, name: 'כיסא', quantity: 2 }],
     },
     {
       borrower: borrower(2, 'בית'),
       total: 3,
-      items: [{ itemId: 2, code: 101, name: 'מקדחה', quantity: 3 }],
+      items: [{ itemId: 2, name: 'מקדחה', quantity: 3 }],
     },
   ],
 };

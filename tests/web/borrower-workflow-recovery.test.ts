@@ -195,7 +195,6 @@ describe('frozen attempt validation and storage', () => {
       inventory: [
         {
           id: 11,
-          code: 101,
           name: 'Tent',
           kind: 'non_consumable' as const,
           lotSize: null,
@@ -250,7 +249,6 @@ describe('frozen attempt validation and storage', () => {
       inventory: [
         {
           id: 11,
-          code: 101,
           name: 'Tent',
           kind: 'non_consumable' as const,
           lotSize: null,
@@ -712,7 +710,6 @@ describe('frozen dispatch and recovery', () => {
       inventory: [
         {
           id: 11,
-          code: 101,
           name: 'Tent',
           kind: 'non_consumable' as const,
           lotSize: null,
@@ -796,10 +793,7 @@ describe('frozen dispatch and recovery', () => {
     };
     const incompleteSnapshot = {
       ...operationSnapshot,
-      inventory: [
-        ...operationSnapshot.inventory,
-        { ...operationSnapshot.inventory[0]!, id: 12, code: 102 },
-      ],
+      inventory: [...operationSnapshot.inventory, { ...operationSnapshot.inventory[0]!, id: 12 }],
     };
     storage().clear();
     persistFrozenAttempt(storage(), multiItemAttempt);

@@ -1,3 +1,4 @@
+import { transferBusinessState } from '../helpers/transfer-business-state.js';
 import { foundReturned } from '../helpers/found-returned.js';
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
@@ -32,9 +33,9 @@ function expectRecoveredState(
   actual: InventoryTransferSnapshot,
   expected: InventoryTransferSnapshot,
 ) {
-  const { identityHighWater: actualHighWater, ...actualBusinessState } = actual;
-  const { identityHighWater: expectedHighWater, ...expectedBusinessState } = expected;
-  expect(actualBusinessState).toEqual(expectedBusinessState);
+  const { identityHighWater: actualHighWater } = actual;
+  const { identityHighWater: expectedHighWater } = expected;
+  expect(transferBusinessState(actual)).toEqual(transferBusinessState(expected));
   for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
@@ -48,7 +49,6 @@ const emptySnapshot: InventoryTransferSnapshot = {
   events: [],
   loans: [],
   stateRevision: 0,
-  nextItemCode: 100,
   identityHighWater: {
     nextItemId: 1,
     nextBorrowerId: 1,
@@ -99,7 +99,7 @@ describe('inventory XLSX workbook', () => {
       locations: [],
       items: [
         {
-          code: 100,
+          id: 100,
           name: 'Boundary chairs',
           kind: 'non_consumable',
           location: null,
@@ -131,7 +131,7 @@ describe('inventory XLSX workbook', () => {
         {
           id: 1,
           kind: 'stock_added',
-          itemCode: 100,
+          itemId: 100,
           borrowerUsername: null,
           quantity: 3,
           relatedEventId: null,
@@ -141,7 +141,7 @@ describe('inventory XLSX workbook', () => {
         {
           id: 2,
           kind: 'checked_out',
-          itemCode: 100,
+          itemId: 100,
           borrowerUsername: 'boundary',
           quantity: 1,
           relatedEventId: null,
@@ -151,7 +151,7 @@ describe('inventory XLSX workbook', () => {
         {
           id: 3,
           kind: 'checked_out',
-          itemCode: 100,
+          itemId: 100,
           borrowerUsername: 'boundary',
           quantity: 2,
           relatedEventId: null,
@@ -162,7 +162,7 @@ describe('inventory XLSX workbook', () => {
       loans: [
         {
           checkoutId: 2,
-          itemCode: 100,
+          itemId: 100,
           borrowerUsername: 'boundary',
           quantity: 1,
           createdAt: '2026-09-20T23:59:59.999+03:00',
@@ -171,7 +171,7 @@ describe('inventory XLSX workbook', () => {
         },
         {
           checkoutId: 3,
-          itemCode: 100,
+          itemId: 100,
           borrowerUsername: 'boundary',
           quantity: 2,
           createdAt: '2026-09-21T00:00:00+03:00',
@@ -180,7 +180,6 @@ describe('inventory XLSX workbook', () => {
         },
       ],
       stateRevision: 3,
-      nextItemCode: 101,
       identityHighWater: {
         nextItemId: 2,
         nextBorrowerId: 2,
@@ -192,9 +191,11 @@ describe('inventory XLSX workbook', () => {
     const db = openDatabase(':memory:');
     try {
       new InventoryTransferService(db).replaceWithRecovery(recovery);
-      expect(db.prepare('SELECT created_at FROM items WHERE code=100').get()).toEqual({
-        created_at: '2026-09-20 14:00:00',
-      });
+      expect(db.prepare("SELECT created_at FROM items WHERE name='Boundary chairs'").get()).toEqual(
+        {
+          created_at: '2026-09-20 14:00:00',
+        },
+      );
       expect(
         db.prepare("SELECT created_at FROM borrowers WHERE username='boundary'").get(),
       ).toEqual({ created_at: '2026-09-20 14:00:00' });
@@ -206,7 +207,7 @@ describe('inventory XLSX workbook', () => {
       expect(
         db
           .prepare(
-            'SELECT established_at FROM inventory_baselines WHERE item_id=(SELECT id FROM items WHERE code=100)',
+            "SELECT established_at FROM inventory_baselines WHERE item_id=(SELECT id FROM items WHERE name='Boundary chairs')",
           )
           .get(),
       ).toEqual({ established_at: '2026-09-20 14:00:00' });
@@ -226,7 +227,6 @@ describe('inventory XLSX workbook', () => {
       locations: [{ name: 'Main', archived: false }],
       items: [
         {
-          code: 100,
           name: 'Permanent table',
           kind: 'camp_equipment',
           location: 'Main',
@@ -246,7 +246,6 @@ describe('inventory XLSX workbook', () => {
       locations: [{ name: 'Main', archived: false }],
       items: [
         {
-          code: 100,
           name: 'Permanent table',
           kind: 'camp_equipment',
           location: 'Main',
@@ -298,7 +297,6 @@ describe('inventory XLSX workbook', () => {
       ],
       items: [
         {
-          code: 7,
           name: 'מים',
           kind: 'consumable',
           location: 'מחסן ראשי',
@@ -308,7 +306,6 @@ describe('inventory XLSX workbook', () => {
           total: 100,
         },
         {
-          code: 101,
           name: 'אוהל',
           kind: 'non_consumable',
           location: null,
@@ -318,7 +315,6 @@ describe('inventory XLSX workbook', () => {
           total: 10,
         },
         {
-          code: 102,
           name: 'ישן',
           kind: 'consumable',
           location: null,
@@ -375,11 +371,11 @@ describe('inventory XLSX workbook', () => {
     const snapshot = transfers.snapshot();
     expect(snapshot).not.toHaveProperty('ledgerEpoch');
     expect(snapshot).not.toHaveProperty('receipts');
-    expect(snapshot.items.find((item) => item.code === 7)).toMatchObject({
+    expect(snapshot.items.find((item) => item.name === 'מים')).toMatchObject({
       startingStock: 100,
       resetTotal: 90,
     });
-    expect(snapshot.items.find((item) => item.code === 101)).toMatchObject({ resetTotal: 10 });
+    expect(snapshot.items.find((item) => item.name === 'אוהל')).toMatchObject({ resetTotal: 10 });
     expect(snapshot.events.map((event) => event.kind)).toEqual([
       'stock_added',
       'stock_added',
@@ -410,8 +406,7 @@ describe('inventory XLSX workbook', () => {
       ).toEqual([...definition.columns]);
     }
     const resetItems = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
-    expect((resetItems.getRow(2).values as unknown[]).slice(1)).toEqual([
-      7,
+    expect((resetItems.getRow(4).values as unknown[]).slice(1)).toEqual([
       'מים',
       'consumable',
       'מחסן ראשי',
@@ -432,14 +427,14 @@ describe('inventory XLSX workbook', () => {
     db.close();
   });
 
-  it('parses only reset sheets, applies blank defaults, preserves low codes, and avoids generated collisions', async () => {
+  it('parses identity-free reset sheets and applies blank defaults', async () => {
     const workbook = await load(await exportWorkbook(emptySnapshot));
     const locations = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetLocations.name)!;
     locations.addRow(['North', '']);
     const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
-    items.addRow([100, 'Explicit', 'consumable', 'North', '', '', '', 0]);
-    items.addRow(['', 'Generated', 'non_consumable', '', '', '', '', 3]);
-    items.addRow([4, 'Low', 'consumable', '', '["alias"]', 5, true, 2]);
+    items.addRow(['Explicit', 'consumable', 'North', '', '', '', 0]);
+    items.addRow(['Generated', 'non_consumable', '', '', '', '', 3]);
+    items.addRow(['Low', 'consumable', '', '["alias"]', 5, true, 2]);
     workbook.removeWorksheet(
       workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!.id,
     );
@@ -448,7 +443,6 @@ describe('inventory XLSX workbook', () => {
       locations: [{ name: 'North', archived: false }],
       items: [
         {
-          code: 100,
           name: 'Explicit',
           kind: 'consumable',
           location: 'North',
@@ -458,7 +452,6 @@ describe('inventory XLSX workbook', () => {
           total: 0,
         },
         {
-          code: 101,
           name: 'Generated',
           kind: 'non_consumable',
           location: null,
@@ -468,7 +461,6 @@ describe('inventory XLSX workbook', () => {
           total: 3,
         },
         {
-          code: 4,
           name: 'Low',
           kind: 'consumable',
           location: null,
@@ -483,20 +475,15 @@ describe('inventory XLSX workbook', () => {
 
   it.each([
     [
-      'duplicate codes',
-      [8, 'One', 'consumable', '', '', '', '', 1],
-      [8, 'Two', 'consumable', '', '', '', '', 1],
-    ],
-    [
       'duplicate names',
-      [8, 'Duplicate', 'consumable', '', '', '', '', 1],
-      [9, ' duplicate ', 'non_consumable', '', '', '', '', 1],
+      ['Duplicate', 'consumable', '', '', '', '', 1],
+      [' duplicate ', 'non_consumable', '', '', '', '', 1],
     ],
-    ['blank total', [8, 'One', 'consumable', '', '', '', '', ''], null],
-    ['invalid explicit archive', [8, 'One', 'consumable', '', '', '', 'maybe', 1], null],
-    ['unknown location', [8, 'One', 'consumable', 'Missing', '', '', '', 1], null],
-    ['invalid non-consumable lot', [8, 'One', 'non_consumable', '', '', 2, '', 1], null],
-    ['duplicate aliases', [8, 'One', 'consumable', '', '["Alias","alias"]', '', '', 1], null],
+    ['blank total', ['One', 'consumable', '', '', '', '', ''], null],
+    ['invalid explicit archive', ['One', 'consumable', '', '', '', 'maybe', 1], null],
+    ['unknown location', ['One', 'consumable', 'Missing', '', '', '', 1], null],
+    ['invalid non-consumable lot', ['One', 'non_consumable', '', '', 2, '', 1], null],
+    ['duplicate aliases', ['One', 'consumable', '', '["Alias","alias"]', '', '', 1], null],
   ])('rejects %s before producing a reset payload', async (_name, first, second) => {
     const workbook = await load(await exportWorkbook(emptySnapshot));
     const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
@@ -516,7 +503,7 @@ describe('inventory XLSX workbook', () => {
     );
     workbook
       .getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!
-      .addRow([100, 'Archived location item', 'consumable', 'Old storage', '', '', '', 0]);
+      .addRow(['Archived location item', 'consumable', 'Old storage', '', '', '', 0]);
     await expect(parseResetWorkbook(await save(workbook))).rejects.toMatchObject({
       code: 'invalid_workbook',
       message: expect.stringContaining('archived location'),
@@ -562,12 +549,12 @@ describe('inventory XLSX workbook', () => {
       fgColor: { argb: 'FFFFFFFF' },
     };
     const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
-    items.addRow([1, 'Edited in Numbers', 'consumable', 'North', '', '', '', 17]);
+    items.addRow(['Edited in Numbers', 'consumable', 'North', '', '', '', 17]);
 
     const numbersRoundTrip = await save(await load(await save(workbook)));
     await expect(parseResetWorkbook(numbersRoundTrip)).resolves.toMatchObject({
       locations: [{ name: 'North', archived: false }],
-      items: [{ code: 1, name: 'Edited in Numbers', total: 17 }],
+      items: [{ name: 'Edited in Numbers', total: 17 }],
     });
   });
 
@@ -589,7 +576,6 @@ describe('inventory XLSX workbook', () => {
       locations: [{ name: 'Named Location', archived: false }],
       items: [
         {
-          code: 5,
           name: 'New',
           kind: 'consumable' as const,
           location: 'Named Location',
@@ -601,7 +587,7 @@ describe('inventory XLSX workbook', () => {
       ],
     };
     transfers.replaceWithReset(payload);
-    expect(inventory.listItems('', true)[0]).toMatchObject({ code: 5, name: 'New', available: 6 });
+    expect(inventory.listItems('', true)[0]).toMatchObject({ name: 'New', available: 6 });
     expect(inventory.listLedger()).toHaveLength(1);
     expect(transfers.snapshot().items[0]).toMatchObject({ startingStock: 6, resetTotal: 6 });
     expect(

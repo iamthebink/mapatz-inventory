@@ -51,7 +51,6 @@ function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
     inventory: [
       {
         id: 11,
-        code: 101,
         name: 'Tent',
         kind: 'non_consumable',
         lotSize: null,
@@ -285,7 +284,7 @@ describe('command response classification', () => {
       ...snapshot(),
       inventory: [
         { ...snapshot().inventory[0]!, available: 0 },
-        { ...snapshot().inventory[0]!, id: 12, code: 102, available: 0 },
+        { ...snapshot().inventory[0]!, id: 12, available: 0 },
       ],
     };
     const base = {

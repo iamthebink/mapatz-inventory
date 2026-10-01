@@ -1,3 +1,4 @@
+import { transferBusinessState } from '../helpers/transfer-business-state.js';
 import request from 'supertest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,18 +36,9 @@ function expectRecoveredState(
   actual: ReturnType<InventoryTransferService['snapshot']>,
   expected: ReturnType<InventoryTransferService['snapshot']>,
 ) {
-  const {
-    identityHighWater: actualHighWater,
-    nextItemCode: actualNextItemCode,
-    ...actualBusinessState
-  } = actual;
-  const {
-    identityHighWater: expectedHighWater,
-    nextItemCode: expectedNextItemCode,
-    ...expectedBusinessState
-  } = expected;
-  expect(actualBusinessState).toEqual(expectedBusinessState);
-  expect(actualNextItemCode).toBeGreaterThanOrEqual(expectedNextItemCode);
+  const { identityHighWater: actualHighWater } = actual;
+  const { identityHighWater: expectedHighWater } = expected;
+  expect(transferBusinessState(actual)).toEqual(transferBusinessState(expected));
   for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
@@ -236,7 +228,7 @@ describe('inventory API permission and edge-case matrix', () => {
       locations: [{ name: 'Imported Place', archived: false }],
       items: [
         {
-          code: 4,
+          id: 4,
           name: 'Imported',
           kind: 'consumable',
           location: 'Imported Place',
@@ -258,7 +250,6 @@ describe('inventory API permission and edge-case matrix', () => {
       events: [],
       loans: [],
       stateRevision: 0,
-      nextItemCode: 100,
       identityHighWater: {
         nextItemId: 1,
         nextBorrowerId: 1,
@@ -296,7 +287,7 @@ describe('inventory API permission and edge-case matrix', () => {
       .send(workbook)
       .expect(204);
     const imported = inventory.listItems('', true)[0]!;
-    expect(imported).toMatchObject({ code: 4, name: 'Imported', available: 6 });
+    expect(imported).toMatchObject({ name: 'Imported', available: 6 });
     expect(imported.id).toBeGreaterThan(oldItem.id);
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_command_receipts').get()).toEqual({
       count: 1,
@@ -320,7 +311,6 @@ describe('inventory API permission and edge-case matrix', () => {
     const newEvent = inventory.listLedger()[0]!;
     expect(Number(newLocation.id)).toBeGreaterThan(Number(oldLocation.id));
     expect(newItem.id).toBeGreaterThan(oldItem.id);
-    expect(newItem.code).toBeGreaterThan(oldItem.code);
     expect(newEvent.id).toBeGreaterThan(oldEventId);
     expect(
       db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
@@ -341,7 +331,6 @@ describe('inventory API permission and edge-case matrix', () => {
       locations: [{ name: 'Recovery Location', archived: false }],
       items: [
         {
-          code: 9,
           name: 'Recovered Equipment',
           kind: 'non_consumable',
           location: 'Recovery Location',
@@ -455,7 +444,7 @@ describe('inventory API permission and edge-case matrix', () => {
       .send({ itemId, borrowerId: 999, quantity: 1 })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('wrong_item_kind'));
-    expect(inventory.listItems(String(created.body.code))[0]).toMatchObject({
+    expect(inventory.listItems(created.body.name)[0]).toMatchObject({
       kind: 'camp_equipment',
       available: 7,
       damaged: 0,
@@ -764,8 +753,10 @@ describe('inventory API permission and edge-case matrix', () => {
     const original = inventory.createItem({ name: 'Tent', kind: 'non_consumable' });
     inventory.archiveItem(original.id, true);
     const other = inventory.createItem({ name: 'Lantern', kind: 'non_consumable' });
-    const nextCodeBeforeConflict = db
-      .prepare('SELECT next_code FROM code_sequence WHERE singleton=1')
+    const identityHighWaterBeforeConflict = db
+      .prepare(
+        "SELECT result_json FROM inventory_command_receipts WHERE key='system:identity-high-water'",
+      )
       .get();
     await role(agent, 'admin', 'admin-pass');
 
@@ -779,9 +770,13 @@ describe('inventory API permission and edge-case matrix', () => {
           message: 'כבר קיים פריט בשם הזה',
         }),
       );
-    expect(db.prepare('SELECT next_code FROM code_sequence WHERE singleton=1').get()).toEqual(
-      nextCodeBeforeConflict,
-    );
+    expect(
+      db
+        .prepare(
+          "SELECT result_json FROM inventory_command_receipts WHERE key='system:identity-high-water'",
+        )
+        .get(),
+    ).toEqual(identityHighWaterBeforeConflict);
 
     await agent
       .put(`/api/items/${other.id}`)
@@ -835,7 +830,6 @@ describe('inventory management API', () => {
       key: 'api-delete-item-0001',
       ledgerEpoch: inventory.inventoryEpoch(),
       expectedStockRevision: preview.stockRevision,
-      expectedCode: preview.code,
       expectedName: preview.name,
       expectedLocationId: preview.locationId,
     };
@@ -876,7 +870,6 @@ describe('inventory management API', () => {
         key: 'api-delete-ineligible',
         ledgerEpoch: inventory.inventoryEpoch(),
         expectedStockRevision: stalePreview.stockRevision,
-        expectedCode: stalePreview.code,
         expectedName: stalePreview.name,
         expectedLocationId: stalePreview.locationId,
       })

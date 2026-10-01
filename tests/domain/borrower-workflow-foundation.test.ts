@@ -199,7 +199,6 @@ describe('borrower workflow persistence foundation', () => {
           locations: [],
           items: [
             {
-              code: 900,
               name: 'Replacement Item',
               kind: 'non_consumable',
               location: null,
@@ -216,7 +215,7 @@ describe('borrower workflow persistence foundation', () => {
 
     expect(snapshot).toMatchObject({
       borrower,
-      inventory: [expect.objectContaining({ id: item.id, code: item.code, available: 1 })],
+      inventory: [expect.objectContaining({ id: item.id, available: 1 })],
       holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
       stateRevision: 2,
       ledgerEpoch: 1,
@@ -225,7 +224,7 @@ describe('borrower workflow persistence foundation', () => {
       ledger_epoch: 2,
     });
     expect(new InventoryService(writer).listItems('', true)).toEqual([
-      expect.objectContaining({ code: 900, available: 5 }),
+      expect.objectContaining({ available: 5 }),
     ]);
     expect(reader.isTransaction).toBe(false);
     reader.close();
@@ -233,7 +232,7 @@ describe('borrower workflow persistence foundation', () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it('assembles one code-ordered desk snapshot with returnable, lost-only, and archived truth', () => {
+  it('assembles one name-ordered desk snapshot with returnable, lost-only, and archived truth', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const borrower = inventory.createBorrower({
@@ -268,13 +267,13 @@ describe('borrower workflow persistence foundation', () => {
     const snapshot = inventory.getBorrowerDeskSnapshot(borrower.id);
     expect(snapshot.borrower).toEqual(borrower);
     expect(
-      snapshot.inventory.map(({ code, kind, selectable }) => ({ code, kind, selectable })),
+      snapshot.inventory.map(({ id, kind, selectable }) => ({ id, kind, selectable })),
     ).toEqual([
-      { code: first.code, kind: 'non_consumable', selectable: true },
-      { code: lostOnly.code, kind: 'non_consumable', selectable: false },
-      { code: returned.code, kind: 'non_consumable', selectable: true },
-      { code: consumable.code, kind: 'consumable', selectable: true },
-      { code: unrelated.code, kind: 'consumable', selectable: true },
+      { id: consumable.id, kind: 'consumable', selectable: true },
+      { id: first.id, kind: 'non_consumable', selectable: true },
+      { id: lostOnly.id, kind: 'non_consumable', selectable: false },
+      { id: returned.id, kind: 'non_consumable', selectable: true },
+      { id: unrelated.id, kind: 'consumable', selectable: true },
     ]);
     expect(snapshot.holdings).toEqual([
       { itemId: first.id, returnable: 2, lost: 2 },

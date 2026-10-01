@@ -4,7 +4,6 @@ import { RECOVERY_IMPORT_CONFIRMATION, RESET_IMPORT_CONFIRMATION } from './impor
 
 export type Item = {
   id: number;
-  code: number;
   name: string;
   kind: 'consumable' | 'non_consumable' | 'camp_equipment';
   lotSize: number | null;

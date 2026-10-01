@@ -1,5 +1,5 @@
 export const WORKBOOK_CONTRACT = {
-  version: 5,
+  version: 6,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   filename: 'mapatz-inventory.xlsx',
   sheets: {
@@ -9,16 +9,7 @@ export const WORKBOOK_CONTRACT = {
     },
     resetItems: {
       name: 'Reset Items',
-      columns: [
-        'Item Code',
-        'Name',
-        'Kind',
-        'Location',
-        'Aliases',
-        'Lot Size',
-        'Archived',
-        'Total',
-      ],
+      columns: ['Name', 'Kind', 'Location', 'Aliases', 'Lot Size', 'Archived', 'Total'],
     },
     recoveryLocations: {
       name: 'Recovery Locations',
@@ -27,7 +18,7 @@ export const WORKBOOK_CONTRACT = {
     recoveryItems: {
       name: 'Recovery Items',
       columns: [
-        'Item Code',
+        'Item ID',
         'Name',
         'Kind',
         'Location',
@@ -48,7 +39,7 @@ export const WORKBOOK_CONTRACT = {
       name: 'Recovery Loans',
       columns: [
         'Checkout ID',
-        'Item Code',
+        'Item ID',
         'Borrower Username',
         'Quantity',
         'Created At',
@@ -60,7 +51,6 @@ export const WORKBOOK_CONTRACT = {
       name: 'Recovery State',
       columns: [
         'Revision',
-        'Next Item Code',
         'Next Item ID',
         'Next Borrower ID',
         'Next Location ID',
@@ -76,7 +66,7 @@ export const WORKBOOK_CONTRACT = {
       columns: [
         'Event ID',
         'Kind',
-        'Item Code',
+        'Item ID',
         'Borrower Username',
         'Quantity',
         'Related Event ID',
@@ -94,12 +84,11 @@ export const WORKBOOK_CONTRACT = {
     },
     unresolvedDamage: {
       name: 'Unresolved Damage',
-      columns: ['Item Code', 'Item Name', 'Location', 'Unresolved Damaged Quantity'],
+      columns: ['Item Name', 'Location', 'Unresolved Damaged Quantity'],
     },
     consumablesUsage: {
       name: 'Consumables Usage',
       columns: [
-        'Item Code',
         'Item Name',
         'Location',
         'Start of Cycle Stock',

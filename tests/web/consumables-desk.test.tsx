@@ -9,7 +9,6 @@ import { DialogStackProvider } from '../../src/web/Dialog';
 
 const item = (id: number, name: string, available = 5): Item => ({
   id,
-  code: 100 + id,
   name,
   kind: 'consumable',
   aliases: [],
@@ -84,7 +83,13 @@ afterEach(() => {
 });
 
 it('shows searchable active stock, including zero-stock rows, with disabled issue action', async () => {
-  const { user } = mount([...stock, { ...item(4, 'ארכיון'), archived: true }]);
+  const searchableItem = { ...item(87941, 'אזיקונים'), aliases: ['Cable ties'] };
+  const { user } = mount([
+    stock[0]!,
+    searchableItem,
+    stock[2]!,
+    { ...item(4, 'ארכיון'), archived: true },
+  ]);
   expect(screen.getByRole('row', { name: /כפפות/ })).toBeTruthy();
   expect(
     within(screen.getByRole('row', { name: /כפפות/ })).getByRole('button', { name: 'ניפוק' }),
@@ -94,6 +99,17 @@ it('shows searchable active stock, including zero-stock rows, with disabled issu
   expect(screen.getByText('פריט אחד')).toBeTruthy();
   expect(screen.getByRole('row', { name: /אזיקונים/ })).toBeTruthy();
   expect(screen.queryByRole('row', { name: /סרט/ })).toBeNull();
+  await user.clear(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }));
+  await user.type(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }), 'Cable ties');
+  expect(screen.getByRole('row', { name: /אזיקונים/ })).toBeTruthy();
+  expect(screen.queryByRole('row', { name: /סרט/ })).toBeNull();
+  await user.clear(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }));
+  await user.type(
+    screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }),
+    String(searchableItem.id),
+  );
+  expect(screen.queryByRole('row', { name: /אזיקונים/ })).toBeNull();
+  expect(screen.getByText('לא נמצאו פריטים המתאימים לחיפוש.')).toBeTruthy();
   await user.clear(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }));
   await user.type(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }), 'missing');
   expect(screen.getByText('לא נמצאו פריטים המתאימים לחיפוש.')).toBeTruthy();
@@ -109,7 +125,7 @@ it('stages only from an item-specific dialog and keeps invalid quantity focused 
   expect(
     within(dialog).getByText(
       (_text, element) =>
-        element?.tagName === 'P' && element.textContent?.includes('סרט · קוד 101') === true,
+        element?.tagName === 'P' && element.textContent?.includes('סרט · זמין') === true,
     ),
   ).toBeTruthy();
   await user.clear(within(dialog).getByRole('spinbutton', { name: 'כמות' }));
@@ -175,7 +191,7 @@ it('corrects a staged item by canceling and restaging it, retaining other rows',
   expect(reviewTrigger.querySelector('svg')).not.toBeNull();
   await user.click(reviewTrigger);
   const review = screen.getByRole('alertdialog', { name: 'אישור ניפוק' });
-  expect(within(review).getByText(/סרט · קוד 101 · כמות 2 · מתוקן/)).toBeTruthy();
+  expect(within(review).getByText(/סרט · כמות 2 · מתוקן/)).toBeTruthy();
   expect(within(review).getByText('סך יחידות לניפוק: 3')).toBeTruthy();
   const commit = within(review).getByRole('button', { name: 'אישור ניפוק' });
   expect(commit.classList.contains('primary-button')).toBe(true);

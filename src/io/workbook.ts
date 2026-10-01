@@ -47,7 +47,6 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     workbook,
     'resetItems',
     snapshot.items.map((item) => [
-      item.code,
       item.name,
       item.kind,
       item.location,
@@ -66,7 +65,7 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     workbook,
     'recoveryItems',
     snapshot.items.map((item) => [
-      item.code,
+      item.id,
       item.name,
       item.kind,
       item.location,
@@ -88,7 +87,7 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     'recoveryLoans',
     snapshot.loans.map((loan) => [
       loan.checkoutId,
-      loan.itemCode,
+      loan.itemId,
       loan.borrowerUsername,
       loan.quantity,
       loan.createdAt,
@@ -99,7 +98,6 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
   addSheet(workbook, 'recoveryState', [
     [
       snapshot.stateRevision,
-      snapshot.nextItemCode,
       snapshot.identityHighWater.nextItemId,
       snapshot.identityHighWater.nextBorrowerId,
       snapshot.identityHighWater.nextLocationId,
@@ -124,7 +122,7 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     snapshot.events.map((event) => [
       event.id,
       event.kind,
-      event.itemCode,
+      event.itemId,
       event.borrowerUsername,
       event.quantity,
       event.relatedEventId,
@@ -142,7 +140,6 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     workbook,
     'unresolvedDamage',
     unresolvedDamageReport(snapshot).map((row) => [
-      row.itemCode,
       row.itemName,
       row.location,
       row.unresolvedDamagedQuantity,
@@ -152,7 +149,6 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     workbook,
     'consumablesUsage',
     consumablesUsageReport(snapshot).map((row) => [
-      row.itemCode,
       row.itemName,
       row.location,
       row.startOfCycleStock,
@@ -327,25 +323,17 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
       return importError(`Reset Locations contains duplicate name "${location.name}"`);
     locationNames.set(key, location);
   }
-  const rawItems = dataRows(itemSheet, 8);
-  const usedCodes = new Set<number>();
+  const rawItems = dataRows(itemSheet, 7);
   const usedNames = new Set<string>();
-  const blankCodeRows: number[] = [];
-  const items: Array<Omit<ResetItem, 'code'> & { code?: number }> = [];
+  const items: ResetItem[] = [];
   rawItems.forEach((row, index) => {
     const rowNumber = index + 2;
-    const suppliedCode = optionalInteger(row[0], `Reset Items row ${rowNumber} Item Code`);
-    if (suppliedCode != null) {
-      if (usedCodes.has(suppliedCode))
-        return importError(`Reset Items contains duplicate Item Code ${suppliedCode}`);
-      usedCodes.add(suppliedCode);
-    } else blankCodeRows.push(index);
-    const kind = requiredText(row[2], `Reset Items row ${rowNumber} Kind`) as ItemKind;
+    const kind = requiredText(row[1], `Reset Items row ${rowNumber} Kind`) as ItemKind;
     if (kind !== 'consumable' && kind !== 'non_consumable' && kind !== 'camp_equipment')
       return importError(
         `Reset Items row ${rowNumber} Kind must be consumable, non_consumable, or camp_equipment`,
       );
-    const locationInput = optionalText(row[3], `Reset Items row ${rowNumber} Location`);
+    const locationInput = optionalText(row[2], `Reset Items row ${rowNumber} Location`);
     const referencedLocation =
       locationInput == null
         ? null
@@ -356,32 +344,24 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
     if (referencedLocation?.archived)
       importError(`Reset Items row ${rowNumber} references an archived location`);
     const location = referencedLocation?.name ?? null;
-    const lotSize = optionalInteger(row[5], `Reset Items row ${rowNumber} Lot Size`, 1);
+    const lotSize = optionalInteger(row[4], `Reset Items row ${rowNumber} Lot Size`, 1);
     if (kind !== 'consumable' && lotSize != null)
       return importError(`Reset Items row ${rowNumber} Lot Size is only valid for consumables`);
-    const name = requiredText(row[1], `Reset Items row ${rowNumber} Name`);
+    const name = requiredText(row[0], `Reset Items row ${rowNumber} Name`);
     const nameKey = normalizeItemName(name);
     if (usedNames.has(nameKey)) return importError(`Reset Items contains duplicate Name "${name}"`);
     usedNames.add(nameKey);
     items.push({
-      ...(suppliedCode == null ? {} : { code: suppliedCode }),
       name,
       kind,
       location,
-      aliases: aliases(row[4], `Reset Items row ${rowNumber} Aliases`),
+      aliases: aliases(row[3], `Reset Items row ${rowNumber} Aliases`),
       lotSize,
-      archived: optionalBoolean(row[6], `Reset Items row ${rowNumber} Archived`),
-      total: integer(row[7], `Reset Items row ${rowNumber} Total`, 0),
+      archived: optionalBoolean(row[5], `Reset Items row ${rowNumber} Archived`),
+      total: integer(row[6], `Reset Items row ${rowNumber} Total`, 0),
     });
   });
-  let nextCode = 100;
-  for (const index of blankCodeRows) {
-    while (usedCodes.has(nextCode)) nextCode += 1;
-    items[index]!.code = nextCode;
-    usedCodes.add(nextCode);
-    nextCode += 1;
-  }
-  return { locations, items: items as ResetItem[] };
+  return { locations, items };
 }
 
 const eventKinds = new Set<EventKind>([
@@ -435,16 +415,15 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     name: requiredText(row[0], `Recovery Locations row ${index + 2} Name`),
     archived: requiredBoolean(row[1], `Recovery Locations row ${index + 2} Archived`),
   }));
-  const revisionRows = dataRows(stateSheet, 6);
+  const revisionRows = dataRows(stateSheet, 5);
   if (revisionRows.length !== 1)
     return importError('Recovery State must contain exactly one identity state row');
   const stateRevision = integer(revisionRows[0]![0], 'Recovery State Revision', 0);
-  const nextItemCode = integer(revisionRows[0]![1], 'Recovery Next Item Code', 100);
   const identityHighWater = {
-    nextItemId: integer(revisionRows[0]![2], 'Recovery Next Item ID', 1),
-    nextBorrowerId: integer(revisionRows[0]![3], 'Recovery Next Borrower ID', 1),
-    nextLocationId: integer(revisionRows[0]![4], 'Recovery Next Location ID', 1),
-    nextEventId: integer(revisionRows[0]![5], 'Recovery Next Event ID', 1),
+    nextItemId: integer(revisionRows[0]![1], 'Recovery Next Item ID', 1),
+    nextBorrowerId: integer(revisionRows[0]![2], 'Recovery Next Borrower ID', 1),
+    nextLocationId: integer(revisionRows[0]![3], 'Recovery Next Location ID', 1),
+    nextEventId: integer(revisionRows[0]![4], 'Recovery Next Event ID', 1),
   };
   const items = dataRows(itemSheet, 15).map((row, index) => {
     const rowNumber = index + 2;
@@ -454,7 +433,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
         `Recovery Items row ${rowNumber} Kind must be consumable, non_consumable, or camp_equipment`,
       );
     return {
-      code: integer(row[0], `Recovery Items row ${rowNumber} Item Code`),
+      id: integer(row[0], `Recovery Items row ${rowNumber} Item ID`, 1),
       name: requiredText(row[1], `Recovery Items row ${rowNumber} Name`),
       kind,
       location: optionalText(row[3], `Recovery Items row ${rowNumber} Location`),
@@ -512,7 +491,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     return {
       id: integer(row[0], `Recovery Events row ${rowNumber} Event ID`, 1),
       kind,
-      itemCode: integer(row[2], `Recovery Events row ${rowNumber} Item Code`),
+      itemId: integer(row[2], `Recovery Events row ${rowNumber} Item ID`),
       borrowerUsername,
       quantity: integer(row[4], `Recovery Events row ${rowNumber} Quantity`, 1),
       relatedEventId: optionalInteger(
@@ -528,7 +507,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     const rowNumber = index + 2;
     return {
       checkoutId: integer(row[0], `Recovery Loans row ${rowNumber} Checkout ID`, 1),
-      itemCode: integer(row[1], `Recovery Loans row ${rowNumber} Item Code`, 1),
+      itemId: integer(row[1], `Recovery Loans row ${rowNumber} Item ID`, 1),
       borrowerUsername: requiredText(
         row[2],
         `Recovery Loans row ${rowNumber} Borrower Username`,
@@ -547,7 +526,6 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     events,
     loans,
     stateRevision,
-    nextItemCode,
     identityHighWater,
     radioCount,
     radios,

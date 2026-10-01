@@ -87,3 +87,7 @@
 - source_spec: `spec-password-recovery-redux.md`
   summary: Investigate two frozen-operation desktop recovery failures found by the broad recovery filter.
   evidence: “unknown recovery blocks quit…” and “non-desk reload blocks…” failed in untouched tests during broad packaged verification; password-specific test passed. Baseline comparison has not been run, so pre-existing status is unverified.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-internal-item-identity.md`
+  summary: Update README recovery event vocabulary and report prose for found_returned_damaged.
+  evidence: The baseline README omits this accepted event kind and describes found-return selection as found_returned only; item-identity changes preserve these event semantics.

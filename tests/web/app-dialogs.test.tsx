@@ -10,7 +10,6 @@ import { installWindowStorage } from '../helpers/window-storage.js';
 
 const hammer: Item = {
   id: 11,
-  code: 100,
   name: 'פטיש',
   kind: 'non_consumable',
   lotSize: null,
@@ -112,7 +111,6 @@ function setup(
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       const created: Item = {
         id: 12,
-        code: 101,
         name: String(body.name),
         kind: body.kind as Item['kind'],
         aliases: body.aliases as string[],
@@ -308,7 +306,6 @@ describe('inventory management in App', () => {
     const tape: Item = {
       ...hammer,
       id: 20,
-      code: 120,
       name: 'סרט',
       kind: 'consumable',
       available: 5,
@@ -341,7 +338,6 @@ describe('inventory management in App', () => {
     const tape: Item = {
       ...hammer,
       id: 20,
-      code: 120,
       name: 'סרט',
       kind: 'consumable',
       available: 5,
@@ -394,7 +390,6 @@ describe('inventory management in App', () => {
     const tape: Item = {
       ...hammer,
       id: 20,
-      code: 120,
       name: 'סרט',
       kind: 'consumable',
       available: 5,

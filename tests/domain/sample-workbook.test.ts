@@ -1,3 +1,4 @@
+import { transferBusinessState } from '../helpers/transfer-business-state.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -85,7 +86,7 @@ describe('field-scale sample workbook', () => {
     expect(snapshot.radioCount).toBe(40);
     expect(snapshot.radios).toEqual(payload.radios);
     expect(snapshot.borrowers).toEqual(payload.borrowers);
-    expect(snapshot.events).toEqual(payload.events);
+    expect(transferBusinessState(snapshot).events).toEqual(transferBusinessState(payload).events);
     expect(new Set(snapshot.events.map((event) => event.kind))).toEqual(
       new Set([
         'stock_added',
@@ -100,8 +101,10 @@ describe('field-scale sample workbook', () => {
         'written_off',
       ]),
     );
-    expect(snapshot.items).toMatchObject(payload.items);
-    expect(snapshot.loans).toEqual(payload.loans);
+    expect(transferBusinessState(snapshot).items).toMatchObject(
+      transferBusinessState(payload).items,
+    );
+    expect(transferBusinessState(snapshot).loans).toEqual(transferBusinessState(payload).loans);
     expect(snapshot.stateRevision).toBe(payload.stateRevision);
 
     const inventory = new InventoryService(db);
@@ -134,18 +137,21 @@ describe('field-scale sample workbook', () => {
     expect(snapshot.events).toHaveLength(payload.items.filter((item) => item.total > 0).length);
     expect(snapshot.events.every((event) => event.kind === 'stock_added')).toBe(true);
     expect(snapshot.items).toEqual(
-      payload.items.map(({ total, ...item }, index) => ({
-        ...item,
-        createdAt: snapshot.items[index]!.createdAt,
-        startingStock: total,
-        baselineThroughEventId: snapshot.items[index]!.baselineThroughEventId,
-        available: total,
-        borrowed: 0,
-        damaged: 0,
-        lost: 0,
-        revision: 0,
-        resetTotal: total,
-      })),
+      snapshot.items
+        .map((actual) => payload.items.find((item) => item.name === actual.name)!)
+        .map(({ total, ...item }, index) => ({
+          id: snapshot.items[index]!.id,
+          ...item,
+          createdAt: snapshot.items[index]!.createdAt,
+          startingStock: total,
+          baselineThroughEventId: snapshot.items[index]!.baselineThroughEventId,
+          available: total,
+          borrowed: 0,
+          damaged: 0,
+          lost: 0,
+          revision: 0,
+          resetTotal: total,
+        })),
     );
     expect(new InventoryService(db).listLoans()).toEqual([]);
     expect(unresolvedDamageReport(snapshot)).toEqual([]);
@@ -155,7 +161,6 @@ describe('field-scale sample workbook', () => {
           .filter((item) => item.kind === 'consumable')
           .map((item) =>
             expect.objectContaining({
-              itemCode: item.code,
               startOfCycleStock: item.total,
               addedDuringCycle: 0,
               usage: 0,

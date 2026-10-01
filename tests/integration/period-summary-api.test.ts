@@ -15,9 +15,7 @@ describe('period summary API', () => {
     db.prepare(
       "INSERT INTO borrowers(id,username,name,contact,type) VALUES (1,'one','Alpha','555','individual')",
     ).run();
-    db.prepare(
-      "INSERT INTO items(id,code,name,kind) VALUES (1,100,'Chairs','non_consumable')",
-    ).run();
+    db.prepare("INSERT INTO items(id,name,kind) VALUES (1,'Chairs','non_consumable')").run();
     db.prepare(
       "INSERT INTO inventory_events(kind,item_id,borrower_id,quantity,created_at) VALUES ('checked_out',1,1,2,'2026-09-21 09:00:00')",
     ).run();

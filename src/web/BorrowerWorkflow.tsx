@@ -134,7 +134,7 @@ function OperationReview({ state }: { state: OperationState }) {
           });
         return rows.map((row, index) => (
           <div className="borrower-review-row" key={`${group.itemId}-${index}`}>
-            <strong>{inventory.get(group.itemId) ?? `#${group.itemId}`}</strong>
+            <strong>{inventory.get(group.itemId) ?? 'פריט לא זמין'}</strong>
             <span>
               {row.label.includes('פגום') && (
                 <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
@@ -618,11 +618,7 @@ export const BorrowerWorkflow = forwardRef<
       .filter(
         (item) =>
           item.selectable &&
-          (!query ||
-            [item.name, String(item.code), ...item.aliases]
-              .join(' ')
-              .toLocaleLowerCase()
-              .includes(query)),
+          (!query || [item.name, ...item.aliases].join(' ').toLocaleLowerCase().includes(query)),
       )
       .map((item) => {
         const available = projectItem(operation, item.id)?.projectedAvailability ?? 0;
@@ -631,7 +627,7 @@ export const BorrowerWorkflow = forwardRef<
           value: item,
           label: (
             <>
-              <bdi dir="ltr">{item.code}</bdi> — {item.name}
+              {item.name}
               {item.kind === 'consumable' ? ' · מתכלה' : ''}
             </>
           ),
@@ -1436,7 +1432,7 @@ export const BorrowerWorkflow = forwardRef<
                     });
                     setItemSearch('');
                   }}
-                  placeholder="שם, כינוי או קוד"
+                  placeholder="שם או כינוי"
                   disabled={locked}
                   openOnFocus
                   inputRef={itemSearchRef}
