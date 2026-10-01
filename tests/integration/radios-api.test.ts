@@ -10,7 +10,7 @@ describe('radio API', () => {
       createApp({ database: db, adminPassword: 'admin-pass', serveWeb: false }),
     );
     const initial = (await agent.get('/api/radios').expect(200)).body;
-    expect(initial.count).toBe(0);
+    expect(initial.count).toBe(40);
     await agent
       .put('/api/radios/count')
       .send({ count: 2, generation: initial.generation })

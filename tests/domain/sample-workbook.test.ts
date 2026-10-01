@@ -29,6 +29,16 @@ describe('field-scale sample workbook', () => {
       ]),
     });
     expect(payload.items).toHaveLength(72);
+    expect(payload.radioCount).toBe(40);
+    expect(payload.radios).toHaveLength(40);
+    expect(payload.radios.slice(15)).toEqual(
+      Array.from({ length: 25 }, (_, index) => ({
+        number: index + 16,
+        holder: 'צוללת',
+        team: '',
+        lost: false,
+      })),
+    );
     expect(payload.borrowers).toHaveLength(12);
     expect(payload.events).toHaveLength(483);
     const eventsByDay = new Map<string, number>();
@@ -72,6 +82,8 @@ describe('field-scale sample workbook', () => {
     const snapshot = transfers.snapshot();
 
     expect(snapshot.locations).toEqual(payload.locations);
+    expect(snapshot.radioCount).toBe(40);
+    expect(snapshot.radios).toEqual(payload.radios);
     expect(snapshot.borrowers).toEqual(payload.borrowers);
     expect(snapshot.events).toEqual(payload.events);
     expect(new Set(snapshot.events.map((event) => event.kind))).toEqual(

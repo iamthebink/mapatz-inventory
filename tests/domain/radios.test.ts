@@ -52,7 +52,16 @@ describe('radio fleet', () => {
     const db = openDatabase(':memory:');
     const radios = new RadioService(db);
     const initial = radios.fleet();
-    expect(initial).toMatchObject({ count: 0, radios: [] });
+    expect(initial).toEqual({
+      count: 40,
+      generation: 1,
+      radios: Array.from({ length: 40 }, (_, index) => ({
+        number: index + 1,
+        holder: 'צוללת',
+        team: '',
+        lost: false,
+      })),
+    });
     const three = radios.setCount(3, initial.generation);
     expect(three.radios.map((radio) => radio.holder)).toEqual(['צוללת', 'צוללת', 'צוללת']);
     radios.custody(1, three.generation, 'MDA worker', 'MDA');
