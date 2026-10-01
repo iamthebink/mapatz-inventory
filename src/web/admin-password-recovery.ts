@@ -1,4 +1,5 @@
-export type RecoveryStage = 'welcome' | 'phrase' | 'addition' | 'integral' | 'skip' | 'reveal';
+export type RecoveryStage =
+  'welcome' | 'phrase' | 'addition' | 'integral' | 'skip' | 'compliment' | 'reveal';
 export type RecoveryExercises = {
   left: number;
   right: number;

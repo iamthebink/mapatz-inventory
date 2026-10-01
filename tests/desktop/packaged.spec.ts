@@ -156,6 +156,12 @@ test('packaged desktop recovery reveals the current password after the full ritu
     }
     await context.page.getByRole('button', { name: 'די כבר, הגזמת' }).click();
     await context.page.getByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }).click();
+    await context.page.getByRole('radio', { name: 'לא', exact: true }).check();
+    await context.page.getByRole('button', { name: 'אישור', exact: true }).click();
+    await expect(context.page.getByRole('radio')).toHaveCount(1);
+    await expect(context.page.getByText(/מצטער שנתתי רושם/)).toBeVisible();
+    await context.page.getByRole('radio', { name: /^אתה ליטרלי/ }).check();
+    await context.page.getByRole('button', { name: 'אישור', exact: true }).click();
     const passwordOutput = context.page.locator('output.admin-recovery-password');
     await expect(passwordOutput).toBeVisible();
     expect(await passwordOutput.textContent()).toBe(exactPassword);

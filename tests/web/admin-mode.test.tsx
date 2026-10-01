@@ -164,10 +164,105 @@ describe('interactive recovery', () => {
     return { onClose, onError };
   }
 
+  async function openCompliments() {
+    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }));
+    await screen.findByRole('radio', { name: 'לא' });
+  }
+
+  async function beginSkipRetrieval() {
+    await openCompliments();
+    fireEvent.click(screen.getByRole('radio', { name: 'יש לך ממשק מהמם' }));
+    const confirm = screen.getByRole('button', { name: 'אישור' });
+    fireEvent.click(confirm);
+    return confirm;
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each(['solve', 'skip'])(
+    'varies celebrations and keeps the first sum usable on the %s route',
+    async (route) => {
+      vi.useFakeTimers();
+      vi.stubGlobal('matchMedia', () => ({ matches: false }));
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ password: 'recovered' }), {
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      try {
+        render(
+          <DialogStackProvider>
+            <AdminRecoveryDialog
+              returnFocusRef={createRef<HTMLButtonElement>()}
+              onClose={() => undefined}
+              onError={() => undefined}
+            />
+          </DialogStackProvider>,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'אני אידיוט.ית ושכחתי סיסמה' }));
+        await act(async () => vi.advanceTimersByTime(250));
+        expect(screen.getByText(/אנא הקלידו/).textContent).not.toContain('תראי');
+        const phrase = screen.getByRole('textbox', { name: 'בקשה להצגת הסיסמה' });
+        fireEvent.focus(phrase);
+        fireEvent.focus(phrase);
+        fireEvent.change(phrase, { target: { value: 'abc' } });
+        fireEvent.change(phrase, { target: { value: 'תראה לי את הסיסמה בבקשה' } });
+        fireEvent.submit(phrase.closest('form')!);
+        const burst = () => document.querySelector('.recovery-celebration');
+        expect(burst()?.querySelector('.recovery-reward-star')).not.toBeNull();
+        expect(burst()?.textContent).toContain('כל הכבוד! השתמשת במילים!');
+        await act(async () => vi.advanceTimersByTime(800));
+        expect(burst()).not.toBeNull();
+        await act(async () => vi.advanceTimersByTime(600));
+        expect(burst()).toBeNull();
+
+        const addition = screen.getByRole('textbox', { name: 'סכום המספרים' });
+        fireEvent.change(addition, { target: { value: '99' } });
+        fireEvent.submit(addition.closest('form')!);
+        expect(burst()).toBeNull();
+        fireEvent.change(addition, { target: { value: '2' } });
+        fireEvent.submit(addition.closest('form')!);
+        const firstSumBurst = burst();
+        expect(firstSumBurst?.querySelector('.recovery-reward-stamp')).not.toBeNull();
+        expect(addition.hasAttribute('disabled')).toBe(false);
+        // The corrected answer may be submitted while the first burst is still flying.
+        fireEvent.change(addition, { target: { value: '3' } });
+        fireEvent.submit(addition.closest('form')!);
+        expect(burst()).not.toBe(firstSumBurst);
+        expect(burst()?.querySelector('.recovery-reward-stamp')).not.toBeNull();
+        await act(async () => vi.advanceTimersByTime(1400));
+        expect(burst()).toBeNull();
+
+        const integral = screen.getByRole('textbox', { name: 'תוצאת האינטגרל' });
+        if (route === 'solve') {
+          fireEvent.change(integral, { target: { value: '2' } });
+          fireEvent.submit(integral.closest('form')!);
+          expect(burst()?.querySelectorAll('.recovery-confetti svg')).toHaveLength(36);
+          await act(async () => vi.advanceTimersByTime(1400));
+          expect(burst()).toBeNull();
+          expect(screen.getByText('recovered')).toBeTruthy();
+        } else {
+          fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
+          expect(burst()?.querySelector('.recovery-reward-clap')).not.toBeNull();
+          fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+          await act(async () => vi.advanceTimersByTime(1000));
+          expect(screen.queryByText(/^טוב ביץ׳/)).toBeNull();
+          fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+          await act(async () => vi.advanceTimersByTime(1400));
+          expect(burst()).toBeNull();
+          expect(screen.getByText(/^טוב ביץ׳/)).toBeTruthy();
+          expect(screen.getByRole('button', { name: 'לחצו כאן להצגת הסיסמה' })).toBeTruthy();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('removes the subordinate before unmounting recovery and restores admin focus', async () => {
     const ref = createRef<HTMLButtonElement>();
@@ -200,10 +295,8 @@ describe('interactive recovery', () => {
       }),
     );
     const { onClose } = await setup();
-    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
-    const reveal = await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' });
-    fireEvent.click(reveal);
-    fireEvent.click(reveal);
+    const confirm = await beginSkipRetrieval();
+    fireEvent.click(confirm);
     await screen.findByText('<secret&value>');
     expect(fetchSpy).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'העתקת הסיסמה' }));
@@ -219,6 +312,51 @@ describe('interactive recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it.each(['יש לך ממשק מהמם', 'אתה ממש טוב בלנהל מלאי', 'לא'])(
+    'requires the final compliment, including forced praise after %s',
+    async (choice) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ password: 'compliment reward' }), {
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      const { onError } = await setup();
+      await openCompliments();
+      expect(screen.getAllByRole('radio')).toHaveLength(3);
+      const confirm = screen.getByRole('button', { name: 'אישור' });
+      expect(confirm.hasAttribute('disabled')).toBe(true);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('radio', { name: choice }));
+      if (choice === 'לא') {
+        fireEvent.click(confirm);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(screen.queryByRole('radio', { name: 'לא' })).toBeNull();
+        expect(screen.getAllByRole('radio')).toHaveLength(1);
+        expect(screen.getByText(/מצטער שנתתי רושם/)).toBeTruthy();
+        const forced = screen.getByRole('radio', { name: /^אתה ליטרלי/ });
+        expect((forced as HTMLInputElement).checked).toBe(false);
+        expect(document.activeElement).toBe(forced);
+        expect(confirm.hasAttribute('disabled')).toBe(true);
+        fireEvent.click(forced);
+        fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
+        fireEvent.click(screen.getByRole('button', { name: 'להמשיך בשחזור' }));
+        expect((forced as HTMLInputElement).checked).toBe(true);
+        expect(screen.getAllByRole('radio')).toHaveLength(1);
+      }
+      fireEvent.click(confirm);
+      const retry = await screen.findByRole('button', { name: 'נסו שוב' });
+      expect(onError).toHaveBeenCalledOnce();
+      fireEvent.click(retry);
+      await screen.findByText('compliment reward');
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('radio')).toBeNull();
+      expect(screen.getByText('תודה. הייתי צריך לשמוע את זה. הנה הסיסמה.')).toBeTruthy();
+    },
+  );
 
   it('solves the integral, retries failed retrieval without replay, and copies exactly', async () => {
     const fetchSpy = vi
@@ -260,8 +398,7 @@ describe('interactive recovery', () => {
         }),
     );
     const { onClose } = await setup();
-    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }));
+    await beginSkipRetrieval();
     fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
     await act(async () =>
       resolve(
@@ -290,8 +427,7 @@ describe('interactive recovery', () => {
         }),
     );
     const { onClose, onError } = await setup();
-    fireEvent.click(screen.getByRole('button', { name: 'די כבר, הגזמת' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'לחצו כאן להצגת הסיסמה' }));
+    await beginSkipRetrieval();
     fireEvent.click(screen.getByRole('button', { name: 'יציאה מהשחזור' }));
     fireEvent.click(screen.getByRole('button', { name: 'יציאה' }));
     expect(onClose).toHaveBeenCalledOnce();

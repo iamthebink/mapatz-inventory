@@ -1264,6 +1264,33 @@
   min-height: 132px;
   padding-bottom: 64px;
 }
+.recovery-compliments {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  text-align: start;
+}
+.recovery-compliment-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-ctp-surface);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.recovery-compliment-option:has(input:checked) {
+  border-color: var(--color-ctp-lavender);
+  background: color-mix(in srgb, var(--color-ctp-lavender) 8%, white);
+}
+.recovery-compliment-option input {
+  flex-shrink: 0;
+  margin-top: 7px;
+  accent-color: var(--color-ctp-lavender);
+}
 .recovery-field-down {
   padding-top: 64px;
   padding-bottom: 0;
@@ -1329,27 +1356,93 @@
   animation: recovery-fade 250ms ease forwards;
   pointer-events: none;
 }
+.recovery-celebration {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dialog-backdrop-recovery[inert] .recovery-celebration * {
+  animation-play-state: paused;
+}
+.recovery-reward {
+  position: absolute;
+  top: 15%;
+  left: 50%;
+  width: min(90%, 440px);
+  translate: -50% 0;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  font-size: clamp(1.1rem, 4vw, 1.5rem);
+}
+.recovery-reward-star {
+  color: var(--color-ctp-yellow);
+  animation: recovery-star var(--recovery-celebration-duration) ease both;
+}
+.recovery-reward-star svg {
+  width: 144px;
+  height: 144px;
+  fill: currentColor;
+  filter: drop-shadow(0 4px 0 var(--color-ctp-peach));
+}
+.recovery-reward-star strong {
+  color: var(--color-ctp-text);
+}
+.recovery-reward-star strong,
+.recovery-reward-clap strong {
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: white;
+}
+.recovery-reward-stamp {
+  width: max-content;
+  max-width: 90%;
+  padding: 16px 28px;
+  border: 6px double currentColor;
+  border-radius: 8px;
+  color: var(--color-ctp-green);
+  background: white;
+  font-size: clamp(1.6rem, 6vw, 2.5rem);
+  animation: recovery-stamp var(--recovery-celebration-duration) ease both;
+}
+.recovery-reward-clap {
+  animation: recovery-applause var(--recovery-celebration-duration) ease both;
+}
+.recovery-reward-clap span {
+  font-size: 96px;
+  line-height: 1;
+  animation: recovery-clap var(--recovery-celebration-duration) ease both;
+}
 .recovery-confetti {
   position: fixed;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
 }
-.recovery-confetti i {
+.recovery-confetti svg {
   position: absolute;
   top: 55%;
   left: 0;
   width: 8px;
   height: 14px;
-  background: var(--color-ctp-lavender);
-  animation: recovery-confetti-left 800ms ease-out forwards;
+  fill: currentColor;
+  color: var(--color-ctp-lavender);
+  transform: rotate(calc(var(--piece) * 35deg));
+  animation: recovery-confetti-left var(--recovery-celebration-duration) ease-out forwards;
   animation-delay: calc(mod(var(--piece), 6) * 12ms);
 }
-.recovery-confetti i:nth-child(even) {
+.recovery-confetti svg:nth-child(even) {
   left: auto;
   right: 0;
   animation-name: recovery-confetti-right;
-  background: var(--color-ctp-peach);
+  color: var(--color-ctp-peach);
+}
+.recovery-confetti svg:nth-child(3n) {
+  color: var(--color-ctp-pink);
+}
+.recovery-confetti svg:nth-child(5n) {
+  color: var(--color-ctp-green);
 }
 @keyframes recovery-enter {
   from {
@@ -1357,6 +1450,71 @@
   }
   to {
     opacity: 1;
+  }
+}
+@keyframes recovery-star {
+  0% {
+    opacity: 0;
+    transform: scale(0.1) rotate(-45deg);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.3) rotate(12deg);
+  }
+  50% {
+    transform: scale(0.9) rotate(-8deg);
+  }
+  85% {
+    opacity: 1;
+    transform: scale(1.1) rotate(4deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1) rotate(0);
+  }
+}
+@keyframes recovery-stamp {
+  0% {
+    opacity: 0;
+    transform: scale(3) rotate(-24deg);
+  }
+  25% {
+    opacity: 1;
+    transform: scale(0.9) rotate(-12deg);
+  }
+  40% {
+    transform: scale(1.1) rotate(-12deg);
+  }
+  85% {
+    opacity: 1;
+    transform: scale(1) rotate(-12deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1) rotate(-12deg);
+  }
+}
+@keyframes recovery-applause {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  15%,
+  90% {
+    opacity: 1;
+  }
+}
+@keyframes recovery-clap {
+  0%,
+  35%,
+  70%,
+  100% {
+    transform: scale(1) rotate(-8deg);
+  }
+  18%,
+  53%,
+  88% {
+    transform: scale(1.18) rotate(8deg);
   }
 }
 @keyframes recovery-text-enter {
@@ -1406,6 +1564,7 @@
   .recovery-field-error {
     animation: none;
   }
+  .recovery-celebration,
   .recovery-confetti {
     display: none;
   }

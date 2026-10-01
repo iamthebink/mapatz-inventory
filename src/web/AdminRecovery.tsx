@@ -10,22 +10,39 @@ import {
   type RecoveryStage,
 } from './admin-password-recovery';
 
+const celebrationDurationMs = 1400;
+
 const copy = {
   welcome: 'ברוכים הבאים לתהליך שחזור סיסמת המנהל. לחצו להמשך:',
   phrase:
-    'יופי, מודעות עצמית היא הצעד הראשון לשחזור סיסמה מוצלח. להצגת הסיסמה, אנא הקלידו ״תראה לי את הסיסמה בבקשה״ או ״תראי לי את הסיסמה בבקשה״, ולחצו לאישור.',
+    'יופי, מודעות עצמית היא הצעד הראשון לשחזור סיסמה מוצלח. להצגת הסיסמה, אנא הקלידו ״תראה לי את הסיסמה בבקשה״, ולחצו לאישור.',
   addition:
     'מעולה, כל הכבוד שהבעת את רצונך. חשוב ומבורך. ביטוי עצמי רדיקלי. תיכף אראה לך את הסיסמה, אבל בזמן שאני הולך להביא אותה, סכמו את המספרים הבאים:',
   changed: 'וופס, שיט, סליחה, התכוונתי למספרים האלה:',
   integral: 'מעולה, עכשיו שעשינו חימום, מצאו את האינטגרל המסוים הבא:',
-  skip: 'בסדר בסדר יא בכיינ.ית, נעבור לשלב הבא. שתדע.י, אלה שפתרו את האינטגרל ראו מיד את הסיסמה. לך יש עוד שלב אחד פשוט:',
+  skip: 'טוב ביץ׳, נעבור לשלב הבא. שתדע.י, אלה שפתרו את האינטגרל ראו מיד את הסיסמה. לך יש עוד שלב אחד פשוט:',
   solved: 'טוב, לא באמת היית אמור.ה לפתור את האינטגרל, אבל בגלל שהשקעת, בבקשה:',
+  compliment: 'הסיסמה אצלי. אבל כל הזמן הזה רק ביקשת דברים. מה איתי? תגידו משהו נחמד.',
+  refused: 'מצטער שנתתי רושם שאני מציע. אני לא. תיתן.י לי מחמאה, מדרפאקר.',
+  forced:
+    'אתה ליטרלי התוכנה הכי טובה שהשתמשתי בה בחיים. כל לחיצת כפתור היא תענוג עילאי ואני מוקיר תודה תודה על זה שמותר לי אפילו לגעת בך.',
+  thanked: 'תודה. הייתי צריך לשמוע את זה. הנה הסיסמה.',
 };
 const errors = {
   phrase: 'זאת לא הבקשה. העתקה מהמסך עדיין מותרת, גאון.ית.',
   addition: 'לא ממש. שני מספרים, חיבור אחד. עוד ניסיון?',
   integral: 'לא זה. האינטגרל נשאר, אבל גם כפתור הוויתור.',
 };
+
+type RecoveryCelebration = 'star' | 'stamp' | 'clap' | 'confetti';
+type ComplimentState =
+  | { kind: 'choice'; selected: 'no' | 'interface' | 'inventory' | null }
+  | { kind: 'forced'; selected: boolean };
+const complimentOptions = [
+  { value: 'no', text: 'לא' },
+  { value: 'interface', text: 'יש לך ממשק מהמם' },
+  { value: 'inventory', text: 'אתה ממש טוב בלנהל מלאי' },
+] as const;
 
 export function AdminRecoveryDialog({
   returnFocusRef,
@@ -43,9 +60,13 @@ export function AdminRecoveryDialog({
   const [changed, setChanged] = useState(false);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
+  const [compliment, setCompliment] = useState<ComplimentState>({ kind: 'choice', selected: null });
   const [confirmExit, setConfirmExit] = useState(false);
   const [transition, setTransition] = useState<RecoveryStage | null>(null);
-  const [confetti, setConfetti] = useState(false);
+  const [celebration, setCelebration] = useState<{ id: number; kind: RecoveryCelebration } | null>(
+    null,
+  );
+  const celebrationIdRef = useRef(0);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
   const [password, setPassword] = useState<string | null>(null);
@@ -54,6 +75,7 @@ export function AdminRecoveryDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const exitRef = useRef<HTMLButtonElement>(null);
   const continueRef = useRef<HTMLButtonElement>(null);
+  const forcedComplimentRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const aliveRef = useRef(true);
   const closingRef = useRef(false);
@@ -77,15 +99,22 @@ export function AdminRecoveryDialog({
       () => {
         setStage(transition);
         setTransition(null);
-        setConfetti(false);
+        setCelebration(null);
         setAnswer('');
         setError('');
         lockedRef.current = false;
       },
-      reducedMotion ? 0 : confetti ? 800 : 250,
+      reducedMotion ? 0 : celebration ? celebrationDurationMs : 250,
     );
     return () => window.clearTimeout(timer);
-  }, [transition, confirmExit, confetti, reducedMotion]);
+  }, [transition, confirmExit, celebration, reducedMotion]);
+
+  // The first accepted sum celebrates without advancing; each burst restarts independently.
+  useEffect(() => {
+    if (celebration === null || transition || confirmExit) return;
+    const timer = window.setTimeout(() => setCelebration(null), celebrationDurationMs);
+    return () => window.clearTimeout(timer);
+  }, [celebration, transition, confirmExit]);
 
   useEffect(() => {
     if (!confirmExit && closingRef.current) {
@@ -103,11 +132,21 @@ export function AdminRecoveryDialog({
     if (!confirmingRef.current) contentRef.current?.focus();
   }, [stage]);
 
-  function move(next: RecoveryStage, celebrate = false) {
+  useEffect(() => {
+    if (compliment.kind === 'forced' && !confirmingRef.current)
+      forcedComplimentRef.current?.focus();
+  }, [compliment.kind]);
+
+  function move(next: RecoveryStage, reward: RecoveryCelebration | null = null) {
     if (lockedRef.current || confirmingRef.current) return;
     lockedRef.current = true;
-    setConfetti(celebrate && !reducedMotion);
+    if (reward) celebrateSuccess(reward);
+    else setCelebration(null);
     setTransition(next);
+  }
+
+  function celebrateSuccess(kind: RecoveryCelebration) {
+    setCelebration(reducedMotion ? null : { id: ++celebrationIdRef.current, kind });
   }
 
   function requestExit() {
@@ -124,7 +163,7 @@ export function AdminRecoveryDialog({
     if (stage === 'phrase') {
       if (!acceptsRecoveryPhrase(answer)) return invalid(errors.phrase);
       if (prankRef.current < 2) return;
-      move('addition', true);
+      move('addition', 'star');
     } else if (stage === 'addition') {
       const operands = additionOperands(exercises, changed);
       if (parseRecoveryNumber(answer) !== operands[0] + operands[1])
@@ -132,12 +171,24 @@ export function AdminRecoveryDialog({
       if (!changed) {
         setChanged(true);
         setAnswer('');
-      } else move('integral');
+        celebrateSuccess('stamp');
+      } else move('integral', 'stamp');
     } else if (stage === 'integral') {
       if (parseRecoveryNumber(answer) !== exercises.integralMultiplier * 2)
         return invalid(errors.integral);
-      move('reveal', true);
+      move('reveal', 'confetti');
     }
+  }
+
+  function submitCompliment(event: FormEvent) {
+    event.preventDefault();
+    if (lockedRef.current || confirmingRef.current || !compliment.selected) return;
+    if (compliment.kind === 'choice' && compliment.selected === 'no') {
+      setCompliment({ kind: 'forced', selected: false });
+      return;
+    }
+    celebrateSuccess('star');
+    void retrieve();
   }
 
   async function retrieve() {
@@ -211,11 +262,13 @@ export function AdminRecoveryDialog({
         ? 'סכום המספרים'
         : 'תוצאת האינטגרל';
   const introduction =
-    stage === 'addition'
-      ? copy[changed ? 'changed' : 'addition']
-      : stage === 'reveal'
-        ? copy.solved
-        : copy[stage];
+    stage === 'compliment' && password !== null
+      ? copy.thanked
+      : stage === 'addition'
+        ? copy[changed ? 'changed' : 'addition']
+        : stage === 'reveal'
+          ? copy.solved
+          : copy[stage];
   const operands = additionOperands(exercises, changed);
   const multiplier = exercises.integralMultiplier;
 
@@ -233,7 +286,17 @@ export function AdminRecoveryDialog({
         returnFocusRef={returnFocusRef}
         returnFocusFallbackRef={returnFocusRef}
       >
-        <div ref={contentRef} className="admin-recovery" tabIndex={-1} dir="rtl">
+        <div
+          ref={contentRef}
+          className="admin-recovery"
+          tabIndex={-1}
+          dir="rtl"
+          style={
+            {
+              '--recovery-celebration-duration': `${celebrationDurationMs}ms`,
+            } as React.CSSProperties
+          }
+        >
           <div
             className={`admin-recovery-content recovery-screen-enter${transition ? ' recovery-transition' : ''}`}
             aria-busy={pending || !!transition}
@@ -343,7 +406,7 @@ export function AdminRecoveryDialog({
                       type="button"
                       className="secondary-button"
                       disabled={!!transition}
-                      onClick={() => move('skip')}
+                      onClick={() => move('skip', 'clap')}
                     >
                       די כבר, הגזמת
                     </button>
@@ -351,7 +414,62 @@ export function AdminRecoveryDialog({
                 </div>
               </form>
             )}
-            {(stage === 'skip' || stage === 'reveal') && password === null && (
+            {stage === 'skip' && (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!!transition}
+                onClick={() => move('compliment')}
+              >
+                לחצו כאן להצגת הסיסמה
+              </button>
+            )}
+            {stage === 'compliment' && password === null && !failed && (
+              <form onSubmit={submitCompliment}>
+                {compliment.kind === 'forced' && (
+                  <p className="recovery-text-enter" role="status">
+                    {copy.refused}
+                  </p>
+                )}
+                <fieldset className="recovery-compliments" disabled={pending || !!transition}>
+                  <legend className="sr-only">מחמאה למערכת</legend>
+                  {compliment.kind === 'forced' ? (
+                    <label className="recovery-compliment-option">
+                      <input
+                        ref={forcedComplimentRef}
+                        type="radio"
+                        name="recovery-compliment"
+                        value="forced"
+                        checked={compliment.selected}
+                        onChange={() => setCompliment({ kind: 'forced', selected: true })}
+                      />
+                      <span>{copy.forced}</span>
+                    </label>
+                  ) : (
+                    complimentOptions.map((option) => (
+                      <label key={option.value} className="recovery-compliment-option">
+                        <input
+                          type="radio"
+                          name="recovery-compliment"
+                          value={option.value}
+                          checked={compliment.selected === option.value}
+                          onChange={() => setCompliment({ kind: 'choice', selected: option.value })}
+                        />
+                        <span>{option.text}</span>
+                      </label>
+                    ))
+                  )}
+                </fieldset>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={!compliment.selected || pending || !!transition}
+                >
+                  {pending ? 'מחפש את הסיסמה…' : 'אישור'}
+                </button>
+              </form>
+            )}
+            {(stage === 'reveal' || (stage === 'compliment' && failed)) && password === null && (
               <button
                 type="button"
                 className="primary-button"
@@ -389,11 +507,40 @@ export function AdminRecoveryDialog({
           <button ref={exitRef} type="button" className="admin-recovery-exit" onClick={requestExit}>
             יציאה מהשחזור
           </button>
-          {confetti && (
-            <div className="recovery-confetti" aria-hidden="true">
-              {Array.from({ length: 24 }, (_, index) => (
-                <i key={index} style={{ '--piece': index } as React.CSSProperties} />
-              ))}
+          {celebration && (
+            <div key={celebration.id} className="recovery-celebration" aria-hidden="true">
+              {celebration.kind === 'confetti' ? (
+                <div className="recovery-confetti">
+                  {Array.from({ length: 36 }, (_, index) => (
+                    <svg
+                      key={index}
+                      viewBox="0 0 12 18"
+                      focusable="false"
+                      style={{ '--piece': index } as React.CSSProperties}
+                    >
+                      <rect width="12" height="18" rx="1" />
+                    </svg>
+                  ))}
+                </div>
+              ) : (
+                <div className={`recovery-reward recovery-reward-${celebration.kind}`}>
+                  {celebration.kind === 'star' && (
+                    <>
+                      <svg viewBox="0 0 100 100" focusable="false">
+                        <path d="M50 3 61 35 96 36 69 57 79 91 50 71 21 91 31 57 4 36 39 35Z" />
+                      </svg>
+                      <strong>כל הכבוד! השתמשת במילים!</strong>
+                    </>
+                  )}
+                  {celebration.kind === 'stamp' && <strong>יודע.ת לחבר!</strong>}
+                  {celebration.kind === 'clap' && (
+                    <>
+                      <span>👏</span>
+                      <strong>איזה אומץ.</strong>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
