@@ -98,11 +98,11 @@ export function BorrowerImportDialog({
         <div className="space-y-4">
           <p>
             קובץ XLSX, הגיליון הראשון בלבד. בשורה הראשונה העמודות בסדר הבא:{' '}
-            <bdi dir="ltr">Username, Name, Contact, Type</bdi>.
+            <bdi dir="ltr">Playa Name, Full Name, Phone Number, Camp/Department</bdi>.
           </p>
           <p>
-            Username ו־Name הם שדות חובה. Contact יכול להיות ריק. Type:{' '}
-            <bdi dir="ltr">individual, camp_organization, other</bdi>; ברירת המחדל היא individual.
+            שם מלא הוא חובה. שם פלאיה, מספר טלפון ומחנה / מחלקה יכולים להיות ריקים. צירוף זהה של כל
+            הפרטים יידחה.
           </p>
           <label className="field-label">
             קובץ שואלים
@@ -133,8 +133,9 @@ export function BorrowerImportDialog({
             </select>
           </label>
           <p>
-            ההתאמה לפי שם משתמש. שואלים קיימים יעודכנו, ושואלים שיובאו מהארכיון יחזרו לרשימה הפעילה.
-            בהחלפה, שואלים שאינם בקובץ יועברו לארכיון.
+            ההתאמה לפי צירוף כל ארבעת פרטי השואל. צירוף קיים שומר על הכרטיס שלו, וצירוף חדש יוצר
+            כרטיס חדש. שואלים תואמים בארכיון יחזרו לרשימה הפעילה. בהחלפה, שואלים שאינם בקובץ יועברו
+            לארכיון.
           </p>
         </div>
       </Dialog>
@@ -175,7 +176,11 @@ export function BorrowerImportDialog({
             {preview.affected.map((borrower) => (
               <li key={borrower.id}>
                 <strong>
-                  {borrower.name} — <bdi dir="ltr">{borrower.username}</bdi>
+                  {borrower.fullName} — <bdi>{borrower.playaName || '—'}</bdi>
+                  {' · מספר טלפון: '}
+                  <bdi dir="ltr">{borrower.phoneNumber || '—'}</bdi>
+                  {' · מחנה / מחלקה: '}
+                  {borrower.campDepartment || '—'}
                 </strong>
                 <ul>
                   {borrower.loans.map((loan) => (

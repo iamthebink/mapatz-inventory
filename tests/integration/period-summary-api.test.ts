@@ -13,7 +13,7 @@ describe('period summary API', () => {
     const db = openDatabase(':memory:');
     databases.push(db);
     db.prepare(
-      "INSERT INTO borrowers(id,username,name,contact,type) VALUES (1,'one','Alpha','555','individual')",
+      "INSERT INTO borrowers(id,playa_name,full_name,phone_number,camp_department) VALUES (1,'one','Alpha','555','individual')",
     ).run();
     db.prepare("INSERT INTO items(id,name,kind) VALUES (1,'Chairs','non_consumable')").run();
     db.prepare(
@@ -24,7 +24,7 @@ describe('period summary API', () => {
     );
     const path = '/api/period-summary?start=2026-09-21&end=2026-09-21';
     const operator = await agent.get(path).expect(200);
-    expect(operator.body.borrowers[0]).toMatchObject({ total: 2, borrower: { username: 'one' } });
+    expect(operator.body.borrowers[0]).toMatchObject({ total: 2, borrower: { playaName: 'one' } });
     await agent
       .post('/api/session/role')
       .send({ role: 'admin', password: 'admin-pass' })

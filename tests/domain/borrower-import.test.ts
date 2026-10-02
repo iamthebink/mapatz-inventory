@@ -12,11 +12,11 @@ const databases: InventoryDatabase[] = [];
 afterEach(() => {
   databases.splice(0).forEach((db) => db.close());
 });
-const row = (username: string, name = username): BorrowerImportRow => ({
-  username,
-  name,
-  contact: '',
-  type: 'individual',
+const row = (playaName: string, name = playaName): BorrowerImportRow => ({
+  playaName,
+  fullName: name,
+  phoneNumber: '',
+  campDepartment: '',
 });
 function fixture() {
   const db = openDatabase(':memory:');
@@ -37,7 +37,7 @@ describe('atomic borrower imports', () => {
     const { service, retained, removed, retainedLoan } = fixture();
     const archived = service.createBorrower(row('archived'));
     service.archiveBorrower(archived.id, true);
-    const rows = [row('ＲＥＴＡＩＮＥＤ', 'Updated'), row('archived'), row('new')];
+    const rows = [row('ＲＥＴＡＩＮＥＤ', 'retained'), row('archived'), row('new')];
     const preview = service.previewBorrowerImport(rows, 'merge');
     expect(preview.affected).toEqual([]);
     expect(service.importBorrowers(rows, 'merge', preview.confirmationToken)).toMatchObject({
@@ -48,7 +48,7 @@ describe('atomic borrower imports', () => {
     });
     expect(service.listBorrowers()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: retained.id, name: 'Updated' }),
+        expect.objectContaining({ id: retained.id, fullName: 'retained' }),
         expect.objectContaining({ id: archived.id, archived: false }),
         expect.objectContaining({ id: removed.id }),
       ]),
@@ -68,8 +68,10 @@ describe('atomic borrower imports', () => {
     expect(preview.affected).toEqual([
       {
         id: removed.id,
-        name: 'removed',
-        username: 'removed',
+        fullName: 'removed',
+        phoneNumber: '',
+        campDepartment: '',
+        playaName: 'removed',
         loans: [{ checkoutId: removedLoan, itemId: item.id, itemName: 'Tent', quantity: 3 }],
       },
     ]);
@@ -104,10 +106,10 @@ describe('atomic borrower imports', () => {
     transfers.replaceWithRecovery(payload);
     expect(service.listItems()[0]?.available).toBe(6);
     expect(service.listBorrowers('', true)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ username: 'removed', archived: true })]),
+      expect.arrayContaining([expect.objectContaining({ playaName: 'removed', archived: true })]),
     );
   });
-  it('requires renewed consent after new loans, username edits, workbook/mode changes, or ledger replacement', () => {
+  it('requires renewed consent after new loans, playaName edits, workbook/mode changes, or ledger replacement', () => {
     const { db, service, removed, item } = fixture();
     const rows = [row('retained')];
     const first = service.previewBorrowerImport(rows, 'replace');
@@ -130,10 +132,10 @@ describe('atomic borrower imports', () => {
   });
   it('rejects ambiguous normalized identities and invalid batches without mutation', () => {
     const { service } = fixture();
-    service.createBorrower(row('ＲＥＴＡＩＮＥＤ'));
+    expect(() => service.createBorrower(row('ＲＥＴＡＩＮＥＤ', 'retained'))).toThrow();
     const before = service.listBorrowers('', true);
-    expect(() => service.previewBorrowerImport([row('retained')], 'merge')).toThrow('Ambiguous');
-    expect(() => service.importBorrowers([row('new'), row('NEW')], 'merge', '')).toThrow(
+    expect(() => service.previewBorrowerImport([row('retained')], 'merge')).not.toThrow();
+    expect(() => service.importBorrowers([row('new'), row('NEW', 'new')], 'merge', '')).toThrow(
       'duplicate',
     );
     expect(service.listBorrowers('', true)).toEqual(before);

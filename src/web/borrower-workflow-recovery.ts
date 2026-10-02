@@ -1,3 +1,7 @@
+import {
+  isBorrowerValidationEvidence,
+  isValidBorrowerProfile,
+} from '../domain/borrower-profile.js';
 import type {
   BorrowerCreateRequest,
   BorrowerCreateResult,
@@ -346,21 +350,29 @@ function validOperationBody(value: unknown, epoch: number): value is BorrowerOpe
 function validCreateBody(value: unknown, epoch: number): value is BorrowerCreateRequest {
   return (
     isObject(value) &&
-    exactKeys(value, ['contractVersion', 'ledgerEpoch', 'username', 'name', 'contact', 'type']) &&
+    exactKeys(value, [
+      'contractVersion',
+      'ledgerEpoch',
+      'playaName',
+      'fullName',
+      'phoneNumber',
+      'campDepartment',
+    ]) &&
     value.contractVersion === 1 &&
     value.ledgerEpoch === epoch &&
-    typeof value.username === 'string' &&
-    value.username.trim() === value.username &&
-    value.username.length >= 2 &&
-    value.username.length <= 40 &&
-    typeof value.name === 'string' &&
-    value.name.trim() === value.name &&
-    value.name.length >= 1 &&
-    value.name.length <= 100 &&
-    typeof value.contact === 'string' &&
-    value.contact.trim() === value.contact &&
-    value.contact.length <= 500 &&
-    ['individual', 'camp_organization', 'other'].includes(String(value.type))
+    typeof value.playaName === 'string' &&
+    value.playaName.trim() === value.playaName &&
+    value.playaName.length <= 100 &&
+    typeof value.fullName === 'string' &&
+    value.fullName.trim() === value.fullName &&
+    value.fullName.length >= 1 &&
+    value.fullName.length <= 100 &&
+    typeof value.phoneNumber === 'string' &&
+    value.phoneNumber.trim() === value.phoneNumber &&
+    value.phoneNumber.length <= 100 &&
+    typeof value.campDepartment === 'string' &&
+    value.campDepartment.trim() === value.campDepartment &&
+    value.campDepartment.length <= 100
   );
 }
 
@@ -773,22 +785,26 @@ function resultBelongsToAttempt(
   const expected = attempt.body;
   return (
     !result.borrower.archived &&
-    result.borrower.username === expected.username &&
-    result.borrower.name === expected.name &&
-    result.borrower.contact === expected.contact &&
-    result.borrower.type === expected.type
+    result.borrower.playaName === expected.playaName &&
+    result.borrower.fullName === expected.fullName &&
+    result.borrower.phoneNumber === expected.phoneNumber &&
+    result.borrower.campDepartment === expected.campDepartment
   );
 }
 
 function validBorrower(value: unknown): value is Borrower {
   return (
     isObject(value) &&
-    exactKeys(value, ['id', 'username', 'name', 'contact', 'type', 'archived']) &&
+    exactKeys(value, [
+      'id',
+      'playaName',
+      'fullName',
+      'phoneNumber',
+      'campDepartment',
+      'archived',
+    ]) &&
     positive(value.id) &&
-    typeof value.username === 'string' &&
-    typeof value.name === 'string' &&
-    typeof value.contact === 'string' &&
-    ['individual', 'camp_organization', 'other'].includes(String(value.type)) &&
+    isValidBorrowerProfile(value as unknown as Borrower) &&
     typeof value.archived === 'boolean'
   );
 }
@@ -975,76 +991,11 @@ function validCreateAttribution(
   attempt: FrozenCreateAttempt,
   value: Record<string, unknown>,
 ): boolean {
-  if (!validFieldErrors(value.fieldErrors) || !Array.isArray(value.matches)) return false;
-  const matches = value.matches;
-  const normalized = {
-    username: normalizeIdentity(attempt.body.username),
-    contact: normalizeIdentity(attempt.body.contact),
-    full_name: normalizeIdentity(attempt.body.name),
-  };
-  const matchedKinds = new Set<string>();
-  const borrowerIds = new Set<number>();
-  const matchOrder = { username: 0, contact: 1, full_name: 2 } as const;
-  const typedMatches: Array<{
-    borrower: Borrower;
-    status: 'active' | 'archived';
-    matchedBy: keyof typeof matchOrder;
-  }> = [];
-  for (const candidate of matches) {
-    if (
-      !isObject(candidate) ||
-      !exactKeys(candidate, ['borrower', 'status', 'matchedBy']) ||
-      !validBorrower(candidate.borrower) ||
-      !['active', 'archived'].includes(String(candidate.status)) ||
-      !['username', 'contact', 'full_name'].includes(String(candidate.matchedBy)) ||
-      borrowerIds.has(candidate.borrower.id)
-    )
-      return false;
-    borrowerIds.add(candidate.borrower.id);
-    const match = candidate as unknown as (typeof typedMatches)[number];
-    const kinds = [
-      normalizeIdentity(match.borrower.username) === normalized.username ? 'username' : null,
-      normalized.contact.length > 0 &&
-      normalizeIdentity(match.borrower.contact) === normalized.contact
-        ? 'contact'
-        : null,
-      normalizeIdentity(match.borrower.name) === normalized.full_name ? 'full_name' : null,
-    ].filter((kind): kind is 'username' | 'contact' | 'full_name' => kind !== null);
-    if (match.matchedBy !== kinds[0] || (match.status === 'archived') !== match.borrower.archived)
-      return false;
-    for (const kind of kinds) matchedKinds.add(kind);
-    typedMatches.push(match);
-  }
-  const compare = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
-  for (let index = 1; index < typedMatches.length; index += 1) {
-    const left = typedMatches[index - 1]!;
-    const right = typedMatches[index]!;
-    const ordering =
-      Number(left.borrower.archived) - Number(right.borrower.archived) ||
-      matchOrder[left.matchedBy] - matchOrder[right.matchedBy] ||
-      compare(normalizeIdentity(left.borrower.name), normalizeIdentity(right.borrower.name)) ||
-      compare(
-        normalizeIdentity(left.borrower.username),
-        normalizeIdentity(right.borrower.username),
-      ) ||
-      left.borrower.id - right.borrower.id;
-    if (ordering > 0) return false;
-  }
-  const expectedErrors = [
-    ['username', 'username', 'username_conflict', 'Username matches an existing borrower'],
-    ['contact', 'contact', 'contact_conflict', 'Contact matches an existing borrower'],
-    ['full_name', 'name', 'full_name_conflict', 'Name matches an existing borrower'],
-  ]
-    .filter(([kind]) => matchedKinds.has(kind!))
-    .map(([, field, code, message]) => ({ field, code, message }));
   return (
-    JSON.stringify(value.fieldErrors) === JSON.stringify(expectedErrors) &&
-    typedMatches.length + expectedErrors.length > 0
+    isBorrowerValidationEvidence(value, attempt.body) &&
+    Array.isArray(value.fieldErrors) &&
+    value.fieldErrors.length > 0
   );
-}
-
-function normalizeIdentity(value: string): string {
-  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
 }
 
 export type RecoveryInitialization = {

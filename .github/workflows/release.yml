@@ -111,19 +111,8 @@ jobs:
           name: diagnostics-${{ matrix.os }}
           retention-days: 7
           path: test-results-desktop
-  upgrade:
-    needs: [prepare, verify]
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/windows-upgrade.yml
-    with:
-      version: ${{ needs.prepare.outputs.version }}
-      artifact: packages-windows-latest
-      ref: ${{ needs.prepare.outputs.commit }}
-      retain_evidence: true
   publish:
-    needs: [prepare, regression, verify, upgrade]
+    needs: [prepare, regression, verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

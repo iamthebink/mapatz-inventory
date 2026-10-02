@@ -13,6 +13,14 @@ import {
   identityHighWaterReceiptKey,
   persistIdentityHighWater,
 } from '../db/identity-high-water.js';
+import {
+  borrowerIdentity,
+  isValidBorrowerProfile,
+  normalizeBorrowerText,
+  normalizeBorrowerPhone,
+  trimBorrowerProfile,
+  type BorrowerProfile,
+} from './borrower-profile.js';
 import { normalizeItemName } from './item-name.js';
 import { periodBounds } from './period-summary.js';
 import type { PeriodSummary } from '../contracts/period-summary.js';
@@ -28,14 +36,7 @@ import type {
   BorrowerSearchSnapshot,
   CommandProtocolError,
 } from '../contracts/borrower-workflow.js';
-import {
-  DomainError,
-  type Borrower,
-  type BorrowerType,
-  type EventKind,
-  type Item,
-  type ItemKind,
-} from './types.js';
+import { DomainError, type Borrower, type EventKind, type Item, type ItemKind } from './types.js';
 
 type Row = Record<string, any>;
 
@@ -54,10 +55,6 @@ type Receipt = {
   subject_id: number | null;
   result_json: string | null;
 };
-
-export function normalizeBorrowerText(value: string): string {
-  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
-}
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -126,13 +123,9 @@ export class InventoryService {
       for (const borrower of plan.absent)
         this.db.prepare('UPDATE borrowers SET archived=1 WHERE id=?').run(borrower.id);
       for (const row of rows) {
-        const existing = plan.identities.get(normalizeBorrowerText(row.username));
+        const existing = plan.identities.get(borrowerIdentity(row));
         if (existing) {
-          this.db
-            .prepare(
-              'UPDATE borrowers SET username=?,name=?,contact=?,type=?,archived=0 WHERE id=?',
-            )
-            .run(row.username, row.name, row.contact, row.type, existing.id);
+          this.db.prepare('UPDATE borrowers SET archived=0 WHERE id=?').run(existing.id);
         } else this.createBorrower(row);
       }
       return {
@@ -151,24 +144,17 @@ export class InventoryService {
     if (!rows.length) throw new DomainError('invalid_import', 'The import must contain borrowers');
     const incoming = new Set<string>();
     for (const [index, row] of rows.entries()) {
-      if (
-        typeof row.username !== 'string' ||
-        row.username.trim().length < 2 ||
-        row.username.trim().length > 40 ||
-        typeof row.name !== 'string' ||
-        !row.name.trim() ||
-        row.name.trim().length > 100 ||
-        typeof row.contact !== 'string' ||
-        row.contact.length > 500 ||
-        !['individual', 'camp_organization', 'other'].includes(row.type)
-      )
+      if (!isValidBorrowerProfile(row))
         throw new DomainError(
           'invalid_import',
           `Row ${index + 2} contains invalid borrower fields`,
         );
-      const key = normalizeBorrowerText(row.username);
+      const key = borrowerIdentity(row);
       if (incoming.has(key))
-        throw new DomainError('invalid_import', `Row ${index + 2} contains a duplicate username`);
+        throw new DomainError(
+          'invalid_import',
+          `Row ${index + 2} contains a duplicate borrower profile`,
+        );
       incoming.add(key);
     }
     const borrowers = (this.db.prepare('SELECT * FROM borrowers ORDER BY id').all() as Row[]).map(
@@ -176,24 +162,26 @@ export class InventoryService {
     );
     const identities = new Map<string, Borrower>();
     for (const borrower of borrowers) {
-      const key = normalizeBorrowerText(borrower.username);
+      const key = borrowerIdentity(borrower);
       if (identities.has(key))
         throw new DomainError(
           'ambiguous_borrower',
-          `Ambiguous normalized username: ${borrower.username}`,
+          `Ambiguous borrower profile: ${borrower.fullName}`,
         );
       identities.set(key, borrower);
     }
     const absent =
       mode === 'replace'
-        ? borrowers.filter((borrower) => !incoming.has(normalizeBorrowerText(borrower.username)))
+        ? borrowers.filter((borrower) => !incoming.has(borrowerIdentity(borrower)))
         : [];
     const loans = this.listLoans();
     const affected = absent
       .map((borrower) => ({
         id: borrower.id,
-        name: borrower.name,
-        username: borrower.username,
+        fullName: borrower.fullName,
+        playaName: borrower.playaName,
+        phoneNumber: borrower.phoneNumber,
+        campDepartment: borrower.campDepartment,
         loans: loans
           .filter((loan) => Number(loan.borrowerId) === borrower.id && Number(loan.outstanding) > 0)
           .map((loan) => ({
@@ -215,7 +203,7 @@ export class InventoryService {
         }),
       )
       .digest('hex');
-    const added = rows.filter((row) => !identities.has(normalizeBorrowerText(row.username))).length;
+    const added = rows.filter((row) => !identities.has(borrowerIdentity(row))).length;
     const preview: BorrowerImportPreview = {
       confirmationToken,
       added,
@@ -728,8 +716,10 @@ export class InventoryService {
     expectedStateRevision: number;
     expectedOutstanding: number;
     expectedLost: number;
-    expectedName: string;
-    expectedUsername: string;
+    expectedFullName: string;
+    expectedPlayaName: string;
+    expectedPhoneNumber: string;
+    expectedCampDepartment: string;
   }): { outcome: 'committed'; action: 'delete_borrower'; borrowerId: number } {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
@@ -746,7 +736,12 @@ export class InventoryService {
       }
       this.requireInventoryEpoch(input.ledgerEpoch);
       const borrower = this.getBorrower(input.borrowerId);
-      if (borrower.name !== input.expectedName || borrower.username !== input.expectedUsername)
+      if (
+        borrower.fullName !== input.expectedFullName ||
+        borrower.playaName !== input.expectedPlayaName ||
+        borrower.phoneNumber !== input.expectedPhoneNumber ||
+        borrower.campDepartment !== input.expectedCampDepartment
+      )
         throw new DomainError('confirmation_changed', 'פרטי השואל השתנו; יש לבדוק ולאשר שוב', 409);
       const balances = this.db
         .prepare(
@@ -824,20 +819,47 @@ export class InventoryService {
       .run(Number(archived), locationId, id);
   }
 
-  createBorrower(input: {
-    username: string;
-    name: string;
-    contact?: string;
-    type: BorrowerType;
-  }): Borrower {
+  createBorrower(
+    input: Pick<BorrowerProfile, 'fullName'> & Partial<Omit<BorrowerProfile, 'fullName'>>,
+  ): Borrower {
+    const profile = this.requireProfile(input);
     const create = () => {
+      this.requireUniqueProfile(profile);
       const id = allocateIdentity(this.db, 'borrower');
       this.db
-        .prepare('INSERT INTO borrowers(id,username,name,contact,type) VALUES (?,?,?,?,?)')
-        .run(id, input.username.trim(), input.name.trim(), input.contact ?? '', input.type);
+        .prepare(
+          'INSERT INTO borrowers(id,playa_name,full_name,phone_number,camp_department) VALUES (?,?,?,?,?)',
+        )
+        .run(id, profile.playaName, profile.fullName, profile.phoneNumber, profile.campDepartment);
       return this.getBorrower(id);
     };
     return this.db.isTransaction ? create() : transaction(this.db, create);
+  }
+
+  private requireProfile(
+    input: Pick<BorrowerProfile, 'fullName'> & Partial<Omit<BorrowerProfile, 'fullName'>>,
+  ): BorrowerProfile {
+    const profile = { playaName: '', phoneNumber: '', campDepartment: '', ...input };
+    if (!isValidBorrowerProfile(profile))
+      throw new DomainError(
+        'invalid_borrower',
+        'Full name is required and profile fields must be at most 100 characters',
+      );
+    return trimBorrowerProfile(profile);
+  }
+
+  private requireUniqueProfile(profile: BorrowerProfile, exceptId?: number): void {
+    if (
+      this.listBorrowers('', true).some(
+        (borrower) =>
+          borrower.id !== exceptId && borrowerIdentity(borrower) === borrowerIdentity(profile),
+      )
+    )
+      throw new DomainError(
+        'borrower_conflict',
+        'כבר קיים שואל עם אותם פרטים. יש לבחור את הכרטיס הקיים או לשנות את הפרטים.',
+        409,
+      );
   }
 
   commitBorrowerOperations(
@@ -1025,11 +1047,7 @@ export class InventoryService {
         return result;
       }
 
-      const borrowerId = allocateIdentity(this.db, 'borrower');
-      this.db
-        .prepare('INSERT INTO borrowers(id,username,name,contact,type) VALUES (?,?,?,?,?)')
-        .run(borrowerId, request.username, request.name, request.contact, request.type);
-      const borrower = this.getBorrower(borrowerId);
+      const borrower = this.createBorrower(request);
       const result: BorrowerCreateResult = {
         outcome: 'committed',
         idempotencyKey,
@@ -1051,13 +1069,19 @@ export class InventoryService {
 
   updateBorrower(
     id: number,
-    input: { username: string; name: string; contact?: string; type: BorrowerType },
+    input: Pick<BorrowerProfile, 'fullName'> & Partial<Omit<BorrowerProfile, 'fullName'>>,
   ): Borrower {
-    this.requireBorrower(id, true);
-    this.db
-      .prepare('UPDATE borrowers SET username=?,name=?,contact=?,type=? WHERE id=?')
-      .run(input.username.trim(), input.name.trim(), input.contact ?? '', input.type, id);
-    return this.getBorrower(id);
+    return transaction(this.db, () => {
+      this.requireBorrower(id, true);
+      const profile = this.requireProfile(input);
+      this.requireUniqueProfile(profile, id);
+      this.db
+        .prepare(
+          'UPDATE borrowers SET playa_name=?,full_name=?,phone_number=?,camp_department=? WHERE id=?',
+        )
+        .run(profile.playaName, profile.fullName, profile.phoneNumber, profile.campDepartment, id);
+      return this.getBorrower(id);
+    });
   }
 
   archiveBorrower(id: number, archived: boolean): void {
@@ -1081,62 +1105,68 @@ export class InventoryService {
   }
 
   listBorrowers(search = '', includeArchived = false): Borrower[] {
-    const fragment = `%${search.trim()}%`;
+    const query = normalizeBorrowerText(search);
+    const phoneQuery = normalizeBorrowerPhone(search);
     return (
       this.db
-        .prepare(
-          `SELECT * FROM borrowers WHERE (? OR archived=0)
-      AND (username LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE) ORDER BY name`,
-        )
-        .all(Number(includeArchived), fragment, fragment) as Row[]
-    ).map(this.borrowerFromRow);
+        .prepare('SELECT * FROM borrowers WHERE (? OR archived=0) ORDER BY full_name,id')
+        .all(Number(includeArchived)) as Row[]
+    )
+      .map(this.borrowerFromRow)
+      .filter(
+        (borrower) =>
+          !query ||
+          [borrower.fullName, borrower.playaName, borrower.campDepartment].some((value) =>
+            normalizeBorrowerText(value).includes(query),
+          ) ||
+          (phoneQuery.length > 0 &&
+            normalizeBorrowerPhone(borrower.phoneNumber).includes(phoneQuery)),
+      )
+      .sort(
+        (left, right) =>
+          compareText(
+            normalizeBorrowerText(left.fullName),
+            normalizeBorrowerText(right.fullName),
+          ) ||
+          compareText(
+            normalizeBorrowerText(left.playaName),
+            normalizeBorrowerText(right.playaName),
+          ) ||
+          left.id - right.id,
+      );
+  }
+
+  borrowerCampSuggestions(): string[] {
+    const values = new Map<string, string>();
+    for (const borrower of this.listBorrowers('', true)) {
+      const key = normalizeBorrowerText(borrower.campDepartment);
+      if (key && !values.has(key)) values.set(key, borrower.campDepartment);
+    }
+    return [...values.values()].sort((left, right) => left.localeCompare(right, 'he'));
   }
 
   searchBorrowers(query: string): BorrowerSearchSnapshot {
     return readTransaction(this.db, () => {
       const ledgerEpoch = this.ledgerEpochInTransaction();
       const normalizedQuery = normalizeBorrowerText(query);
-
-      const rows = this.db.prepare('SELECT * FROM borrowers ORDER BY id').all() as Row[];
-      const active: Borrower[] = [];
+      const phoneQuery = normalizeBorrowerPhone(query);
+      const active = this.listBorrowers(query);
       const archivedMatches: BorrowerSearchSnapshot['archivedMatches'] = [];
-      for (const row of rows) {
-        const borrower = this.borrowerFromRow(row);
-        const username = normalizeBorrowerText(borrower.username);
-        const name = normalizeBorrowerText(borrower.name);
-        const contact = normalizeBorrowerText(borrower.contact);
-        if (!borrower.archived) {
-          if (
-            normalizedQuery.length === 0 ||
-            username.includes(normalizedQuery) ||
-            name.includes(normalizedQuery) ||
-            contact.includes(normalizedQuery)
-          )
-            active.push(borrower);
-          continue;
-        }
-
+      for (const borrower of this.listBorrowers('', true).filter((entry) => entry.archived)) {
         let matchedBy: BorrowerMatchKind | undefined;
-        if (username === normalizedQuery) matchedBy = 'username';
-        else if (contact.length > 0 && contact === normalizedQuery) matchedBy = 'contact';
-        else if (name === normalizedQuery) matchedBy = 'full_name';
+        if (normalizedQuery && normalizeBorrowerText(borrower.playaName) === normalizedQuery)
+          matchedBy = 'playa_name';
+        else if (phoneQuery && normalizeBorrowerPhone(borrower.phoneNumber) === phoneQuery)
+          matchedBy = 'phone_number';
+        else if (normalizedQuery && normalizeBorrowerText(borrower.fullName) === normalizedQuery)
+          matchedBy = 'full_name';
         if (matchedBy) archivedMatches.push({ borrower, matchedBy });
       }
-
-      const borrowerOrder = (left: Borrower, right: Borrower): number =>
-        compareText(normalizeBorrowerText(left.name), normalizeBorrowerText(right.name)) ||
-        compareText(normalizeBorrowerText(left.username), normalizeBorrowerText(right.username)) ||
-        left.id - right.id;
-      active.sort(borrowerOrder);
-      const matchOrder: Record<BorrowerMatchKind, number> = {
-        username: 0,
-        contact: 1,
-        full_name: 2,
-      };
+      const matchOrder = { playa_name: 0, phone_number: 1, full_name: 2 };
       archivedMatches.sort(
         (left, right) =>
           matchOrder[left.matchedBy] - matchOrder[right.matchedBy] ||
-          borrowerOrder(left.borrower, right.borrower),
+          left.borrower.id - right.borrower.id,
       );
       return { ledgerEpoch, active, archivedMatches };
     });
@@ -1381,7 +1411,7 @@ export class InventoryService {
     return this.db
       .prepare(
         `SELECT l.checkout_id checkoutId,l.item_id itemId,i.name itemName,
-      l.borrower_id borrowerId,b.name borrowerName,l.quantity,l.outstanding,l.lost,
+      l.borrower_id borrowerId,b.full_name borrowerName,l.quantity,l.outstanding,l.lost,
       l.created_at createdAt
       FROM loan_state l JOIN items i ON i.id=l.item_id JOIN borrowers b ON b.id=l.borrower_id
       WHERE l.outstanding > 0 OR l.lost > 0 ORDER BY l.checkout_id DESC`,
@@ -1396,7 +1426,7 @@ export class InventoryService {
         .prepare(
           `
         SELECT e.borrower_id borrowerId, e.item_id itemId,
-          b.username, b.name borrowerName, b.contact, b.type borrowerType,
+          b.playa_name, b.full_name borrowerName, b.phone_number, b.camp_department,
           b.archived borrowerArchived, i.name itemName,
           SUM(CASE e.kind WHEN 'checked_out' THEN e.quantity
             WHEN 'returned_usable' THEN -e.quantity
@@ -1409,7 +1439,7 @@ export class InventoryService {
           AND e.kind IN ('checked_out','returned_usable','returned_damaged','marked_lost')
         GROUP BY e.borrower_id,e.item_id
         HAVING balance > 0
-        ORDER BY b.name COLLATE NOCASE, e.borrower_id, i.name COLLATE NOCASE
+        ORDER BY b.full_name COLLATE NOCASE, e.borrower_id, i.name COLLATE NOCASE
       `,
         )
         .all(bounds.startUtc, bounds.endExclusiveUtc) as Row[];
@@ -1420,10 +1450,10 @@ export class InventoryService {
           entry = {
             borrower: {
               id: row.borrowerId,
-              username: row.username,
-              name: row.borrowerName,
-              contact: row.contact,
-              type: row.borrowerType,
+              playaName: row.playa_name,
+              fullName: row.borrowerName,
+              phoneNumber: row.phone_number,
+              campDepartment: row.camp_department,
               archived: Boolean(row.borrowerArchived),
             },
             total: 0,
@@ -1442,7 +1472,7 @@ export class InventoryService {
         start,
         end,
         borrowers: [...borrowers.values()].sort((left, right) =>
-          left.borrower.name.localeCompare(right.borrower.name, 'he', { numeric: true }),
+          left.borrower.fullName.localeCompare(right.borrower.fullName, 'he', { numeric: true }),
         ),
       };
     });
@@ -1451,7 +1481,7 @@ export class InventoryService {
   listLedger(): Row[] {
     return this.db
       .prepare(
-        `SELECT e.*,i.name itemName,b.name borrowerName FROM inventory_events e
+        `SELECT e.*,i.name itemName,b.full_name borrowerName FROM inventory_events e
       JOIN items i ON i.id=e.item_id LEFT JOIN borrowers b ON b.id=e.borrower_id ORDER BY e.id DESC`,
       )
       .all();
@@ -1656,82 +1686,38 @@ export class InventoryService {
     return conflicts;
   }
 
-  private validateBorrowerCreation(request: BorrowerCreateRequest): BorrowerCreateValidation {
-    const desired = {
-      username: normalizeBorrowerText(request.username),
-      contact: normalizeBorrowerText(request.contact),
-      full_name: normalizeBorrowerText(request.name),
-    };
+  validateBorrowerCreation(request: BorrowerProfile): BorrowerCreateValidation {
+    if (!isValidBorrowerProfile(request))
+      return {
+        fieldErrors: [
+          {
+            field: 'fullName',
+            code: 'invalid_borrower',
+            message: 'Full name is required and profile fields must be at most 100 characters',
+          },
+        ],
+        matches: [],
+      };
     const matches: BorrowerCreateValidation['matches'] = [];
-    const matchedKinds = new Set<BorrowerMatchKind>();
-    for (const row of this.db
-      .prepare('SELECT * FROM borrowers ORDER BY archived,id')
-      .all() as Row[]) {
-      const borrower = this.borrowerFromRow(row);
-      const borrowerMatches: BorrowerMatchKind[] = [];
-      if (normalizeBorrowerText(borrower.username) === desired.username)
-        borrowerMatches.push('username');
-      if (desired.contact.length > 0 && normalizeBorrowerText(borrower.contact) === desired.contact)
-        borrowerMatches.push('contact');
-      if (normalizeBorrowerText(borrower.name) === desired.full_name)
-        borrowerMatches.push('full_name');
-      const [matchedBy] = borrowerMatches;
-      if (!matchedBy) continue;
-      for (const kind of borrowerMatches) matchedKinds.add(kind);
-      matches.push({
-        borrower,
-        status: borrower.archived ? 'archived' : 'active',
-        matchedBy,
-      });
+    let exact = false;
+    for (const borrower of this.listBorrowers('', true)) {
+      if (borrowerIdentity(borrower) === borrowerIdentity(request)) exact = true;
+      let matchedBy: BorrowerMatchKind | undefined;
+      const playaName = normalizeBorrowerText(request.playaName);
+      const phone = normalizeBorrowerPhone(request.phoneNumber);
+      if (playaName && normalizeBorrowerText(borrower.playaName) === playaName)
+        matchedBy = 'playa_name';
+      else if (phone && normalizeBorrowerPhone(borrower.phoneNumber) === phone)
+        matchedBy = 'phone_number';
+      else if (normalizeBorrowerText(borrower.fullName) === normalizeBorrowerText(request.fullName))
+        matchedBy = 'full_name';
+      if (matchedBy)
+        matches.push({ borrower, status: borrower.archived ? 'archived' : 'active', matchedBy });
     }
-    const matchOrder: Record<BorrowerMatchKind, number> = {
-      username: 0,
-      contact: 1,
-      full_name: 2,
-    };
-    matches.sort(
-      (left, right) =>
-        Number(left.borrower.archived) - Number(right.borrower.archived) ||
-        matchOrder[left.matchedBy] - matchOrder[right.matchedBy] ||
-        compareText(
-          normalizeBorrowerText(left.borrower.name),
-          normalizeBorrowerText(right.borrower.name),
-        ) ||
-        compareText(
-          normalizeBorrowerText(left.borrower.username),
-          normalizeBorrowerText(right.borrower.username),
-        ) ||
-        left.borrower.id - right.borrower.id,
-    );
-    const definitions: Array<{
-      kind: BorrowerMatchKind;
-      field: 'username' | 'contact' | 'name';
-      code: string;
-      message: string;
-    }> = [
-      {
-        kind: 'username',
-        field: 'username',
-        code: 'username_conflict',
-        message: 'Username matches an existing borrower',
-      },
-      {
-        kind: 'contact',
-        field: 'contact',
-        code: 'contact_conflict',
-        message: 'Contact matches an existing borrower',
-      },
-      {
-        kind: 'full_name',
-        field: 'name',
-        code: 'full_name_conflict',
-        message: 'Name matches an existing borrower',
-      },
-    ];
     return {
-      fieldErrors: definitions
-        .filter(({ kind }) => matchedKinds.has(kind))
-        .map(({ field, code, message }) => ({ field, code, message })),
+      fieldErrors: exact
+        ? [{ field: 'fullName', code: 'duplicate_profile', message: 'כבר קיים שואל עם אותם פרטים' }]
+        : [],
       matches,
     };
   }
@@ -2272,10 +2258,10 @@ export class InventoryService {
 
   private borrowerFromRow = (row: Row): Borrower => ({
     id: Number(row.id),
-    username: String(row.username),
-    name: String(row.name),
-    contact: String(row.contact),
-    type: row.type,
+    playaName: String(row.playa_name),
+    fullName: String(row.full_name),
+    phoneNumber: String(row.phone_number),
+    campDepartment: String(row.camp_department),
     archived: Boolean(row.archived),
   });
 }

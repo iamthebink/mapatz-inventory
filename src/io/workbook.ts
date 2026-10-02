@@ -1,5 +1,5 @@
 import type { BorrowerImportRow } from '../contracts/borrower-import.js';
-import { normalizeBorrowerText } from '../domain/inventory.js';
+import { borrowerIdentity, trimBorrowerProfile } from '../domain/borrower-profile.js';
 import { normalizeItemName } from '../domain/item-name.js';
 import ExcelJS, { type CellValue, type Worksheet } from 'exceljs';
 import {
@@ -12,7 +12,7 @@ import {
   unresolvedDamageReport,
   validateRecoveryPayload,
 } from '../domain/import-export.js';
-import { DomainError, type BorrowerType, type EventKind, type ItemKind } from '../domain/types.js';
+import { DomainError, type EventKind, type ItemKind } from '../domain/types.js';
 import { RADIO_TEXT_MAX_LENGTH } from '../domain/radios.js';
 import { WORKBOOK_CONTRACT, type WorkbookSheetKey } from './workbook-contract.js';
 
@@ -88,7 +88,7 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     snapshot.loans.map((loan) => [
       loan.checkoutId,
       loan.itemId,
-      loan.borrowerUsername,
+      loan.borrowerId,
       loan.quantity,
       loan.createdAt,
       loan.outstanding,
@@ -108,10 +108,11 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
     workbook,
     'recoveryBorrowers',
     snapshot.borrowers.map((borrower) => [
-      borrower.username,
-      borrower.name,
-      borrower.contact,
-      borrower.type,
+      borrower.id,
+      borrower.playaName,
+      borrower.fullName,
+      borrower.phoneNumber,
+      borrower.campDepartment,
       borrower.archived,
       borrower.createdAt,
     ]),
@@ -123,7 +124,7 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
       event.id,
       event.kind,
       event.itemId,
-      event.borrowerUsername,
+      event.borrowerId,
       event.quantity,
       event.relatedEventId,
       event.note,
@@ -454,25 +455,22 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
       revision: integer(row[14], `Recovery Items row ${rowNumber} Revision`, 0),
     };
   });
-  const borrowers = dataRows(borrowerSheet, 6).map((row, index) => {
+  const borrowers = dataRows(borrowerSheet, 7).map((row, index) => {
     const rowNumber = index + 2;
-    const username = requiredText(row[0], `Recovery Borrowers row ${rowNumber} Username`, 40);
-    if (username.length < 2)
-      return importError(
-        `Recovery Borrowers row ${rowNumber} Username must contain at least 2 characters`,
-      );
-    const type = requiredText(row[3], `Recovery Borrowers row ${rowNumber} Type`) as BorrowerType;
-    if (type !== 'individual' && type !== 'camp_organization' && type !== 'other')
-      return importError(
-        `Recovery Borrowers row ${rowNumber} Type must be individual, camp_organization, or other`,
-      );
     return {
-      username,
-      name: requiredText(row[1], `Recovery Borrowers row ${rowNumber} Name`),
-      contact: plainText(row[2], `Recovery Borrowers row ${rowNumber} Contact`, 500),
-      type,
-      archived: requiredBoolean(row[4], `Recovery Borrowers row ${rowNumber} Archived`),
-      createdAt: timestamp(row[5], `Recovery Borrowers row ${rowNumber} Created At`),
+      id: integer(row[0], `Recovery Borrowers row ${rowNumber} Borrower ID`, 1),
+      playaName: isBlank(row[1])
+        ? ''
+        : plainText(row[1], `Recovery Borrowers row ${rowNumber} Playa Name`, 100),
+      fullName: requiredText(row[2], `Recovery Borrowers row ${rowNumber} Full Name`, 100),
+      phoneNumber: isBlank(row[3])
+        ? ''
+        : plainText(row[3], `Recovery Borrowers row ${rowNumber} Phone Number`, 100),
+      campDepartment: isBlank(row[4])
+        ? ''
+        : plainText(row[4], `Recovery Borrowers row ${rowNumber} Camp/Department`, 100),
+      archived: requiredBoolean(row[5], `Recovery Borrowers row ${rowNumber} Archived`),
+      createdAt: timestamp(row[6], `Recovery Borrowers row ${rowNumber} Created At`),
     };
   });
   const events = dataRows(eventSheet, 8).map((row, index) => {
@@ -480,19 +478,12 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     const kind = requiredText(row[1], `Recovery Events row ${rowNumber} Kind`) as EventKind;
     if (!eventKinds.has(kind))
       return importError(`Recovery Events row ${rowNumber} has unsupported Kind "${kind}"`);
-    const borrowerUsername = optionalText(
-      row[3],
-      `Recovery Events row ${rowNumber} Borrower Username`,
-    );
-    if (borrowerUsername != null && borrowerUsername.length > 40)
-      return importError(
-        `Recovery Events row ${rowNumber} Borrower Username must be at most 40 characters`,
-      );
+    const borrowerId = optionalInteger(row[3], `Recovery Events row ${rowNumber} Borrower ID`, 1);
     return {
       id: integer(row[0], `Recovery Events row ${rowNumber} Event ID`, 1),
       kind,
       itemId: integer(row[2], `Recovery Events row ${rowNumber} Item ID`),
-      borrowerUsername,
+      borrowerId,
       quantity: integer(row[4], `Recovery Events row ${rowNumber} Quantity`, 1),
       relatedEventId: optionalInteger(
         row[5],
@@ -508,11 +499,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     return {
       checkoutId: integer(row[0], `Recovery Loans row ${rowNumber} Checkout ID`, 1),
       itemId: integer(row[1], `Recovery Loans row ${rowNumber} Item ID`, 1),
-      borrowerUsername: requiredText(
-        row[2],
-        `Recovery Loans row ${rowNumber} Borrower Username`,
-        40,
-      ),
+      borrowerId: integer(row[2], `Recovery Loans row ${rowNumber} Borrower ID`, 1),
       quantity: integer(row[3], `Recovery Loans row ${rowNumber} Quantity`, 1),
       createdAt: timestamp(row[4], `Recovery Loans row ${rowNumber} Created At`),
       outstanding: integer(row[5], `Recovery Loans row ${rowNumber} Outstanding`, 0),
@@ -544,11 +531,13 @@ export async function parseBorrowerWorkbook(buffer: Buffer): Promise<BorrowerImp
   }
   const sheet = workbook.worksheets[0];
   if (!sheet) return importError('The workbook must contain a worksheet');
-  const columns = ['Username', 'Name', 'Contact', 'Type'];
+  const columns = ['Playa Name', 'Full Name', 'Phone Number', 'Camp/Department'];
   for (let column = 1; column <= Math.max(4, sheet.getRow(1).cellCount); column += 1) {
     const value = primitive(sheet.getRow(1).getCell(column).value);
     if (column <= 4 ? value !== columns[column - 1] : !isBlank(value))
-      return importError('Row 1 must contain Username, Name, Contact, Type in that order');
+      return importError(
+        'Row 1 must contain Playa Name, Full Name, Phone Number, Camp/Department in that order',
+      );
   }
   const rows: BorrowerImportRow[] = [];
   const identities = new Map<string, number>();
@@ -565,25 +554,22 @@ export async function parseBorrowerWorkbook(buffer: Buffer): Promise<BorrowerImp
     if (values.every(isBlank)) continue;
     if (values.slice(4).some((value) => !isBlank(value)))
       return importError(`Row ${rowNumber} contains unexpected extra columns`);
-    const username = requiredText(values[0], `Row ${rowNumber} Username`, 40);
-    if (username.length < 2)
-      return importError(`Row ${rowNumber} Username must contain at least 2 characters`);
-    const identity = normalizeBorrowerText(username);
+    const profile = {
+      playaName: isBlank(values[0]) ? '' : plainText(values[0], `Row ${rowNumber} Playa Name`, 100),
+      fullName: requiredText(values[1], `Row ${rowNumber} Full Name`, 100),
+      phoneNumber: isBlank(values[2])
+        ? ''
+        : plainText(values[2], `Row ${rowNumber} Phone Number`, 100),
+      campDepartment: isBlank(values[3])
+        ? ''
+        : plainText(values[3], `Row ${rowNumber} Camp/Department`, 100),
+    };
+    const identity = borrowerIdentity(profile);
     const previous = identities.get(identity);
     if (previous != null)
-      return importError(`Row ${rowNumber} Username duplicates row ${previous}`);
+      return importError(`Row ${rowNumber} borrower profile duplicates row ${previous}`);
     identities.set(identity, rowNumber);
-    const type = isBlank(values[3])
-      ? 'individual'
-      : requiredText(values[3], `Row ${rowNumber} Type`);
-    if (type !== 'individual' && type !== 'camp_organization' && type !== 'other')
-      return importError(`Row ${rowNumber} Type must be individual, camp_organization, or other`);
-    rows.push({
-      username,
-      name: requiredText(values[1], `Row ${rowNumber} Name`),
-      contact: isBlank(values[2]) ? '' : plainText(values[2], `Row ${rowNumber} Contact`, 500),
-      type,
-    });
+    rows.push(trimBorrowerProfile(profile));
   }
   if (rows.length === 0)
     return importError('The borrower import must contain at least one borrower');

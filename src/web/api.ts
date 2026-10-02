@@ -1,3 +1,7 @@
+import {
+  isBorrowerValidationEvidence,
+  isValidBorrowerProfile,
+} from '../domain/borrower-profile.js';
 import { desktop } from './desktop';
 import type {
   BorrowerImportMode,
@@ -59,12 +63,16 @@ const exactKeys = (value: Record<string, unknown>, allowed: string[]): boolean =
 function validBorrower(value: unknown): value is Borrower {
   return (
     isObject(value) &&
-    exactKeys(value, ['id', 'username', 'name', 'contact', 'type', 'archived']) &&
+    exactKeys(value, [
+      'id',
+      'playaName',
+      'fullName',
+      'phoneNumber',
+      'campDepartment',
+      'archived',
+    ]) &&
     isSafePositive(value.id) &&
-    isString(value.username) &&
-    isString(value.name) &&
-    isString(value.contact) &&
-    ['individual', 'camp_organization', 'other'].includes(String(value.type)) &&
+    isValidBorrowerProfile(value as unknown as Borrower) &&
     isBoolean(value.archived)
   );
 }
@@ -85,7 +93,7 @@ function validBorrowerSearchSnapshot(value: unknown): value is BorrowerSearchSna
       exactKeys(match, ['borrower', 'matchedBy']) &&
       validBorrower(match.borrower) &&
       match.borrower.archived &&
-      ['username', 'contact', 'full_name'].includes(String(match.matchedBy)),
+      ['playa_name', 'phone_number', 'full_name'].includes(String(match.matchedBy)),
   );
   if (!archivedValid) return false;
   const ids = [
@@ -105,15 +113,6 @@ function validFieldErrors(value: unknown): boolean {
         isString(entry.field) &&
         isString(entry.code) &&
         isString(entry.message),
-    )
-  );
-}
-
-function validCreateFieldErrors(value: unknown): boolean {
-  return (
-    validFieldErrors(value) &&
-    (value as Array<Record<string, unknown>>).every((entry) =>
-      ['username', 'name', 'contact', 'type'].includes(String(entry.field)),
     )
   );
 }
@@ -204,93 +203,26 @@ function validOperationResult(
 function normalizedCreate(request: BorrowerCreateRequest): BorrowerCreateRequest {
   return {
     ...request,
-    username: request.username.trim(),
-    name: request.name.trim(),
-    contact: request.contact.trim(),
+    playaName: request.playaName.trim(),
+    fullName: request.fullName.trim(),
+    campDepartment: request.campDepartment.trim(),
+    phoneNumber: request.phoneNumber.trim(),
   };
-}
-
-function normalizeIdentity(value: string): string {
-  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
 }
 
 function borrowerMatchesRequest(borrower: Borrower, request: BorrowerCreateRequest): boolean {
   const expected = normalizedCreate(request);
   return (
     !borrower.archived &&
-    borrower.username === expected.username &&
-    borrower.name === expected.name &&
-    borrower.contact === expected.contact &&
-    borrower.type === expected.type
+    borrower.playaName === expected.playaName &&
+    borrower.fullName === expected.fullName &&
+    borrower.phoneNumber === expected.phoneNumber &&
+    borrower.campDepartment === expected.campDepartment
   );
 }
 
 function validCreateValidation(value: unknown, request: BorrowerCreateRequest): boolean {
-  if (
-    !isObject(value) ||
-    !validCreateFieldErrors(value.fieldErrors) ||
-    !Array.isArray(value.matches)
-  )
-    return false;
-  const expected = normalizedCreate(request);
-  const matchedKinds = new Set<string>();
-  const borrowerIds = new Set<number>();
-  const matchesValid = value.matches.every((match) => {
-    if (!isObject(match) || !validBorrower(match.borrower)) return false;
-    if (borrowerIds.has(match.borrower.id)) return false;
-    borrowerIds.add(match.borrower.id);
-    const borrowerKinds = [
-      normalizeIdentity(match.borrower.username) === normalizeIdentity(expected.username)
-        ? 'username'
-        : null,
-      normalizeIdentity(expected.contact).length > 0 &&
-      normalizeIdentity(match.borrower.contact) === normalizeIdentity(expected.contact)
-        ? 'contact'
-        : null,
-      normalizeIdentity(match.borrower.name) === normalizeIdentity(expected.name)
-        ? 'full_name'
-        : null,
-    ].filter((kind): kind is string => kind !== null);
-    for (const kind of borrowerKinds) matchedKinds.add(kind);
-    return (
-      exactKeys(match, ['borrower', 'status', 'matchedBy']) &&
-      ['active', 'archived'].includes(String(match.status)) &&
-      ['username', 'contact', 'full_name'].includes(String(match.matchedBy)) &&
-      (match.status === 'archived') === match.borrower.archived &&
-      match.matchedBy === borrowerKinds[0]
-    );
-  });
-  if (!matchesValid) return false;
-  const matches = value.matches as Array<{
-    borrower: Borrower;
-    status: 'active' | 'archived';
-    matchedBy: 'username' | 'contact' | 'full_name';
-  }>;
-  const matchOrder = { username: 0, contact: 1, full_name: 2 } as const;
-  const compare = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
-  for (let index = 1; index < matches.length; index += 1) {
-    const left = matches[index - 1]!;
-    const right = matches[index]!;
-    const ordering =
-      Number(left.borrower.archived) - Number(right.borrower.archived) ||
-      matchOrder[left.matchedBy] - matchOrder[right.matchedBy] ||
-      compare(normalizeIdentity(left.borrower.name), normalizeIdentity(right.borrower.name)) ||
-      compare(
-        normalizeIdentity(left.borrower.username),
-        normalizeIdentity(right.borrower.username),
-      ) ||
-      left.borrower.id - right.borrower.id;
-    if (ordering > 0) return false;
-  }
-  const definitions = [
-    ['username', 'username', 'username_conflict', 'Username matches an existing borrower'],
-    ['contact', 'contact', 'contact_conflict', 'Contact matches an existing borrower'],
-    ['full_name', 'name', 'full_name_conflict', 'Name matches an existing borrower'],
-  ] as const;
-  const expectedErrors = definitions
-    .filter(([kind]) => matchedKinds.has(kind))
-    .map(([, field, code, message]) => ({ field, code, message }));
-  return JSON.stringify(value.fieldErrors) === JSON.stringify(expectedErrors);
+  return isBorrowerValidationEvidence(value, normalizedCreate(request));
 }
 
 function validCreateResult(

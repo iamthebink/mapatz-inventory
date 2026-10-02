@@ -120,9 +120,9 @@ describe('borrower workflow snapshot API', () => {
   it('lets operators atomically mark held equipment lost and recover it in the same command', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
-      username: 'operator-loss',
-      name: 'Operator Loss',
-      type: 'individual',
+      playaName: 'operator-loss',
+      fullName: 'Operator Loss',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Operator tent', kind: 'non_consumable' });
     inventory.addStock(item.id, 3);
@@ -164,9 +164,9 @@ describe('borrower workflow snapshot API', () => {
   it('accepts an operator lost-credit part and rejects malformed lost-credit payloads', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
-      username: 'lost-credit',
-      name: 'Lost Credit',
-      type: 'individual',
+      playaName: 'lost-credit',
+      fullName: 'Lost Credit',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Recovered tent', kind: 'non_consumable' });
     inventory.addStock(item.id, 1);
@@ -236,9 +236,9 @@ describe('borrower workflow snapshot API', () => {
   it('accepts an operator damaged lost recovery without usable-stock credit', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
-      username: 'damaged-lost-credit',
-      name: 'Damaged Lost Credit',
-      type: 'individual',
+      playaName: 'damaged-lost-credit',
+      fullName: 'Damaged Lost Credit',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Damaged found tent', kind: 'non_consumable' });
     inventory.addStock(item.id, 1);
@@ -276,23 +276,23 @@ describe('borrower workflow snapshot API', () => {
   it('returns the exact search and desk snapshot transports', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
-      username: 'desk-user',
-      name: 'Desk User',
-      contact: '050 123',
-      type: 'individual',
+      playaName: 'desk-user',
+      fullName: 'Desk User',
+      phoneNumber: '050 123',
+      campDepartment: '',
     });
     const archived = inventory.createBorrower({
-      username: 'archived-user',
-      name: 'Archived User',
-      contact: '050 123',
-      type: 'other',
+      playaName: 'archived-user',
+      fullName: 'Archived User',
+      phoneNumber: '050 123',
+      campDepartment: 'מחנה אחר',
     });
     inventory.archiveBorrower(archived.id, true);
-    const usernameOnly = inventory.createBorrower({
-      username: 'needle-account',
-      name: 'Unrelated Name',
-      contact: '999',
-      type: 'other',
+    const playaNameOnly = inventory.createBorrower({
+      playaName: 'needle-account',
+      fullName: 'Unrelated Name',
+      phoneNumber: '999',
+      campDepartment: 'מחנה אחר',
     });
     const item = inventory.createItem({ name: 'Tent', kind: 'non_consumable' });
     inventory.addStock(item.id, 2);
@@ -307,20 +307,22 @@ describe('borrower workflow snapshot API', () => {
         expect(body).toEqual({
           ledgerEpoch: 1,
           active: [borrower],
-          archivedMatches: [{ borrower: { ...archived, archived: true }, matchedBy: 'contact' }],
+          archivedMatches: [
+            { borrower: { ...archived, archived: true }, matchedBy: 'phone_number' },
+          ],
         }),
       );
     await agent
       .get('/api/borrowers/search?q=needle')
       .expect(200)
-      .expect(({ body }) => expect(body.active).toEqual([usernameOnly]));
+      .expect(({ body }) => expect(body.active).toEqual([playaNameOnly]));
     await agent
       .get('/api/borrowers/search')
       .expect(200)
       .expect(({ body }) =>
         expect(body).toEqual({
           ledgerEpoch: 1,
-          active: [borrower, usernameOnly],
+          active: [borrower, playaNameOnly],
           archivedMatches: [],
         }),
       );
@@ -356,14 +358,14 @@ describe('borrower workflow snapshot API', () => {
   it('uses the existing typed envelope for unknown, inactive, and internal snapshot failures', async () => {
     const { db, inventory, agent } = fixture();
     const active = inventory.createBorrower({
-      username: 'active',
-      name: 'Active',
-      type: 'individual',
+      playaName: 'active',
+      fullName: 'Active',
+      campDepartment: '',
     });
     const inactive = inventory.createBorrower({
-      username: 'inactive',
-      name: 'Inactive',
-      type: 'other',
+      playaName: 'inactive',
+      fullName: 'Inactive',
+      campDepartment: 'מחנה אחר',
     });
     inventory.archiveBorrower(inactive.id, true);
 
@@ -577,10 +579,10 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 2,
         ledgerEpoch: 0,
-        username: 'x',
-        name: '',
-        contact: 'x'.repeat(501),
-        type: 'invalid',
+        playaName: 'x',
+        fullName: '',
+        phoneNumber: 'x'.repeat(501),
+        campDepartment: 'invalid',
         extra: true,
       })
       .expect(400)
@@ -591,10 +593,8 @@ describe('borrower workflow snapshot API', () => {
           'Idempotency-Key',
           'contractVersion',
           'ledgerEpoch',
-          'username',
-          'name',
-          'contact',
-          'type',
+          'fullName',
+          'phoneNumber',
           'extra',
         ]);
       });
@@ -603,9 +603,9 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        username: 'valid-name',
-        name: 'Valid Name',
-        type: 'individual',
+        playaName: 'valid-name',
+        fullName: 'Valid Name',
+        campDepartment: '',
       })
       .expect(400);
     expect(db.prepare('SELECT COUNT(*) count FROM borrowers').get()).toEqual({ count: 0 });
@@ -871,10 +871,10 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        username: 'oversized-create',
-        name: 'Oversized Create',
-        contact: oversized,
-        type: 'individual',
+        playaName: 'oversized-create',
+        fullName: 'Oversized Create',
+        phoneNumber: oversized,
+        campDepartment: '',
       })
       .expect(400)
       .expect({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
@@ -899,9 +899,9 @@ describe('borrower workflow snapshot API', () => {
   it('rejects unsupported versions before epoch or receipt access for both commands', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
-      username: 'version-subject',
-      name: 'Version Subject',
-      type: 'individual',
+      playaName: 'version-subject',
+      fullName: 'Version Subject',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Version item', kind: 'non_consumable' });
     inventory.addStock(item.id, 2);
@@ -910,10 +910,10 @@ describe('borrower workflow snapshot API', () => {
     const createBody = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      username: 'version-created',
-      name: 'Version Created',
-      contact: '',
-      type: 'individual',
+      playaName: 'version-created',
+      fullName: 'Version Created',
+      phoneNumber: '',
+      campDepartment: '',
     };
     const operationBody = {
       contractVersion: 1,
@@ -943,10 +943,10 @@ describe('borrower workflow snapshot API', () => {
         .send({
           contractVersion: 2,
           ledgerEpoch: 1,
-          username: 'changed-version-create',
-          name: 'Changed Version Create',
-          contact: '',
-          type: 'individual',
+          playaName: 'changed-version-create',
+          fullName: 'Changed Version Create',
+          phoneNumber: '',
+          campDepartment: '',
         })
         .expect(400)
         .expect({
@@ -1016,9 +1016,9 @@ describe('borrower workflow snapshot API', () => {
   it('maps command conflicts and protocol errors to receipt-safe 409 responses', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
-      username: 'conflict-user',
-      name: 'Conflict User',
-      type: 'individual',
+      playaName: 'conflict-user',
+      fullName: 'Conflict User',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Unavailable', kind: 'non_consumable' });
     const operationKey = '00000000-0000-4000-8000-000000000105';
@@ -1047,10 +1047,10 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        username: borrower.username,
-        name: 'Other Name',
-        contact: '',
-        type: 'other',
+        playaName: borrower.playaName,
+        fullName: borrower.fullName,
+        phoneNumber: borrower.phoneNumber,
+        campDepartment: borrower.campDepartment,
       })
       .expect(409)
       .expect(({ body }) =>
@@ -1100,10 +1100,10 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        username: 'stale-create',
-        name: 'Stale Create',
-        contact: '',
-        type: 'individual',
+        playaName: 'stale-create',
+        fullName: 'Stale Create',
+        phoneNumber: '',
+        campDepartment: '',
       })
       .expect(409)
       .expect(({ body }) =>
@@ -1128,10 +1128,10 @@ describe('borrower workflow snapshot API', () => {
     const createBody = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      username: 'command-user',
-      name: 'Command User',
-      contact: '',
-      type: 'individual',
+      playaName: 'command-user',
+      fullName: 'Command User',
+      phoneNumber: '',
+      campDepartment: '',
     };
     let borrowerId = 0;
     await agent
@@ -1144,15 +1144,15 @@ describe('borrower workflow snapshot API', () => {
           outcome: 'committed',
           idempotencyKey: createKey,
           replayed: false,
-          borrower: { username: 'command-user' },
+          borrower: { playaName: 'command-user' },
         });
         borrowerId = body.borrower.id;
       });
     inventory.updateBorrower(borrowerId, {
-      username: 'edited-live-user',
-      name: 'Edited Live User',
-      contact: 'edited',
-      type: 'other',
+      playaName: 'edited-live-user',
+      fullName: 'Edited Live User',
+      phoneNumber: 'edited',
+      campDepartment: 'מחנה אחר',
     });
     await agent
       .post('/api/borrowers')
@@ -1166,10 +1166,10 @@ describe('borrower workflow snapshot API', () => {
           replayed: true,
           borrower: {
             id: borrowerId,
-            username: 'command-user',
-            name: 'Command User',
-            contact: '',
-            type: 'individual',
+            playaName: 'command-user',
+            fullName: 'Command User',
+            phoneNumber: '',
+            campDepartment: '',
             archived: false,
           },
         }),
@@ -1177,10 +1177,10 @@ describe('borrower workflow snapshot API', () => {
     expect(
       inventory.listBorrowers('', true).find((candidate) => candidate.id === borrowerId),
     ).toMatchObject({
-      username: 'edited-live-user',
-      name: 'Edited Live User',
-      contact: 'edited',
-      type: 'other',
+      playaName: 'edited-live-user',
+      fullName: 'Edited Live User',
+      phoneNumber: 'edited',
+      campDepartment: 'מחנה אחר',
     });
     const creationCounts = {
       borrowers: db.prepare('SELECT COUNT(*) count FROM borrowers').get(),
@@ -1189,7 +1189,7 @@ describe('borrower workflow snapshot API', () => {
     await agent
       .post('/api/borrowers')
       .set('Idempotency-Key', createKey)
-      .send({ ...createBody, contact: 'changed' })
+      .send({ ...createBody, phoneNumber: 'changed' })
       .expect(409)
       .expect({
         error: 'idempotency_key_reused',
@@ -1205,10 +1205,10 @@ describe('borrower workflow snapshot API', () => {
       inventory.listBorrowers('', true).find((candidate) => candidate.id === borrowerId),
     ).toEqual({
       id: borrowerId,
-      username: 'edited-live-user',
-      name: 'Edited Live User',
-      contact: 'edited',
-      type: 'other',
+      playaName: 'edited-live-user',
+      fullName: 'Edited Live User',
+      phoneNumber: 'edited',
+      campDepartment: 'מחנה אחר',
       archived: false,
     });
 

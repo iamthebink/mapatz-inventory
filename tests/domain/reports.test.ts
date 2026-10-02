@@ -31,9 +31,9 @@ describe('inventory workbook reports', () => {
     const item = inventory.createItem({ name: 'Recovered damaged', kind: 'non_consumable' });
     inventory.addStock(item.id, 2);
     const borrower = inventory.createBorrower({
-      username: 'damage-report',
-      name: 'Damage Report',
-      type: 'individual',
+      playaName: 'damage-report',
+      fullName: 'Damage Report',
+      campDepartment: '',
     });
     const checkout = inventory.checkout(item.id, borrower.id, 2);
     inventory.markLost(checkout, 2, true);
@@ -106,9 +106,9 @@ describe('inventory workbook reports', () => {
     });
     const inventory = new InventoryService(db);
     const borrower = inventory.createBorrower({
-      username: 'field-team',
-      name: 'Field Team',
-      type: 'other',
+      playaName: 'field-team',
+      fullName: 'Field Team',
+      campDepartment: 'מחנה אחר',
     });
     const items = inventory.listItems('', true);
     for (const item of items) {

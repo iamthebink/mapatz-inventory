@@ -1,3 +1,4 @@
+import { isValidBorrowerProfile } from '../domain/borrower-profile.js';
 import {
   BORROWER_WORKFLOW_CONTRACT_VERSION,
   type BorrowPart,
@@ -132,12 +133,16 @@ const isSafePositive = (value: unknown): value is number =>
 function isBorrower(value: unknown): value is Borrower {
   return (
     isRecord(value) &&
-    hasExactKeys(value, ['id', 'username', 'name', 'contact', 'type', 'archived']) &&
+    hasExactKeys(value, [
+      'id',
+      'playaName',
+      'fullName',
+      'phoneNumber',
+      'campDepartment',
+      'archived',
+    ]) &&
     isSafePositive(value.id) &&
-    typeof value.username === 'string' &&
-    typeof value.name === 'string' &&
-    typeof value.contact === 'string' &&
-    ['individual', 'camp_organization', 'other'].includes(String(value.type)) &&
+    isValidBorrowerProfile(value as unknown as Borrower) &&
     typeof value.archived === 'boolean'
   );
 }
@@ -1309,7 +1314,7 @@ export type CreationState = {
 export type CreationAction =
   | {
       type: 'change';
-      field: 'username' | 'name' | 'contact' | 'type';
+      field: 'playaName' | 'fullName' | 'phoneNumber' | 'campDepartment';
       value: string;
     }
   | { type: 'dispatch'; attemptKey: string }
@@ -1348,10 +1353,10 @@ export function createCreationState(values: BorrowerCreateRequest): CreationStat
 function sameBorrowerIdentity(left: Borrower, right: Borrower): boolean {
   return (
     left.id === right.id &&
-    left.username === right.username &&
-    left.name === right.name &&
-    left.contact === right.contact &&
-    left.type === right.type &&
+    left.playaName === right.playaName &&
+    left.fullName === right.fullName &&
+    left.phoneNumber === right.phoneNumber &&
+    left.campDepartment === right.campDepartment &&
     left.archived === right.archived
   );
 }
@@ -1366,11 +1371,6 @@ function creationAttempt(state: CreationState, key: string): 'pending' | 'unknow
 export function creationReducer(state: CreationState, action: CreationAction): CreationState {
   if (action.type === 'change') {
     if (state.phase.kind !== 'editing' && state.phase.kind !== 'conflicted') return state;
-    if (
-      action.field === 'type' &&
-      !['individual', 'camp_organization', 'other'].includes(action.value)
-    )
-      return state;
     return {
       ...state,
       values: { ...state.values, [action.field]: action.value },
@@ -1456,10 +1456,10 @@ export function creationReducer(state: CreationState, action: CreationAction): C
         !validUuid(action.loadId) ||
         state.usedLoadIds.includes(action.loadId) ||
         result.borrower.archived ||
-        result.borrower.username !== expected.username.trim() ||
-        result.borrower.name !== expected.name.trim() ||
-        result.borrower.contact !== expected.contact.trim() ||
-        result.borrower.type !== expected.type
+        result.borrower.playaName !== expected.playaName.trim() ||
+        result.borrower.fullName !== expected.fullName.trim() ||
+        result.borrower.phoneNumber !== expected.phoneNumber.trim() ||
+        result.borrower.campDepartment !== expected.campDepartment.trim()
       )
         return state;
       return {
@@ -1660,21 +1660,22 @@ function validCreationRequest(value: BorrowerCreateRequest): boolean {
     hasExactKeys(value as unknown as Record<string, unknown>, [
       'contractVersion',
       'ledgerEpoch',
-      'username',
-      'name',
-      'contact',
-      'type',
+      'playaName',
+      'fullName',
+      'phoneNumber',
+      'campDepartment',
     ]) &&
     value.contractVersion === BORROWER_WORKFLOW_CONTRACT_VERSION &&
     isSafePositive(value.ledgerEpoch) &&
-    value.username === value.username.trim() &&
-    value.username.length >= 2 &&
-    value.username.length <= 40 &&
-    value.name === value.name.trim() &&
-    value.name.length >= 1 &&
-    value.name.length <= 100 &&
-    value.contact === value.contact.trim() &&
-    value.contact.length <= 500 &&
-    ['individual', 'camp_organization', 'other'].includes(value.type)
+    value.playaName === value.playaName.trim() &&
+    value.playaName.length <= 100 &&
+    value.fullName === value.fullName.trim() &&
+    value.fullName.length >= 1 &&
+    value.fullName.length <= 100 &&
+    value.phoneNumber === value.phoneNumber.trim() &&
+    value.phoneNumber.length <= 100 &&
+    typeof value.campDepartment === 'string' &&
+    value.campDepartment.trim() === value.campDepartment &&
+    value.campDepartment.length <= 100
   );
 }

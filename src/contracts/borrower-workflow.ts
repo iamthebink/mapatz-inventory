@@ -40,13 +40,13 @@ export type BorrowerOperationRequest = {
 export type BorrowerCreateRequest = {
   contractVersion: typeof BORROWER_WORKFLOW_CONTRACT_VERSION;
   ledgerEpoch: number;
-  username: string;
-  name: string;
-  contact: string;
-  type: Borrower['type'];
+  playaName: string;
+  fullName: string;
+  phoneNumber: string;
+  campDepartment: string;
 };
 
-export type BorrowerMatchKind = 'username' | 'contact' | 'full_name';
+export type BorrowerMatchKind = 'playa_name' | 'phone_number' | 'full_name';
 
 export type BorrowerSearchSnapshot = {
   ledgerEpoch: number;
@@ -160,7 +160,7 @@ export type BorrowerOperationResult =
 
 export type BorrowerCreateValidation = {
   fieldErrors: Array<{
-    field: 'username' | 'name' | 'contact' | 'type';
+    field: 'playaName' | 'fullName' | 'phoneNumber' | 'campDepartment';
     code: string;
     message: string;
   }>;

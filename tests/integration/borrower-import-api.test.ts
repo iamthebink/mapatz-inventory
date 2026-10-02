@@ -12,7 +12,7 @@ afterEach(() => {
 async function workbook(invalid = false) {
   const book = new ExcelJS.Workbook();
   const sheet = book.addWorksheet('Borrowers');
-  sheet.addRow(['Username', 'Name', 'Contact', 'Type']);
+  sheet.addRow(['Playa Name', 'Full Name', 'Phone Number', 'Camp/Department']);
   sheet.addRow(['imported', 'Imported']);
   if (invalid) sheet.addRow(['bad', '']);
   return Buffer.from(await book.xlsx.writeBuffer());
@@ -64,9 +64,9 @@ describe('admin borrower workbook transport', () => {
   it('validates whole upload and transport, then atomically commits only current confirmation', async () => {
     const { agent, service } = fixture();
     const borrower = service.createBorrower({
-      username: 'removed',
-      name: 'Removed',
-      type: 'individual',
+      playaName: 'removed',
+      fullName: 'Removed',
+      campDepartment: '',
     });
     const item = service.createItem({ name: 'Tent', kind: 'non_consumable' });
     service.addStock(item.id, 5);
@@ -102,7 +102,7 @@ describe('admin borrower workbook transport', () => {
       .expect(({ body }) => expect(body).toMatchObject({ outcome: 'committed', returned: 3 }));
     await post('commit').set('x-borrower-import-confirmation', token).expect(200);
     expect(service.listItems()[0]?.available).toBe(5);
-    expect(service.listBorrowers().map((row) => row.username)).toEqual(['imported']);
+    expect(service.listBorrowers().map((row) => row.playaName)).toEqual(['imported']);
   });
   it('enforces the XLSX request size limit', async () => {
     const { agent } = fixture();

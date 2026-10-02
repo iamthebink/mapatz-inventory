@@ -12,7 +12,7 @@ function fixture() {
   const db = openDatabase(':memory:');
   databases.push(db);
   db.prepare(
-    "INSERT INTO borrowers(id,username,name,contact,type) VALUES (1,'one','Alpha','555','individual'),(2,'two','Beta','','individual')",
+    "INSERT INTO borrowers(id,playa_name,full_name,phone_number,camp_department) VALUES (1,'one','Alpha','555','individual'),(2,'two','Beta','','individual')",
   ).run();
   db.prepare(
     "INSERT INTO items(id,name,kind) VALUES (1,'Chairs','non_consumable'),(2,'Drills','non_consumable')",
@@ -67,11 +67,11 @@ describe('period summary ledger arithmetic', () => {
     add('written_off', 1, 1, 1, monday);
     add('checked_out', 2, 1, 2, monday);
     add('returned_usable', 1, 2, 3, monday);
-    db.prepare('UPDATE borrowers SET archived=1,name=? WHERE id=1').run('Archived Alpha');
+    db.prepare('UPDATE borrowers SET archived=1,full_name=? WHERE id=1').run('Archived Alpha');
     db.prepare('UPDATE items SET archived=1,name=? WHERE id=2').run('Archived Drill');
     const rows = service.periodSummary('2026-09-21', '2026-09-21', now).borrowers;
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.borrower).toMatchObject({ id: 1, name: 'Archived Alpha', archived: true });
+    expect(rows[0]?.borrower).toMatchObject({ id: 1, fullName: 'Archived Alpha', archived: true });
     expect(rows[0]?.total).toBe(3);
     expect(rows[0]?.items).toEqual([
       { itemId: 2, name: 'Archived Drill', quantity: 2 },

@@ -13,15 +13,15 @@ test('opens the borrower desk directly through the frontdesk alias', async ({ pa
   );
 });
 
-async function openSeededCard(page: Page, username: string) {
+async function openSeededCard(page: Page, playaName: string) {
   await page.goto('/management');
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await expect(search).toBeFocused();
-  await search.fill(username);
+  await search.fill(playaName);
   const row = page
     .locator('.borrower-directory-row')
-    .filter({ has: page.getByText(username, { exact: true }) });
+    .filter({ has: page.getByText(playaName, { exact: true }) });
   await expect(row).toBeVisible();
   await row.getByRole('button', { name: /פתיחת כרטיס שואל/ }).press('Enter');
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
@@ -102,7 +102,7 @@ async function confirmSave(page: Page) {
 }
 
 test('protects staged borrower-card work when switching to consumables', async ({ page, seed }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name);
   const switchToConsumables = page.locator('[aria-controls="desk-consumables-panel"]');
   // The card modal isolates the switch from pointer input; dispatch checks the transition guard itself.
@@ -138,21 +138,21 @@ test('browses, filters, and opens the responsive borrower directory without dial
   await expect(
     page
       .locator('.borrower-directory-row')
-      .filter({ has: page.getByText(seed.borrower.username, { exact: true }) }),
+      .filter({ has: page.getByText(seed.borrower.playaName, { exact: true }) }),
   ).toBeVisible();
   await expect(page.getByRole('listbox')).toHaveCount(0);
   await expect(header.getByRole('button', { name: 'יצירת שואל חדש' })).toBeVisible();
   await expect(page.locator('.borrower-search-row').getByRole('button')).toHaveCount(0);
 
-  await search.fill(seed.archivedBorrower.username);
+  await search.fill(seed.archivedBorrower.playaName);
   const archivedNotice = page.getByRole('complementary', { name: 'התאמות בארכיון' });
-  await expect(archivedNotice).toContainText(seed.archivedBorrower.name);
+  await expect(archivedNotice).toContainText(seed.archivedBorrower.fullName);
   await expect(archivedNotice.getByRole('button')).toHaveCount(0);
 
-  await search.fill(seed.borrower.username);
+  await search.fill(seed.borrower.playaName);
   const activeRow = page
     .locator('.borrower-directory-row')
-    .filter({ has: page.getByText(seed.borrower.username, { exact: true }) });
+    .filter({ has: page.getByText(seed.borrower.playaName, { exact: true }) });
   await expect(activeRow).toBeVisible();
   await page.setViewportSize({ width: 320, height: 720 });
   const [headingBox, createBox] = await Promise.all([
@@ -206,7 +206,7 @@ test('keeps an emphasized maximum-length item identity legible at minimum width'
   expect(stocked.ok()).toBe(true);
 
   await page.setViewportSize({ width: 320, height: 720 });
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await itemSearch.fill(longItemName);
   await itemSearch.press('ArrowDown');
@@ -229,7 +229,7 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
   seed,
   openLedger,
 }) => {
-  const borrowerSearch = await openSeededCard(page, seed.borrower.username);
+  const borrowerSearch = await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await stageReturn(page, seed.item.name, '1', '1');
 
@@ -273,7 +273,7 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name);
   const search = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await search.fill(seed.consumable.name);
@@ -393,7 +393,7 @@ test('stages loss and dependent found return from the borrower card with keyboar
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   const more = page.getByRole('button', { name: 'אפשרויות נוספות' });
   await expect(more).not.toContainText('…');
   await expect(page.getByRole('menuitem', { name: 'סמן כאבוד' })).toHaveCount(0);
@@ -479,7 +479,7 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   openLedger,
 }) => {
   await page.setViewportSize({ width: 320, height: 720 });
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   const heldTable = page.locator('.holdings-section').getByRole('table');
   await expect(heldTable).toHaveAccessibleName('ציוד אצל השואל');
   const quantityHasRightBreathingRoom = (table: Locator) =>
@@ -597,11 +597,11 @@ test('reopens the card for another operation after a reviewed save', async ({
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageReturn(page, seed.item.name);
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
@@ -637,7 +637,7 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
     await route.continue();
   });
 
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
 
@@ -683,7 +683,7 @@ test('keeps a confirmed close in recovery until a newer ledger epoch is loaded',
     });
   });
 
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
 
@@ -705,7 +705,7 @@ test('resolves an ambiguous committed response after reload without duplicating 
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await page.route(`**/api/borrowers/${seed.borrower.id}/operations`, async (route) => {
     await route.fetch();
@@ -749,7 +749,7 @@ test('restores focus to the return trigger after dismissing its quantity modal',
   page,
   seed,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   const returnButton = page.getByRole('button', { name: 'החזרת ציוד' });
   await returnButton.click();
   const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
@@ -770,7 +770,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   openLedger,
 }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name, '3');
   await stageReturn(page, seed.item.name, '2');
   await stageBorrow(page, seed.archiveItem.name);
@@ -865,7 +865,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   // Closing consumes the history sentinel asynchronously; finish that traversal
   // before starting a new document navigation.
   await page.waitForFunction(() => !history.state?.mapatzBorrowerWorkflow);
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name);
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
@@ -884,7 +884,7 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageReturn(page, seed.item.name);
   const more = page.getByRole('button', { name: 'אפשרויות נוספות' });
   await more.press('ArrowDown');
@@ -1024,7 +1024,7 @@ test('rejects an operation without writes when the borrower becomes archived', a
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name);
   const database = openLedger();
   expect((await request.post(`/__e2e__/archive-borrower/${seed.borrower.id}`)).ok()).toBeTruthy();
@@ -1050,7 +1050,7 @@ test('retains an unknown envelope through authorization loss and clears it after
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   const endpoint = `**/api/borrowers/${seed.borrower.id}/operations`;
   await page.route(endpoint, (route) => route.abort('connectionfailed'));
@@ -1108,10 +1108,10 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const create = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
-  const username = `created-${Date.now()}`;
-  await create.getByLabel('שם משתמש').fill(username);
+  const playaName = `created-${Date.now()}`;
+  await create.getByLabel('שם פלאיה').fill(playaName);
   await create.getByLabel('שם מלא').fill('שואל שנוצר');
-  await create.getByLabel('פרטי קשר').fill('050-123');
+  await create.getByLabel('מספר טלפון').fill('050-123');
   const createAttempts: Array<{ key: string; body: unknown }> = [];
   let loseCreateResponse = true;
   await page.route('**/api/borrowers', async (route) => {
@@ -1172,8 +1172,8 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   expect(
     rows<{ count: number }>(
       database,
-      'SELECT COUNT(*) count FROM borrowers WHERE username=?',
-      username,
+      'SELECT COUNT(*) count FROM borrowers WHERE playa_name=?',
+      playaName,
     )[0]?.count,
   ).toBe(1);
   expect(
@@ -1194,17 +1194,18 @@ test('keeps duplicate borrower values and archived-match guidance with one error
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const create = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
-  const username = create.getByLabel('שם משתמש');
-  await username.fill(seed.archivedBorrower.username);
-  await create.getByLabel('שם מלא').fill(seed.archivedBorrower.name);
-  await create.getByLabel('פרטי קשר').fill('059-duplicate');
+  const playaName = create.getByLabel('שם פלאיה');
+  await playaName.fill(seed.archivedBorrower.playaName);
+  await create.getByLabel('שם מלא').fill(seed.archivedBorrower.fullName);
+  await create.getByLabel('מספר טלפון').fill(seed.archivedBorrower.phoneNumber);
+  await create.getByLabel('מחנה / מחלקה').fill(seed.archivedBorrower.campDepartment);
   await create.getByRole('button', { name: 'יצירה' }).click();
 
   await expect(create).toBeVisible();
-  await expect(username).toHaveValue(seed.archivedBorrower.username);
-  await expect(username).toBeFocused();
-  await expect(create.getByText('Username matches an existing borrower')).toBeVisible();
-  await expect(create.getByText(`${seed.archivedBorrower.name} — בארכיון`)).toBeVisible();
+  await expect(playaName).toHaveValue(seed.archivedBorrower.playaName);
+  await expect(create.getByLabel('שם מלא')).toBeFocused();
+  await expect(create.getByText('כבר קיים שואל עם אותם פרטים')).toBeVisible();
+  await expect(create.getByText(`${seed.archivedBorrower.fullName} — בארכיון`)).toBeVisible();
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast')).toContainText('נדרשת תשומת לב');
   expect(
@@ -1225,7 +1226,7 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   page,
   seed,
 }) => {
-  const borrowerSearch = await openSeededCard(page, seed.borrower.username);
+  const borrowerSearch = await openSeededCard(page, seed.borrower.playaName);
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await itemSearch.fill(seed.stockItem.name);
   await page.getByRole('option', { name: new RegExp(seed.stockItem.name) }).click();
@@ -1271,7 +1272,7 @@ test('marks lost equipment at the borrower desk without offering reversal', asyn
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   const holding = page.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await holding.getByRole('button', { name: 'אפשרויות נוספות' }).click();
   await page.getByRole('menuitem', { name: 'סמן כאבוד' }).click();
@@ -1296,7 +1297,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   seed,
   openLedger,
 }) => {
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   const holding = page.getByRole('rowheader', { name: seed.item.name }).locator('..');
   await holding.getByRole('button', { name: 'אפשרויות נוספות' }).click();
   await page.getByRole('menuitem', { name: 'סמן כאבוד' }).click();
@@ -1305,7 +1306,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await lostDialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
 
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await expect(page.getByRole('button', { name: 'החזרת ציוד' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'אפשרויות נוספות' })).toHaveCount(0);
   await page.getByText('ציוד אבוד של השואל').click();
@@ -1361,7 +1362,7 @@ test('retires legacy presentation while preserving borrower controls and respons
   await expect(page.getByRole('button', { name: 'החזרה' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'סמן אבוד' })).toHaveCount(0);
 
-  await openSeededCard(page, seed.borrower.username);
+  await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   const staged: Locator = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   const holdings: Locator = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');

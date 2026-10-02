@@ -19,14 +19,14 @@ function checkoutDatabaseForReopen() {
   const db = openDatabase(filename);
   const inventory = new InventoryService(db);
   const borrower = inventory.createBorrower({
-    username: 'checkout-owner',
-    name: 'Checkout Owner',
-    type: 'individual',
+    playaName: 'checkout-owner',
+    fullName: 'Checkout Owner',
+    campDepartment: '',
   });
   const otherBorrower = inventory.createBorrower({
-    username: 'other-owner',
-    name: 'Other Owner',
-    type: 'individual',
+    playaName: 'other-owner',
+    fullName: 'Other Owner',
+    campDepartment: '',
   });
   const item = inventory.createItem({ name: 'Checkout integrity item', kind: 'non_consumable' });
   inventory.addStock(item.id, 3);
@@ -76,9 +76,9 @@ describe('inventory domain', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const borrower = inventory.createBorrower({
-      username: 'total-owner',
-      name: 'Total Owner',
-      type: 'individual',
+      playaName: 'total-owner',
+      fullName: 'Total Owner',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Combined total', kind: 'non_consumable' });
     inventory.addStock(item.id, Number.MAX_SAFE_INTEGER);
@@ -130,9 +130,9 @@ describe('inventory domain', () => {
     let db = openDatabase(filename);
     let inventory = new InventoryService(db);
     const borrower = inventory.createBorrower({
-      username: 'test',
-      name: 'Test',
-      type: 'individual',
+      playaName: 'test',
+      fullName: 'Test',
+      campDepartment: '',
     });
     const item = inventory.createItem({ name: 'Radio case', kind: 'non_consumable' });
     inventory.addStock(item.id, 3);
@@ -246,6 +246,10 @@ describe('inventory domain', () => {
     cleanup.push(directory);
     const filename = join(directory, 'inventory.sqlite');
     const legacy = openDatabase(filename);
+    legacy.function('normalize_borrower_text', { deterministic: true }, (value) =>
+      String(value).trim().toLowerCase(),
+    );
+    legacy.function('normalize_borrower_phone', { deterministic: true }, (value) => String(value));
     legacy.exec('ALTER TABLE credentials DROP COLUMN recoverable_password');
     legacy.prepare('DELETE FROM migrations WHERE version=8').run();
     legacy.close();
@@ -264,6 +268,10 @@ describe('inventory domain', () => {
     cleanup.push(directory);
     const filename = join(directory, 'inventory.sqlite');
     const legacy = new DatabaseSync(filename);
+    legacy.function('normalize_borrower_text', { deterministic: true }, (value) =>
+      String(value).trim().toLowerCase(),
+    );
+    legacy.function('normalize_borrower_phone', { deterministic: true }, (value) => String(value));
     legacy.exec(
       readFileSync(new URL('../../src/db/migrations/001_initial.sql', import.meta.url), 'utf8'),
     );
@@ -396,9 +404,9 @@ describe('inventory domain', () => {
     const inventory = new InventoryService(db);
     const item = inventory.createItem({ name: 'פטיש', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'Alice',
-      name: 'אליס',
-      type: 'individual',
+      playaName: 'Alice',
+      fullName: 'אליס',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 2);
     expect(() => inventory.checkout(item.id, borrower.id, 3)).toThrow(
@@ -430,7 +438,11 @@ describe('inventory domain', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const item = inventory.createItem({ name: 'מסור', kind: 'non_consumable' });
-    const borrower = inventory.createBorrower({ username: 'builder', name: 'בונה', type: 'other' });
+    const borrower = inventory.createBorrower({
+      playaName: 'builder',
+      fullName: 'בונה',
+      campDepartment: 'מחנה אחר',
+    });
     inventory.addStock(item.id, 3);
     const checkoutId = inventory.checkout(item.id, borrower.id, 3);
     inventory.markLost(checkoutId, 1, true);
@@ -457,9 +469,9 @@ describe('inventory domain', () => {
     const inventory = new InventoryService(db);
     const item = inventory.createItem({ name: 'Archival lifecycle', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'archive-lifecycle',
-      name: 'Archive lifecycle',
-      type: 'other',
+      playaName: 'archive-lifecycle',
+      fullName: 'Archive lifecycle',
+      campDepartment: 'מחנה אחר',
     });
     inventory.addStock(item.id, 4);
     const checkout = inventory.checkout(item.id, borrower.id, 4);
@@ -559,9 +571,9 @@ describe('inventory domain', () => {
     const inventory = new InventoryService(db);
     const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'repair-user',
-      name: 'מתקן',
-      type: 'individual',
+      playaName: 'repair-user',
+      fullName: 'מתקן',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 1);
     const checkout = inventory.checkout(item.id, borrower.id, 1);

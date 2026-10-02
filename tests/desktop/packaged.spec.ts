@@ -263,10 +263,10 @@ test('lost response survives replacement, replays once, and retains credential a
       const body = {
         contractVersion: 1,
         ledgerEpoch: 1,
-        username: 'recovered',
-        name: 'שואל משוחזר',
-        contact: '',
-        type: 'individual',
+        playaName: 'recovered',
+        fullName: 'שואל משוחזר',
+        phoneNumber: '',
+        campDepartment: '',
       };
       localStorage.setItem(
         `mapatz:frozen-attempt:v1:${idempotencyKey}`,
@@ -506,10 +506,10 @@ test('packaged inventory borrow/return, failed command rollback, and recovery wo
           {
             contractVersion: 1,
             ledgerEpoch: 1,
-            username: 'camp-user',
-            name: 'שואל',
-            contact: '',
-            type: 'individual',
+            playaName: 'camp-user',
+            fullName: 'שואל',
+            phoneNumber: '',
+            campDepartment: '',
           },
           crypto.randomUUID(),
         )
@@ -660,10 +660,10 @@ test('dirty staged quit requires discard and saving quit keeps backend alive', a
         {
           contractVersion: 1,
           ledgerEpoch: 1,
-          username: 'quit-test',
-          name: 'בדיקת יציאה',
-          contact: '',
-          type: 'individual',
+          playaName: 'quit-test',
+          fullName: 'בדיקת יציאה',
+          phoneNumber: '',
+          campDepartment: '',
         },
         crypto.randomUUID(),
       );
@@ -907,10 +907,10 @@ test('normal quit lets an accepted command finish before closing SQLite', async 
   const body = JSON.stringify({
     contractVersion: 1,
     ledgerEpoch: 1,
-    username: 'drained-command',
-    name: 'Drain',
-    contact: '',
-    type: 'individual',
+    playaName: 'drained-command',
+    fullName: 'Drain',
+    phoneNumber: '',
+    campDepartment: '',
   });
   const key = '00000000-0000-4000-8000-000000000099';
   let response = '';
@@ -937,7 +937,9 @@ test('normal quit lets an accepted command finish before closing SQLite', async 
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(join(profile, 'inventory.sqlite'), { readOnly: true });
     expect(
-      db.prepare("SELECT count(*) AS count FROM borrowers WHERE username='drained-command'").get(),
+      db
+        .prepare("SELECT count(*) AS count FROM borrowers WHERE playa_name='drained-command'")
+        .get(),
     ).toEqual({ count: 1 });
     db.close();
   } finally {

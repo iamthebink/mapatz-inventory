@@ -85,10 +85,10 @@ function setup(
       }
       const borrower: Borrower = {
         id: 44,
-        name: String(body.name),
-        username: String(body.username),
-        contact: String(body.contact),
-        type: body.type as Borrower['type'],
+        fullName: String(body.fullName),
+        playaName: String(body.playaName),
+        phoneNumber: String(body.phoneNumber),
+        campDepartment: String(body.campDepartment),
         archived: false,
       };
       borrowers = [...borrowers, borrower];
@@ -165,24 +165,24 @@ describe('inventory management in App', () => {
   it('creates a borrower from a dialog and refreshes the catalog', async () => {
     const { user, requests } = setup();
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
-    expect(screen.queryByRole('textbox', { name: 'שם משתמש' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'שם פלאיה' })).toBeNull();
     const trigger = screen.getByRole('button', { name: 'יצירת שואל חדש' });
     await user.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'יצירת שואל חדש' });
-    expect(document.activeElement).toBe(within(dialog).getByRole('textbox', { name: 'שם' }));
-    await user.type(within(dialog).getByRole('textbox', { name: 'שם' }), 'נועה');
-    await user.type(within(dialog).getByRole('textbox', { name: 'שם משתמש' }), 'noa');
-    await user.type(within(dialog).getByRole('textbox', { name: 'פרטי קשר' }), '0501234567');
-    await user.selectOptions(within(dialog).getByRole('combobox', { name: 'סוג' }), 'other');
+    expect(document.activeElement).toBe(within(dialog).getByRole('textbox', { name: 'שם מלא' }));
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם מלא' }), 'נועה');
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם פלאיה' }), 'noa');
+    await user.type(within(dialog).getByRole('textbox', { name: 'מספר טלפון' }), '0501234567');
+    await user.type(within(dialog).getByRole('combobox', { name: 'מחנה / מחלקה' }), 'מחנה אחר');
     await user.click(within(dialog).getByRole('button', { name: 'יצירה' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(requests.find((request) => request.path === '/api/borrowers')?.body).toEqual({
       contractVersion: 1,
       ledgerEpoch: 1,
-      name: 'נועה',
-      username: 'noa',
-      contact: '0501234567',
-      type: 'other',
+      fullName: 'נועה',
+      playaName: 'noa',
+      phoneNumber: '0501234567',
+      campDepartment: 'מחנה אחר',
     });
     expect(screen.getByRole('cell', { name: 'נועה' })).toBeTruthy();
     expect(screen.getByText('הפעולה הושלמה בהצלחה')).toBeTruthy();
@@ -206,15 +206,15 @@ describe('inventory management in App', () => {
     const trigger = screen.getByRole('button', { name: 'יצירת שואל חדש' });
     await user.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'יצירת שואל חדש' });
-    const name = within(dialog).getByRole('textbox', { name: 'שם' });
+    const name = within(dialog).getByRole('textbox', { name: 'שם מלא' });
     await user.type(name, 'נועה');
-    await user.type(within(dialog).getByRole('textbox', { name: 'שם משתמש' }), 'noa');
-    await user.type(within(dialog).getByRole('textbox', { name: 'פרטי קשר' }), '0501234567');
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם פלאיה' }), 'noa');
+    await user.type(within(dialog).getByRole('textbox', { name: 'מספר טלפון' }), '0501234567');
     await user.click(within(dialog).getByRole('button', { name: 'יצירה' }));
     await waitFor(() => expect(rejectCreation).toBeTypeOf('function'));
     expect(name.closest('fieldset')?.disabled).toBe(true);
     expect(within(dialog).getByRole('button', { name: 'ביטול' })).toHaveProperty('disabled', true);
-    fireEvent.submit(within(dialog).getByRole('textbox', { name: 'שם' }).closest('form')!);
+    fireEvent.submit(within(dialog).getByRole('textbox', { name: 'שם מלא' }).closest('form')!);
     await user.keyboard('{Escape}');
     fireEvent.mouseDown(dialog.parentElement!);
     window.history.replaceState({}, '', '/summary');
@@ -225,7 +225,7 @@ describe('inventory management in App', () => {
     rejectCreation(response({ error: 'validation_error', message: 'שם המשתמש כבר קיים' }, 400));
     await screen.findByText('שם המשתמש כבר קיים');
     expect(name).toHaveProperty('value', 'נועה');
-    expect(within(dialog).getByRole('textbox', { name: 'שם משתמש' })).toHaveProperty(
+    expect(within(dialog).getByRole('textbox', { name: 'שם פלאיה' })).toHaveProperty(
       'value',
       'noa',
     );
@@ -233,16 +233,16 @@ describe('inventory management in App', () => {
     await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     await user.click(trigger);
-    expect(screen.getByRole('textbox', { name: 'שם' })).toHaveProperty('value', '');
+    expect(screen.getByRole('textbox', { name: 'שם מלא' })).toHaveProperty('value', '');
   });
 
   it('closes after committed creation even when catalog refresh fails', async () => {
     const { user, requests } = setup('admin', '/management', [hammer], [], false, undefined, true);
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
     await user.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
-    await user.type(screen.getByRole('textbox', { name: 'שם' }), 'נועה');
-    await user.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'noa');
-    await user.type(screen.getByRole('textbox', { name: 'פרטי קשר' }), '0501234567');
+    await user.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'נועה');
+    await user.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), 'noa');
+    await user.type(screen.getByRole('textbox', { name: 'מספר טלפון' }), '0501234567');
     await user.click(screen.getByRole('button', { name: 'יצירה' }));
     await screen.findByText(/הפעולה הושלמה, אך התצוגה לא התרעננה/);
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -281,10 +281,10 @@ describe('inventory management in App', () => {
   it('keeps borrower deletion unavailable when the browser storage getter throws', async () => {
     const borrower: Borrower = {
       id: 43,
-      username: 'storage-user',
-      name: 'Storage User',
-      contact: '',
-      type: 'individual',
+      playaName: 'storage-user',
+      fullName: 'Storage User',
+      phoneNumber: '',
+      campDepartment: '',
       archived: false,
     };
     const { user, requests } = setup('admin', '/management', [hammer], [borrower], true);
@@ -483,17 +483,17 @@ describe('inventory management in App', () => {
   it('confirms borrower deletion explicitly and lets an archived borrower deletion be cancelled', async () => {
     const activeBorrower: Borrower = {
       id: 41,
-      username: 'active-user',
-      name: 'Active User',
-      contact: '050',
-      type: 'individual',
+      playaName: 'active-user',
+      fullName: 'Active User',
+      phoneNumber: '050',
+      campDepartment: 'Camp North',
       archived: false,
     };
     const archivedBorrower: Borrower = {
       ...activeBorrower,
       id: 42,
-      username: 'archived-user',
-      name: 'Archived User',
+      playaName: 'archived-user',
+      fullName: 'Archived User',
       archived: true,
     };
     const { user, requests } = setup(
@@ -515,6 +515,8 @@ describe('inventory management in App', () => {
       await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Active User?' }),
     ).toBeTruthy();
     expect(screen.getByText(/פרטי הקשר שלו/)).toBeTruthy();
+    expect(screen.getByRole('alertdialog').textContent).toContain('050');
+    expect(screen.getByRole('alertdialog').textContent).toContain('Camp North');
     await user.click(screen.getByRole('button', { name: 'ביטול' }));
     expect(requests.some((request) => request.path.endsWith('/delete'))).toBe(false);
 
@@ -532,8 +534,10 @@ describe('inventory management in App', () => {
       expectedStateRevision: 7,
       expectedOutstanding: 0,
       expectedLost: 0,
-      expectedName: activeBorrower.name,
-      expectedUsername: activeBorrower.username,
+      expectedFullName: activeBorrower.fullName,
+      expectedPlayaName: activeBorrower.playaName,
+      expectedPhoneNumber: activeBorrower.phoneNumber,
+      expectedCampDepartment: activeBorrower.campDepartment,
     });
 
     await user.click(
@@ -575,4 +579,76 @@ describe('inventory management in App', () => {
     await user.click(await screen.findByRole('button', { name: 'ביטול השינויים' }));
     await waitFor(() => expect(window.location.pathname).toBe('/summary'));
   });
+});
+
+it.each(['immediate', 'blur'])(
+  'warns on creation and deduplicates equivalent evidence (%s)',
+  async (mode) => {
+    const existing: Borrower = {
+      id: 41,
+      fullName: 'Ada',
+      playaName: '',
+      phoneNumber: '050',
+      campDepartment: 'North',
+      archived: false,
+    };
+    const { user, requests } = setup(
+      'admin',
+      '/management',
+      [hammer],
+      [existing],
+      false,
+      () => new Promise<Response>(() => {}),
+    );
+    await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+    await user.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
+    const dialog = screen.getByRole('dialog', { name: 'יצירת שואל חדש' });
+    const name = within(dialog).getByRole('textbox', { name: 'שם מלא' });
+    fireEvent.change(name, { target: { value: 'Ａda' } });
+    if (mode === 'immediate') fireEvent.submit(name.closest('form')!);
+    else fireEvent.blur(name);
+    const warning = await screen.findByText('נמצאו שואלים עם פרטים דומים');
+    const originalToast = warning.closest('[role="status"]') ?? warning.parentElement;
+    fireEvent.change(name, { target: { value: 'Ada' } });
+    fireEvent.blur(name);
+    expect(
+      screen.getByText('נמצאו שואלים עם פרטים דומים').closest('[role="status"]') ??
+        screen.getByText('נמצאו שואלים עם פרטים דומים').parentElement,
+    ).toBe(originalToast);
+    if (mode === 'blur') {
+      within(dialog).getByRole('button', { name: 'יצירה' }).focus();
+      await user.keyboard('{Enter}');
+    }
+    await waitFor(() => expect(requests.some(({ path }) => path === '/api/borrowers')).toBe(true));
+    expect(screen.getByText('נמצאו שואלים עם פרטים דומים')).toBeTruthy();
+  },
+);
+
+it('preserves partial-match guidance in final successful fast-creation feedback', async () => {
+  const { user } = setup(
+    'admin',
+    '/management',
+    [hammer],
+    [
+      {
+        id: 41,
+        fullName: 'Ada',
+        playaName: '',
+        phoneNumber: '050',
+        campDepartment: 'North',
+        archived: false,
+      },
+    ],
+  );
+  await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
+  await user.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
+  const name = screen.getByRole('textbox', { name: 'שם מלא' });
+  fireEvent.change(name, { target: { value: 'Ada' } });
+  fireEvent.submit(name.closest('form')!);
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'יצירת שואל חדש' })).toBeNull());
+  const toast = document.querySelector('.toast')!;
+  expect(toast.textContent).toContain('הפעולה הושלמה בהצלחה');
+  expect(toast.textContent).toContain('נמצאו שואלים עם פרטים דומים');
+  expect(toast.textContent).toContain('050');
+  expect(toast.textContent).toContain('North');
 });

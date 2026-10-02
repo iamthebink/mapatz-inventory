@@ -16,9 +16,9 @@ function fixture() {
   databases.push(db);
   const inventory = new InventoryService(db);
   const borrower = inventory.createBorrower({
-    username: 'borrower',
-    name: 'Borrower',
-    type: 'individual',
+    playaName: 'borrower',
+    fullName: 'Borrower',
+    campDepartment: '',
   });
   return { db, inventory, borrower };
 }
@@ -536,10 +536,10 @@ describe('atomic borrower commands', () => {
     commands.createBorrowerCommand(key(13), {
       contractVersion: 1,
       ledgerEpoch: 1,
-      username: 'counted-create',
-      name: 'Counted Create',
-      contact: '',
-      type: 'individual',
+      playaName: 'counted-create',
+      fullName: 'Counted Create',
+      phoneNumber: '',
+      campDepartment: '',
     });
     expect(counted.beginCount()).toBe(2);
   });
@@ -836,9 +836,9 @@ describe('atomic borrower commands', () => {
     const item = inventory.createItem({ name: 'Stock', kind: 'non_consumable' });
     const otherItem = inventory.createItem({ name: 'Other stock', kind: 'non_consumable' });
     const otherBorrower = inventory.createBorrower({
-      username: 'other-subject',
-      name: 'Other Subject',
-      type: 'individual',
+      playaName: 'other-subject',
+      fullName: 'Other Subject',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 3);
     inventory.addStock(otherItem.id, 2);
@@ -888,10 +888,10 @@ describe('atomic borrower commands', () => {
       inventory.createBorrowerCommand(key(3), {
         contractVersion: 1,
         ledgerEpoch: 1,
-        username: 'cross-command',
-        name: 'Cross Command',
-        contact: '',
-        type: 'other',
+        playaName: 'cross-command',
+        fullName: 'Cross Command',
+        phoneNumber: '',
+        campDepartment: 'מחנה אחר',
       }),
     ).toMatchObject({ error: 'idempotency_key_reused' });
     expect({
@@ -980,10 +980,10 @@ describe('atomic borrower commands', () => {
     const request = {
       contractVersion: 1 as const,
       ledgerEpoch: 1,
-      username: '  New User  ',
-      name: ' New Name ',
-      contact: ' 050 ',
-      type: 'other' as const,
+      playaName: '  New User  ',
+      fullName: ' New Name ',
+      phoneNumber: ' 050 ',
+      campDepartment: 'מחנה אחר' as const,
     };
     const created = inventory.createBorrowerCommand(key(6), request);
     expect(created).toMatchObject({ outcome: 'committed', replayed: false });
@@ -992,36 +992,32 @@ describe('atomic borrower commands', () => {
 
     const conflict = inventory.createBorrowerCommand(key(7), {
       ...request,
-      username: 'ＮＥＷ USER',
+      playaName: 'ＮＥＷ USER',
     });
     expect(conflict).toMatchObject({
       error: 'borrower_conflict',
-      fieldErrors: [
-        { field: 'username', code: 'username_conflict' },
-        { field: 'contact', code: 'contact_conflict' },
-        { field: 'name', code: 'full_name_conflict' },
-      ],
-      matches: [{ status: 'active', matchedBy: 'username' }],
+      fieldErrors: [{ field: 'fullName', code: 'duplicate_profile' }],
+      matches: [{ status: 'active', matchedBy: 'playa_name' }],
     });
     expect(db.prepare('SELECT COUNT(*) count FROM borrowers').get()).toEqual({ count: 2 });
 
     const archived = inventory.createBorrower({
-      username: 'archived-match',
-      name: 'Archived Match',
-      contact: 'old-contact',
-      type: 'individual',
+      playaName: 'archived-match',
+      fullName: 'Archived Match',
+      phoneNumber: 'old-phoneNumber',
+      campDepartment: '',
     });
     inventory.archiveBorrower(archived.id, true);
     expect(
       inventory.createBorrowerCommand(key(11), {
         ...request,
-        username: 'archived-match',
-        name: 'Different',
-        contact: 'different',
+        playaName: 'archived-match',
+        fullName: 'Different',
+        phoneNumber: 'different',
       }),
     ).toMatchObject({
-      fieldErrors: [{ field: 'username' }],
-      matches: [{ borrower: { id: archived.id }, status: 'archived', matchedBy: 'username' }],
+      outcome: 'committed',
+      borrower: { playaName: archived.playaName, fullName: 'Different' },
     });
 
     db.exec(
@@ -1031,12 +1027,12 @@ describe('atomic borrower commands', () => {
     expect(() =>
       inventory.createBorrowerCommand(key(8), {
         ...request,
-        username: 'rolled-back',
-        name: 'Rolled Back',
+        playaName: 'rolled-back',
+        fullName: 'Rolled Back',
       }),
     ).toThrow(/receipt failure/);
     expect(
-      db.prepare("SELECT COUNT(*) count FROM borrowers WHERE username='rolled-back'").get(),
+      db.prepare("SELECT COUNT(*) count FROM borrowers WHERE playa_name='rolled-back'").get(),
     ).toEqual({
       count: 0,
     });
@@ -1047,10 +1043,10 @@ describe('atomic borrower commands', () => {
     const request = {
       contractVersion: 1 as const,
       ledgerEpoch: 1,
-      username: borrower.username,
-      name: 'Requested Name',
-      contact: 'requested-contact',
-      type: 'individual' as const,
+      playaName: borrower.playaName,
+      fullName: borrower.fullName,
+      phoneNumber: borrower.phoneNumber,
+      campDepartment: '' as const,
     };
     expect(inventory.createBorrowerCommand(key(15), request)).toMatchObject({
       error: 'borrower_conflict',
@@ -1067,10 +1063,10 @@ describe('atomic borrower commands', () => {
     });
 
     inventory.updateBorrower(borrower.id, {
-      username: 'released-username',
-      name: borrower.name,
-      contact: borrower.contact,
-      type: borrower.type,
+      playaName: 'released-playaName',
+      fullName: borrower.fullName,
+      phoneNumber: borrower.phoneNumber,
+      campDepartment: borrower.campDepartment,
     });
     expect(inventory.createBorrowerCommand(key(15), request)).toMatchObject({
       error: 'borrower_create_attempt_rejected',
@@ -1091,10 +1087,10 @@ describe('atomic borrower commands', () => {
     const createRequest = {
       contractVersion: 1 as const,
       ledgerEpoch: 1,
-      username: 'deleted-private-user',
-      name: 'Deleted Private Name',
-      contact: 'private-contact',
-      type: 'individual' as const,
+      playaName: 'deleted-private-user',
+      fullName: 'Deleted Private Name',
+      phoneNumber: 'private-phoneNumber',
+      campDepartment: '' as const,
     };
     const created = inventory.createBorrowerCommand(createKey, createRequest);
     expect(created).toMatchObject({ outcome: 'committed' });
@@ -1125,8 +1121,10 @@ describe('atomic borrower commands', () => {
       expectedStateRevision: status.stateRevision,
       expectedOutstanding: 0,
       expectedLost: 0,
-      expectedName: borrower.name,
-      expectedUsername: borrower.username,
+      expectedFullName: borrower.fullName,
+      expectedPlayaName: borrower.playaName,
+      expectedPhoneNumber: borrower.phoneNumber,
+      expectedCampDepartment: borrower.campDepartment,
     });
 
     const createRetry = inventory.createBorrowerCommand(createKey, createRequest);
@@ -1142,9 +1140,9 @@ describe('atomic borrower commands', () => {
       idempotencyKey: operationKey,
     });
     for (const result of [createRetry, operationRetry]) {
-      expect(JSON.stringify(result)).not.toContain(borrower.username);
-      expect(JSON.stringify(result)).not.toContain(borrower.name);
-      expect(JSON.stringify(result)).not.toContain(borrower.contact);
+      expect(JSON.stringify(result)).not.toContain(borrower.playaName);
+      expect(JSON.stringify(result)).not.toContain(borrower.fullName);
+      expect(JSON.stringify(result)).not.toContain(borrower.phoneNumber);
     }
   });
 });

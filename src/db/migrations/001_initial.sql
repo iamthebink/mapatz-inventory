@@ -30,12 +30,17 @@ CREATE TABLE IF NOT EXISTS item_aliases (
 );
 CREATE TABLE IF NOT EXISTS borrowers (
   id INTEGER PRIMARY KEY,
-  username TEXT NOT NULL COLLATE NOCASE UNIQUE CHECK (length(trim(username)) BETWEEN 2 AND 40),
-  name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
-  contact TEXT NOT NULL DEFAULT '' CHECK (length(contact) <= 500),
-  type TEXT NOT NULL CHECK (type IN ('individual','camp_organization','other')),
+  playa_name TEXT NOT NULL DEFAULT '' CHECK (length(playa_name) <= 100),
+  full_name TEXT NOT NULL CHECK (length(normalize_borrower_text(full_name)) > 0 AND length(full_name) <= 100),
+  phone_number TEXT NOT NULL DEFAULT '' CHECK (length(phone_number) <= 100),
+  camp_department TEXT NOT NULL DEFAULT '' CHECK (length(camp_department) <= 100),
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS borrowers_profile_unique ON borrowers(
+  normalize_borrower_text(playa_name), normalize_borrower_text(full_name),
+  normalize_borrower_phone(phone_number), normalize_borrower_text(camp_department)
 );
 
 CREATE TABLE IF NOT EXISTS inventory_events (

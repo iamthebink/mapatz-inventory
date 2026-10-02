@@ -1,3 +1,10 @@
+import {
+  borrowerIdentity,
+  borrowerMatchKind,
+  isValidBorrowerProfile,
+  normalizeBorrowerText,
+  type BorrowerProfile,
+} from '../domain/borrower-profile';
 import { desktop } from './desktop';
 import { BorrowerImportDialog } from './BorrowerImportDialog';
 import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -101,11 +108,6 @@ function tabFromPath(pathname: string): Tab | null {
   );
 }
 
-const borrowerTypeNames: Record<Borrower['type'], string> = {
-  individual: 'יחיד',
-  camp_organization: 'ארגון מחנה',
-  other: 'אחר',
-};
 const eventNames: Record<string, string> = {
   stock_added: 'קליטת מלאי',
   stock_removed: 'תיקון מלאי',
@@ -166,6 +168,7 @@ export function App() {
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
+  const borrowerGuidanceShownRef = useRef(new Set<string>());
   const [borrowerCreateOpen, setBorrowerCreateOpen] = useState(false);
   const [adminDialogOpen, setAdminDialogOpen] = useState(false);
   const [adminRecoveryOpen, setAdminRecoveryOpen] = useState(false);
@@ -495,7 +498,11 @@ export function App() {
     [showToast],
   );
 
-  async function action(title: string, operation: () => Promise<unknown>) {
+  async function action(
+    title: string,
+    operation: () => Promise<unknown>,
+    successGuidance?: string,
+  ) {
     if (pendingRef.current) return false;
     pendingRef.current = true;
     setPending(true);
@@ -506,11 +513,15 @@ export function App() {
       if ((await operation()) === 'cancelled') return false;
       try {
         await refresh();
-        showToast(title, 'הפעולה הושלמה בהצלחה', 'success');
+        showToast(
+          title,
+          `הפעולה הושלמה בהצלחה${successGuidance ? `. ${successGuidance}` : ''}`,
+          successGuidance ? 'warning' : 'success',
+        );
       } catch {
         showToast(
           title,
-          'הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.',
+          `הפעולה הושלמה, אך התצוגה לא התרעננה. אין לחזור עליה; יש לרענן את המסך.${successGuidance ? ` ${successGuidance}` : ''}`,
           'warning',
         );
       }
@@ -523,25 +534,60 @@ export function App() {
       setPending(false);
     }
   }
+  function warnBorrowerMatches(profile: BorrowerProfile): string | undefined {
+    if (!isValidBorrowerProfile(profile)) return;
+    const matches = catalogBorrowers.filter((borrower) => borrowerMatchKind(profile, borrower));
+    if (
+      !matches.length ||
+      matches.some((borrower) => borrowerIdentity(profile) === borrowerIdentity(borrower))
+    )
+      return;
+    const evidence = JSON.stringify([
+      borrowerIdentity(profile),
+      matches
+        .map((borrower) => [borrower.id, borrowerIdentity(borrower), borrower.archived])
+        .sort(),
+    ]);
+    const guidance = `נמצאו שואלים עם פרטים דומים: ${matches.map((borrower) => [borrower.fullName, borrower.playaName, borrower.phoneNumber, borrower.campDepartment].filter(Boolean).join(' · ')).join('; ')}. אם זהו שואל אחר, אפשר ליצור כרטיס חדש.`;
+    if (borrowerGuidanceShownRef.current.has(evidence)) return guidance;
+    borrowerGuidanceShownRef.current.add(evidence);
+    showToast('נמצאו שואלים עם פרטים דומים', guidance, 'warning');
+    return guidance;
+  }
+
+  function borrowerFormProfile(form: FormData): BorrowerProfile {
+    return {
+      fullName: String(form.get('fullName') ?? ''),
+      playaName: String(form.get('playaName') ?? ''),
+      phoneNumber: String(form.get('phoneNumber') ?? ''),
+      campDepartment: String(form.get('campDepartment') ?? ''),
+    };
+  }
+
   async function submitBorrowerCreation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pendingRef.current) return;
     const form = new FormData(event.currentTarget);
-    const succeeded = await action('הוספת שואל חדש', async () => {
-      const { ledgerEpoch } = await api<{ ledgerEpoch: number }>('/borrowers/search?q=');
-      return api('/borrowers', {
-        method: 'POST',
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
-        body: JSON.stringify({
-          contractVersion: 1,
-          ledgerEpoch,
-          username: form.get('username'),
-          name: form.get('name'),
-          contact: form.get('contact'),
-          type: form.get('type'),
-        }),
-      });
-    });
+    const guidance = warnBorrowerMatches(borrowerFormProfile(form));
+    const succeeded = await action(
+      'הוספת שואל חדש',
+      async () => {
+        const { ledgerEpoch } = await api<{ ledgerEpoch: number }>('/borrowers/search?q=');
+        return api('/borrowers', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': crypto.randomUUID() },
+          body: JSON.stringify({
+            contractVersion: 1,
+            ledgerEpoch,
+            playaName: form.get('playaName'),
+            fullName: form.get('fullName'),
+            phoneNumber: form.get('phoneNumber'),
+            campDepartment: form.get('campDepartment'),
+          }),
+        });
+      },
+      guidance,
+    );
     if (succeeded) setBorrowerCreateOpen(false);
   }
 
@@ -668,8 +714,10 @@ export function App() {
         expectedStateRevision: borrowerDeletionStatus.stateRevision,
         expectedOutstanding: borrowerDeletionStatus.outstanding,
         expectedLost: borrowerDeletionStatus.lost,
-        expectedName: borrowerDeletionStatus.borrower.name,
-        expectedUsername: borrowerDeletionStatus.borrower.username,
+        expectedFullName: borrowerDeletionStatus.borrower.fullName,
+        expectedPlayaName: borrowerDeletionStatus.borrower.playaName,
+        expectedPhoneNumber: borrowerDeletionStatus.borrower.phoneNumber,
+        expectedCampDepartment: borrowerDeletionStatus.borrower.campDepartment,
       },
     };
     const stored = persistFrozenManagementAttempt(storage, attempt, BORROWER_DELETION_STORAGE_KEY);
@@ -752,10 +800,10 @@ export function App() {
           api(`/borrowers/${submission.borrowerId}`, {
             method: 'PUT',
             body: JSON.stringify({
-              name: submission.name,
-              username: submission.username,
-              contact: submission.contact,
-              type: submission.borrowerType,
+              fullName: submission.fullName,
+              playaName: submission.playaName,
+              phoneNumber: submission.phoneNumber,
+              campDepartment: submission.campDepartment,
             }),
           }),
         );
@@ -775,28 +823,41 @@ export function App() {
     return succeeded;
   }
 
+  const campSuggestions = [
+    ...new Map(
+      catalogBorrowers
+        .filter((borrower) => borrower.campDepartment.trim())
+        .map((borrower) => [
+          normalizeBorrowerText(borrower.campDepartment),
+          borrower.campDepartment,
+        ]),
+    ).values(),
+  ];
+
   const borrowerColumns: TableColumn<Borrower>[] = [
     {
-      key: 'name',
-      label: 'שם',
-      render: (borrower) => borrower.name,
-      sortValue: (borrower) => borrower.name,
+      key: 'fullName',
+      label: 'שם מלא',
+      render: (borrower) => borrower.fullName,
+      sortValue: (borrower) => borrower.fullName,
     },
     {
-      key: 'username',
-      label: 'שם משתמש',
-      render: (borrower) => (
-        <span dir="ltr" className="font-mono text-xs">
-          {borrower.username}
-        </span>
-      ),
-      sortValue: (borrower) => borrower.username,
+      key: 'playaName',
+      label: 'שם פלאיה',
+      render: (borrower) => <bdi>{borrower.playaName || '—'}</bdi>,
+      sortValue: (borrower) => borrower.playaName,
     },
     {
-      key: 'type',
-      label: 'סוג',
-      render: (borrower) => borrowerTypeNames[borrower.type],
-      sortValue: (borrower) => borrower.type,
+      key: 'phoneNumber',
+      label: 'מספר טלפון',
+      render: (borrower) => <bdi dir="ltr">{borrower.phoneNumber || '—'}</bdi>,
+      sortValue: (borrower) => borrower.phoneNumber,
+    },
+    {
+      key: 'campDepartment',
+      label: 'מחנה / מחלקה',
+      render: (borrower) => borrower.campDepartment || '—',
+      sortValue: (borrower) => borrower.campDepartment,
     },
     {
       key: 'status',
@@ -1093,7 +1154,10 @@ export function App() {
                       type="button"
                       className="secondary-button"
                       disabled={pending}
-                      onClick={() => setBorrowerCreateOpen(true)}
+                      onClick={() => {
+                        borrowerGuidanceShownRef.current.clear();
+                        setBorrowerCreateOpen(true);
+                      }}
                     >
                       <UserPlus className="size-4" />
                       יצירת שואל חדש
@@ -1123,10 +1187,10 @@ export function App() {
                       rowKey={(borrower) => borrower.id}
                       searchText={(borrower) =>
                         join(
-                          borrower.name,
-                          borrower.username,
-                          borrower.contact,
-                          borrowerTypeNames[borrower.type],
+                          borrower.fullName,
+                          borrower.playaName,
+                          borrower.phoneNumber,
+                          borrower.campDepartment,
                           borrower.archived ? 'ארכיון' : 'פעיל',
                         )
                       }
@@ -1327,28 +1391,35 @@ export function App() {
         >
           <form
             id="management-create-borrower-form"
+            onBlur={(event) =>
+              warnBorrowerMatches(borrowerFormProfile(new FormData(event.currentTarget)))
+            }
             className="dialog-form"
             onSubmit={(event) => void submitBorrowerCreation(event)}
           >
             <fieldset className="grid gap-3" disabled={pending}>
               <label className="field-label">
-                שם
-                <input ref={borrowerCreateNameRef} className="input-field" name="name" required />
+                שם מלא
+                <input
+                  ref={borrowerCreateNameRef}
+                  className="input-field"
+                  name="fullName"
+                  required
+                  maxLength={100}
+                />
               </label>
-              <Field name="username" label="שם משתמש" ltr />
-              <Field name="contact" label="פרטי קשר" />
-              <label className="field-label">
-                סוג
-                <select name="type" className="input-field">
-                  <option value="individual">יחיד</option>
-                  <option value="camp_organization">ארגון מחנה</option>
-                  <option value="other">אחר</option>
-                </select>
-              </label>
+              <Field name="playaName" label="שם פלאיה" required={false} />
+              <Field name="phoneNumber" label="מספר טלפון" type="tel" ltr required={false} />
+              <Field name="campDepartment" label="מחנה / מחלקה" required={false} />
             </fieldset>
           </form>
         </Dialog>
       )}
+      <datalist id="borrower-camp-suggestions">
+        {campSuggestions.map((camp) => (
+          <option key={camp} value={camp} />
+        ))}
+      </datalist>
       {adminDialogOpen && (
         <AdminPasswordDialog
           pending={pending}
@@ -1368,7 +1439,7 @@ export function App() {
       )}
       {borrowerDeletionStatus && (
         <Dialog
-          title={`למחוק לצמיתות את ${borrowerDeletionStatus.borrower.name}?`}
+          title={`למחוק לצמיתות את ${borrowerDeletionStatus.borrower.fullName}?`}
           description="המחיקה מסירה את השואל, את פרטי הקשר שלו ואת האירועים וההלוואות הסגורות שלו. היא אינה משנה את יתרות המלאי של פריטים שנותרו."
           level="root"
           role="alertdialog"
@@ -1381,8 +1452,12 @@ export function App() {
         >
           <div className="space-y-3 text-sm">
             <p>
-              {borrowerDeletionStatus.borrower.name} · שם משתמש{' '}
-              <bdi dir="ltr">{borrowerDeletionStatus.borrower.username}</bdi>
+              {borrowerDeletionStatus.borrower.fullName} · שם פלאיה{' '}
+              <bdi>{borrowerDeletionStatus.borrower.playaName || '—'}</bdi>
+              {' · מספר טלפון: '}
+              <bdi dir="ltr">{borrowerDeletionStatus.borrower.phoneNumber || '—'}</bdi>
+              {' · מחנה / מחלקה: '}
+              {borrowerDeletionStatus.borrower.campDepartment || '—'}
             </p>
             <p>
               יתרות פתוחות: מושאל {borrowerDeletionStatus.outstanding}, אבוד{' '}
@@ -1527,6 +1602,12 @@ function Field({
         required={required}
         name={name}
         type={type}
+        maxLength={
+          ['fullName', 'playaName', 'phoneNumber', 'campDepartment'].includes(name)
+            ? 100
+            : undefined
+        }
+        list={name === 'campDepartment' ? 'borrower-camp-suggestions' : undefined}
         dir={ltr ? 'ltr' : undefined}
       />
     </label>

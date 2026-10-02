@@ -1,12 +1,7 @@
-import type { BorrowerType } from '../domain/types.js';
+import type { BorrowerProfile } from '../domain/borrower-profile.js';
 
 export type BorrowerImportMode = 'merge' | 'replace';
-export interface BorrowerImportRow {
-  username: string;
-  name: string;
-  contact: string;
-  type: BorrowerType;
-}
+export type BorrowerImportRow = BorrowerProfile;
 export interface BorrowerImportPreview {
   confirmationToken: string;
   added: number;
@@ -14,8 +9,10 @@ export interface BorrowerImportPreview {
   archived: number;
   affected: Array<{
     id: number;
-    username: string;
-    name: string;
+    playaName: string;
+    fullName: string;
+    phoneNumber: string;
+    campDepartment: string;
     loans: Array<{ checkoutId: number; itemId: number; itemName: string; quantity: number }>;
   }>;
 }

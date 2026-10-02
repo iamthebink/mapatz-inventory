@@ -8,10 +8,10 @@ import { DialogStackProvider } from '../../src/web/Dialog';
 
 const borrower = {
   id: 7,
-  username: 'or',
-  name: 'אור',
-  contact: '050',
-  type: 'individual' as const,
+  playaName: 'or',
+  fullName: 'אור',
+  phoneNumber: '050',
+  campDepartment: '' as const,
   archived: false,
 };
 function json(body: unknown) {

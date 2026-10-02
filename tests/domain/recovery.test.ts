@@ -73,15 +73,15 @@ function sourceFixture() {
   inventory.issue(water.id, 30, 'used');
   recordHistoricalStockRemoval(db, water.id, 5, 'historical count correction');
   const borrower = inventory.createBorrower({
-    username: 'camp-a',
-    name: 'Camp A',
-    contact: 'radio 2',
-    type: 'camp_organization',
+    playaName: 'camp-a',
+    fullName: 'Camp A',
+    phoneNumber: 'radio 2',
+    campDepartment: 'מחנה א',
   });
   const oldBorrower = inventory.createBorrower({
-    username: 'retired',
-    name: 'Retired',
-    type: 'other',
+    playaName: 'retired',
+    fullName: 'Retired',
+    campDepartment: 'מחנה אחר',
   });
   inventory.archiveBorrower(oldBorrower.id, true);
   const checkout = inventory.checkout(tent.id, borrower.id, 4, 'field loan');
@@ -166,9 +166,9 @@ describe('complete inventory recovery', () => {
     sourceInventory.addStock(removed.id, 1);
     const survivor = sourceInventory.createItem({ name: 'Surviving loan', kind: 'non_consumable' });
     const borrower = sourceInventory.createBorrower({
-      username: 'removed-borrower',
-      name: 'Removed Borrower',
-      type: 'individual',
+      playaName: 'removed-borrower',
+      fullName: 'Removed Borrower',
+      campDepartment: '',
     });
     sourceInventory.addStock(survivor.id, 4);
     const checkoutId = sourceInventory.checkout(survivor.id, borrower.id, 1);
@@ -184,8 +184,10 @@ describe('complete inventory recovery', () => {
       expectedStateRevision: status.stateRevision,
       expectedOutstanding: status.outstanding,
       expectedLost: status.lost,
-      expectedName: status.borrower.name,
-      expectedUsername: status.borrower.username,
+      expectedFullName: status.borrower.fullName,
+      expectedPlayaName: status.borrower.playaName,
+      expectedPhoneNumber: status.borrower.phoneNumber,
+      expectedCampDepartment: status.borrower.campDepartment,
     });
     sourceInventory.deleteItemCommand({
       key: 'delete-item-recovery',
@@ -200,7 +202,7 @@ describe('complete inventory recovery', () => {
     const survivorSnapshot = snapshot.items.find((item) => item.id === survivor.id)!;
     expect(survivorSnapshot.baselineThroughEventId).toBe(checkoutId);
     expect(snapshot.events.some((event) => event.id === checkoutId)).toBe(false);
-    expect(snapshot.borrowers.some((entry) => entry.username === 'removed-borrower')).toBe(false);
+    expect(snapshot.borrowers.some((entry) => entry.playaName === 'removed-borrower')).toBe(false);
     expect(snapshot.items.some((item) => item.id === removed.id)).toBe(false);
     const payload = await parseRecoveryWorkbook(await exportWorkbook(snapshot));
 
@@ -549,7 +551,7 @@ it('round-trips mixed ordinary and found returns and rejects malformed recoverie
     { relatedEventId: null },
     { relatedEventId: 999999 },
     { relatedEventId: payload.events[0]!.id },
-    { borrowerUsername: 'retired' },
+    { borrowerId: payload.borrowers.find((borrower) => borrower.archived)!.id },
     { itemId: source.waterId },
     { kind: 'unmarked_lost' },
   ]) {

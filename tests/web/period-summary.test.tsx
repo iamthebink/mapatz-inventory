@@ -15,10 +15,10 @@ afterEach(() => {
 
 const borrower = (id: number, name: string) => ({
   id,
-  name,
-  username: `user-${id}`,
-  contact: id === 1 ? '050' : '',
-  type: 'individual' as const,
+  fullName: name,
+  playaName: `user-${id}`,
+  phoneNumber: id === 1 ? '050' : '',
+  campDepartment: '' as const,
   archived: id === 2,
 });
 const result: Result = {
@@ -429,4 +429,29 @@ describe('period summary view', () => {
     expect((screen.getByLabelText('עד תאריך') as HTMLInputElement).value).toBe('2026-09-22');
     expect(vi.mocked(fetchPeriodSummary).mock.calls).toHaveLength(callCount);
   });
+});
+
+it('searches camp, formatted phones and Unicode-equivalent profile text', async () => {
+  vi.mocked(fetchPeriodSummary).mockResolvedValue({
+    ...result,
+    borrowers: [
+      {
+        ...result.borrowers[0]!,
+        borrower: {
+          ...borrower(1, 'Straße Ａda'),
+          playaName: 'ＡLPHA',
+          phoneNumber: '050-123 4567',
+          campDepartment: 'Camp North',
+        },
+      },
+      result.borrowers[1]!,
+    ],
+  });
+  view();
+  await screen.findByText('Straße Ａda');
+  for (const value of ['camp north', '(050)123-4567', 'STRASSE ada', 'alpha']) {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'חיפוש שואל' }), { target: { value } });
+    expect(screen.getByText('Straße Ａda')).toBeTruthy();
+    expect(screen.queryByText('בית')).toBeNull();
+  }
 });

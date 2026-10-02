@@ -1,6 +1,5 @@
 export type Role = 'operator' | 'admin';
 export type ItemKind = 'consumable' | 'non_consumable' | 'camp_equipment';
-export type BorrowerType = 'individual' | 'camp_organization' | 'other';
 export type EventKind =
   | 'stock_added'
   | 'stock_removed'
@@ -31,10 +30,10 @@ export interface Item {
 
 export interface Borrower {
   id: number;
-  username: string;
-  name: string;
-  contact: string;
-  type: BorrowerType;
+  playaName: string;
+  fullName: string;
+  phoneNumber: string;
+  campDepartment: string;
   archived: boolean;
 }
 

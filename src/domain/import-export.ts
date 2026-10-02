@@ -6,8 +6,13 @@ import {
   persistIdentityHighWater,
   type IdentityHighWater,
 } from '../db/identity-high-water.js';
+import {
+  borrowerIdentity,
+  isValidBorrowerProfile,
+  trimBorrowerProfile,
+} from './borrower-profile.js';
 import { normalizeItemName } from './item-name.js';
-import { DomainError, type BorrowerType, type EventKind, type ItemKind } from './types.js';
+import { DomainError, type EventKind, type ItemKind } from './types.js';
 import type { Radio } from './types.js';
 import { RadioService, validateRadioFleet } from './radios.js';
 
@@ -40,7 +45,7 @@ export interface TransferItem {
 export interface TransferLoan {
   checkoutId: number;
   itemId: number;
-  borrowerUsername: string;
+  borrowerId: number;
   quantity: number;
   createdAt: string;
   outstanding: number;
@@ -48,10 +53,11 @@ export interface TransferLoan {
 }
 
 export interface TransferBorrower {
-  username: string;
-  name: string;
-  contact: string;
-  type: BorrowerType;
+  id: number;
+  playaName: string;
+  fullName: string;
+  phoneNumber: string;
+  campDepartment: string;
   archived: boolean;
   createdAt: string;
 }
@@ -60,7 +66,7 @@ export interface TransferEvent {
   id: number;
   kind: EventKind;
   itemId: number;
-  borrowerUsername: string | null;
+  borrowerId: number | null;
   quantity: number;
   relatedEventId: number | null;
   note: string;
@@ -280,12 +286,24 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     items.set(item.id, item);
     itemNames.add(nameKey);
   }
-  const borrowers = new Map<string, TransferBorrower>();
+  const borrowers = new Map<number, TransferBorrower>();
+  const borrowerProfiles = new Set<string>();
   for (const borrower of payload.borrowers) {
-    const key = borrower.username.toLocaleLowerCase();
-    if (borrowers.has(key))
-      invalidWorkbook(`Recovery Borrowers contains duplicate Username "${borrower.username}"`);
-    borrowers.set(key, borrower);
+    safe(borrower.id, 'Recovery Borrower ID', true);
+    if (!isValidBorrowerProfile(borrower))
+      invalidWorkbook('Recovery Borrowers contains invalid profile');
+    if (typeof borrower.archived !== 'boolean')
+      invalidWorkbook('Recovery Borrowers contains invalid Archived value');
+    utcTimestamp(borrower.createdAt);
+    const key = borrowerIdentity(borrower);
+    if (borrowers.has(borrower.id))
+      invalidWorkbook(`Recovery Borrowers contains duplicate Borrower ID ${borrower.id}`);
+    if (borrowerProfiles.has(key))
+      invalidWorkbook(`Recovery Borrowers contains duplicate profile "${borrower.fullName}"`);
+    if (borrower.id >= payload.identityHighWater.nextBorrowerId)
+      invalidWorkbook('Recovery Borrower ID exceeds high-water mark');
+    borrowerProfiles.add(key);
+    borrowers.set(borrower.id, borrower);
   }
   const eventKinds = new Set<EventKind>([
     'stock_added',
@@ -312,6 +330,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   let previousTimestamp = Number.NEGATIVE_INFINITY;
   for (const event of payload.events) {
     safe(event.id, 'Recovery Event ID', true);
+    if (event.borrowerId != null) safe(event.borrowerId, 'Recovery Event Borrower ID', true);
     safe(event.quantity, `Recovery event ${event.id} Quantity`, true);
     if (!eventKinds.has(event.kind))
       invalidWorkbook(`Recovery event ${event.id} has unsupported Kind`);
@@ -327,13 +346,10 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery event ${event.id} references unknown Item ID ${event.itemId}`);
     if (timestamp < utcTimestamp(item.createdAt))
       invalidWorkbook(`Recovery event ${event.id} occurs before item ${event.itemId} was created`);
-    const borrower =
-      event.borrowerUsername == null
-        ? null
-        : borrowers.get(event.borrowerUsername.toLocaleLowerCase());
-    if (event.borrowerUsername != null && !borrower)
+    const borrower = event.borrowerId == null ? null : borrowers.get(event.borrowerId);
+    if (event.borrowerId != null && !borrower)
       invalidWorkbook(
-        `Recovery event ${event.id} references unknown Borrower Username "${event.borrowerUsername}"`,
+        `Recovery event ${event.id} references unknown Borrower ID "${event.borrowerId}"`,
       );
     if (borrower && timestamp < utcTimestamp(borrower.createdAt))
       invalidWorkbook(`Recovery event ${event.id} occurs before its borrower was created`);
@@ -348,11 +364,10 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
         !related ||
         related.kind !== 'checked_out' ||
         related.itemId !== event.itemId ||
-        related.borrowerUsername?.toLocaleLowerCase() !==
-          event.borrowerUsername?.toLocaleLowerCase()
+        related.borrowerId !== event.borrowerId
       )
         invalidWorkbook(`Recovery event ${event.id} references a missing or mismatched checkout`);
-    } else if (event.borrowerUsername != null || event.relatedEventId != null)
+    } else if (event.borrowerId != null || event.relatedEventId != null)
       invalidWorkbook(`Recovery event ${event.id} cannot reference a borrower or checkout`);
     if (event.kind === 'issued' && item.kind !== 'consumable')
       invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
@@ -382,6 +397,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   const totals = new Map<number, { borrowed: number; lost: number }>();
   for (const loan of payload.loans) {
     safe(loan.checkoutId, 'Recovery Loan Checkout ID', true);
+    safe(loan.borrowerId, 'Recovery Loan Borrower ID', true);
     safe(loan.itemId, `Recovery loan ${loan.checkoutId} Item ID`, true);
     safe(loan.quantity, `Recovery loan ${loan.checkoutId} Quantity`, true);
     safe(loan.outstanding, `Recovery loan ${loan.checkoutId} Outstanding`);
@@ -390,7 +406,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery Loans contains duplicate checkout ${loan.checkoutId}`);
     loans.add(loan.checkoutId);
     const item = items.get(loan.itemId);
-    const borrower = borrowers.get(loan.borrowerUsername.toLocaleLowerCase());
+    const borrower = borrowers.get(loan.borrowerId);
     const checkout = events.get(loan.checkoutId);
     if (
       !item ||
@@ -398,8 +414,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       !checkout ||
       checkout.kind !== 'checked_out' ||
       checkout.itemId !== loan.itemId ||
-      checkout.borrowerUsername?.toLocaleLowerCase() !==
-        loan.borrowerUsername.toLocaleLowerCase() ||
+      checkout.borrowerId !== loan.borrowerId ||
       checkout.quantity !== loan.quantity
     )
       invalidWorkbook(`Recovery loan ${loan.checkoutId} has an invalid checkout identity`);
@@ -411,7 +426,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     if (loan.outstanding + loan.lost > loan.quantity)
       invalidWorkbook(`Recovery loan ${loan.checkoutId} exceeds its original quantity`);
     if (borrower.archived && loan.outstanding > 0)
-      invalidWorkbook(`Recovery borrower "${borrower.username}" is archived with unresolved loans`);
+      invalidWorkbook(`Recovery borrower "${borrower.fullName}" is archived with unresolved loans`);
     const aggregate = totals.get(loan.itemId) ?? { borrowed: 0, lost: 0 };
     aggregate.borrowed += loan.outstanding;
     aggregate.lost += loan.lost;
@@ -508,19 +523,20 @@ export class InventoryTransferService {
       };
     });
     const borrowers = (
-      this.db.prepare('SELECT * FROM borrowers ORDER BY username COLLATE NOCASE').all() as Row[]
+      this.db.prepare('SELECT * FROM borrowers ORDER BY full_name,id').all() as Row[]
     ).map((row) => ({
-      username: String(row.username),
-      name: String(row.name),
-      contact: String(row.contact),
-      type: row.type as BorrowerType,
+      id: Number(row.id),
+      playaName: String(row.playa_name),
+      fullName: String(row.full_name),
+      phoneNumber: String(row.phone_number),
+      campDepartment: String(row.camp_department),
       archived: Boolean(row.archived),
       createdAt: String(row.created_at),
     }));
     const events = (
       this.db
         .prepare(
-          `SELECT e.id,e.kind,i.id item_id,b.username borrower_username,e.quantity,
+          `SELECT e.id,e.kind,i.id item_id,b.id borrower_id,e.quantity,
           e.related_event_id,e.note,e.created_at FROM inventory_events e
           JOIN items i ON i.id=e.item_id LEFT JOIN borrowers b ON b.id=e.borrower_id ORDER BY e.id`,
         )
@@ -529,7 +545,7 @@ export class InventoryTransferService {
       id: Number(row.id),
       kind: row.kind as EventKind,
       itemId: Number(row.item_id),
-      borrowerUsername: row.borrower_username == null ? null : String(row.borrower_username),
+      borrowerId: row.borrower_id == null ? null : Number(row.borrower_id),
       quantity: Number(row.quantity),
       relatedEventId: row.related_event_id == null ? null : Number(row.related_event_id),
       note: String(row.note),
@@ -538,7 +554,7 @@ export class InventoryTransferService {
     const loans = (
       this.db
         .prepare(
-          `SELECT l.checkout_id,i.id item_id,b.username borrower_username,
+          `SELECT l.checkout_id,i.id item_id,b.id borrower_id,
         l.quantity,l.created_at,l.outstanding,l.lost
         FROM loan_state l JOIN items i ON i.id=l.item_id
         JOIN borrowers b ON b.id=l.borrower_id ORDER BY l.checkout_id`,
@@ -547,7 +563,7 @@ export class InventoryTransferService {
     ).map((row) => ({
       checkoutId: Number(row.checkout_id),
       itemId: Number(row.item_id),
-      borrowerUsername: String(row.borrower_username),
+      borrowerId: Number(row.borrower_id),
       quantity: Number(row.quantity),
       createdAt: String(row.created_at),
       outstanding: Number(row.outstanding),
@@ -717,23 +733,24 @@ export class InventoryTransferService {
         for (const alias of item.aliases) insertAlias.run(itemId, alias);
       }
 
-      const borrowerIds = new Map<string, number>();
+      const borrowerIds = new Map<number, number>();
       const insertBorrower = this.db.prepare(
-        `INSERT INTO borrowers(id,username,name,contact,type,archived,created_at)
+        `INSERT INTO borrowers(id,playa_name,full_name,phone_number,camp_department,archived,created_at)
         VALUES (?,?,?,?,?,?,?)`,
       );
       for (const borrower of payload.borrowers) {
         const borrowerId = allocateIdentity(this.db, 'borrower');
+        const profile = trimBorrowerProfile(borrower);
         insertBorrower.run(
           borrowerId,
-          borrower.username,
-          borrower.name,
-          borrower.contact,
-          borrower.type,
+          profile.playaName,
+          profile.fullName,
+          profile.phoneNumber,
+          profile.campDepartment,
           Number(borrower.archived),
           borrower.createdAt,
         );
-        borrowerIds.set(borrower.username.toLocaleLowerCase(), borrowerId);
+        borrowerIds.set(borrower.id, borrowerId);
       }
 
       const insertEvent = this.db.prepare(
@@ -745,9 +762,7 @@ export class InventoryTransferService {
           event.id,
           event.kind,
           itemIds.get(event.itemId)!,
-          event.borrowerUsername == null
-            ? null
-            : borrowerIds.get(event.borrowerUsername.toLocaleLowerCase())!,
+          event.borrowerId == null ? null : borrowerIds.get(event.borrowerId)!,
           event.quantity,
           event.relatedEventId,
           event.note,
@@ -761,7 +776,7 @@ export class InventoryTransferService {
         insertLoan.run(
           loan.checkoutId,
           itemIds.get(loan.itemId)!,
-          borrowerIds.get(loan.borrowerUsername.toLocaleLowerCase())!,
+          borrowerIds.get(loan.borrowerId)!,
           loan.quantity,
           loan.createdAt,
           loan.outstanding,

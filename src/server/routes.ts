@@ -35,12 +35,14 @@ const itemInput = z.object({
   locationId: positive.nullish(),
   aliases: aliases.optional(),
 });
-const borrowerInput = z.object({
-  username: z.string().trim().min(2).max(40),
-  name: z.string().trim().min(1).max(100),
-  contact: z.string().max(500).optional(),
-  type: z.enum(['individual', 'camp_organization', 'other']),
-});
+const borrowerInput = z
+  .object({
+    playaName: z.string().trim().max(100).default(''),
+    fullName: z.string().trim().min(1).max(100),
+    phoneNumber: z.string().trim().max(100).default(''),
+    campDepartment: z.string().trim().max(100).default(''),
+  })
+  .strict();
 const note = z.string().max(500).default('');
 const borrowerOperationInput = z
   .object({
@@ -178,10 +180,7 @@ const borrowerCreateInput = z
   .object({
     contractVersion: z.literal(1),
     ledgerEpoch: safePositive,
-    username: z.string().trim().min(2).max(40),
-    name: z.string().trim().min(1).max(100),
-    contact: z.string().trim().max(500).default(''),
-    type: z.enum(['individual', 'camp_organization', 'other']),
+    ...borrowerInput.shape,
   })
   .strict();
 const idempotencyKeyInput = z.uuid();
@@ -610,6 +609,15 @@ export function apiRouter(
     res.json(service.listBorrowers(String(req.query.q ?? ''), req.query.all === '1')),
   );
   api.get(
+    '/borrowers/camp-suggestions',
+    route((_req, res) => res.json(service.borrowerCampSuggestions())),
+  );
+  api.post(
+    '/borrowers/validate',
+    requireRole('operator', 'admin'),
+    route((req, res) => res.json(service.validateBorrowerCreation(parse(borrowerInput, req.body)))),
+  );
+  api.get(
     '/borrowers/search',
     route((req, res) => {
       const snapshot: BorrowerSearchSnapshot = service.searchBorrowers(String(req.query.q ?? ''));
@@ -642,8 +650,10 @@ export function apiRouter(
             expectedStateRevision: z.number().int().min(0),
             expectedOutstanding: z.number().int().min(0),
             expectedLost: z.number().int().min(0),
-            expectedName: z.string().min(1).max(200),
-            expectedUsername: z.string().min(1).max(100),
+            expectedFullName: z.string().min(1).max(100),
+            expectedPlayaName: z.string().max(100),
+            expectedPhoneNumber: z.string().max(100),
+            expectedCampDepartment: z.string().max(100),
           })
           .strict(),
         req.body,

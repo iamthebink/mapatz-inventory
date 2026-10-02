@@ -40,10 +40,10 @@ app.post('/__e2e__/seed', (_request, response) => {
   });
   inventory.addStock(secondConsumable.id, 4, 'e2e seed');
   const borrower = inventory.createBorrower({
-    username: `e2e-${sequence}`,
-    name: `שואל בדיקה ${sequence}`,
-    contact: `050000${String(sequence).padStart(4, '0')}`,
-    type: 'individual',
+    playaName: `e2e-${sequence}`,
+    fullName: `שואל בדיקה ${sequence}`,
+    phoneNumber: `050000${String(sequence).padStart(4, '0')}`,
+    campDepartment: '',
   });
   const item = inventory.createItem({
     name: `אוהל בדיקה ${sequence}`,
@@ -59,10 +59,10 @@ app.post('/__e2e__/seed', (_request, response) => {
   });
   inventory.addStock(archiveItem.id, 2, 'e2e seed');
   const archivedBorrower = inventory.createBorrower({
-    username: `archived-${sequence}`,
-    name: `שואל ארכיון ${sequence}`,
-    contact: `059000${String(sequence).padStart(4, '0')}`,
-    type: 'individual',
+    playaName: `archived-${sequence}`,
+    fullName: `שואל ארכיון ${sequence}`,
+    phoneNumber: `059000${String(sequence).padStart(4, '0')}`,
+    campDepartment: '',
   });
   inventory.archiveBorrower(archivedBorrower.id, true);
   response.json({

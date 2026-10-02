@@ -58,6 +58,32 @@ const emptySnapshot: InventoryTransferSnapshot = {
 };
 
 describe('inventory XLSX workbook', () => {
+  it('accepts genuinely empty optional recovery borrower cells', async () => {
+    const snapshot: InventoryTransferSnapshot = {
+      ...emptySnapshot,
+      borrowers: [
+        {
+          id: 1,
+          fullName: 'Ada',
+          playaName: '',
+          phoneNumber: '',
+          campDepartment: '',
+          archived: false,
+          createdAt: '2026-01-01 00:00:00',
+        },
+      ],
+      identityHighWater: { ...emptySnapshot.identityHighWater, nextBorrowerId: 2 },
+    };
+    const workbook = await load(await exportWorkbook(snapshot));
+    const sheet = workbook.getWorksheet('Recovery Borrowers')!;
+    for (const column of [2, 4, 5]) sheet.getRow(2).getCell(column).value = null;
+    expect((await parseRecoveryWorkbook(await save(workbook))).borrowers).toEqual(
+      snapshot.borrowers,
+    );
+    sheet.getRow(2).getCell(3).value = null;
+    await expect(parseRecoveryWorkbook(await save(workbook))).rejects.toThrow();
+  });
+
   it('requires exactly four positive safe identity high-water fields in recovery payloads', () => {
     const valid = structuredClone(emptySnapshot);
     expect(validateRecoveryPayload(valid)).toEqual(valid);
@@ -119,10 +145,11 @@ describe('inventory XLSX workbook', () => {
       ],
       borrowers: [
         {
-          username: 'boundary',
-          name: 'Boundary borrower',
-          contact: '',
-          type: 'individual',
+          id: 1,
+          playaName: 'boundary',
+          fullName: 'Boundary borrower',
+          phoneNumber: '',
+          campDepartment: '',
           archived: false,
           createdAt: '2026-09-20T17:00:00+03:00',
         },
@@ -132,7 +159,7 @@ describe('inventory XLSX workbook', () => {
           id: 1,
           kind: 'stock_added',
           itemId: 100,
-          borrowerUsername: null,
+          borrowerId: null,
           quantity: 3,
           relatedEventId: null,
           note: '',
@@ -142,7 +169,7 @@ describe('inventory XLSX workbook', () => {
           id: 2,
           kind: 'checked_out',
           itemId: 100,
-          borrowerUsername: 'boundary',
+          borrowerId: 1,
           quantity: 1,
           relatedEventId: null,
           note: '',
@@ -152,7 +179,7 @@ describe('inventory XLSX workbook', () => {
           id: 3,
           kind: 'checked_out',
           itemId: 100,
-          borrowerUsername: 'boundary',
+          borrowerId: 1,
           quantity: 2,
           relatedEventId: null,
           note: '',
@@ -163,7 +190,7 @@ describe('inventory XLSX workbook', () => {
         {
           checkoutId: 2,
           itemId: 100,
-          borrowerUsername: 'boundary',
+          borrowerId: 1,
           quantity: 1,
           createdAt: '2026-09-20T23:59:59.999+03:00',
           outstanding: 1,
@@ -172,7 +199,7 @@ describe('inventory XLSX workbook', () => {
         {
           checkoutId: 3,
           itemId: 100,
-          borrowerUsername: 'boundary',
+          borrowerId: 1,
           quantity: 2,
           createdAt: '2026-09-21T00:00:00+03:00',
           outstanding: 2,
@@ -197,7 +224,7 @@ describe('inventory XLSX workbook', () => {
         },
       );
       expect(
-        db.prepare("SELECT created_at FROM borrowers WHERE username='boundary'").get(),
+        db.prepare("SELECT created_at FROM borrowers WHERE playa_name='boundary'").get(),
       ).toEqual({ created_at: '2026-09-20 14:00:00' });
       expect(db.prepare('SELECT created_at FROM inventory_events ORDER BY id').all()).toEqual([
         { created_at: '2026-09-20 15:00:00' },
@@ -332,10 +359,10 @@ describe('inventory XLSX workbook', () => {
     inventory.issue(water.id, 30, 'issued');
     recordHistoricalStockRemoval(db, water.id, 5, 'historical correction');
     const borrower = inventory.createBorrower({
-      username: 'camp-a',
-      name: 'מחנה א',
-      contact: '050',
-      type: 'camp_organization',
+      playaName: 'camp-a',
+      fullName: 'מחנה א',
+      phoneNumber: '050',
+      campDepartment: 'מחנה א',
     });
     const checkout = inventory.checkout(tent.id, borrower.id, 5, 'loan');
     inventory.markLost(checkout, 2, true, 'lost');

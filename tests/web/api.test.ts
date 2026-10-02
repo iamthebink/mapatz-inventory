@@ -32,20 +32,20 @@ const operationContext = {
 const createRequest: BorrowerCreateRequest = {
   contractVersion: 1,
   ledgerEpoch: 3,
-  username: 'new',
-  name: 'New Name',
-  contact: '',
-  type: 'individual',
+  playaName: 'new',
+  fullName: 'New Name',
+  phoneNumber: '',
+  campDepartment: '',
 };
 
 function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
   return {
     borrower: {
       id: borrowerId,
-      username: 'or',
-      name: 'Or',
-      contact: '',
-      type: 'individual',
+      playaName: 'or',
+      fullName: 'Or',
+      phoneNumber: '',
+      campDepartment: '',
       archived: false,
     },
     inventory: [
@@ -339,10 +339,10 @@ describe('command response classification', () => {
   it('binds creation commits to the normalized frozen body', async () => {
     const borrower = {
       id: 22,
-      username: 'new',
-      name: 'New Name',
-      contact: '',
-      type: 'individual',
+      playaName: 'new',
+      fullName: 'New Name',
+      phoneNumber: '',
+      campDepartment: '',
       archived: false,
     };
     expect(
@@ -354,11 +354,11 @@ describe('command response classification', () => {
     expect(
       await classifyBorrowerCreateResponse(
         json(201, { outcome: 'committed', idempotencyKey: key, replayed: false, borrower }),
-        { idempotencyKey: key, request: { ...createRequest, username: ' new ' } },
+        { idempotencyKey: key, request: { ...createRequest, playaName: ' new ' } },
       ),
     ).toMatchObject({ kind: 'ambiguous' });
     for (const contradictory of [
-      { ...borrower, username: 'another' },
+      { ...borrower, playaName: 'another' },
       { ...borrower, type: 'other' },
       { ...borrower, archived: true },
     ]) {
@@ -379,10 +379,10 @@ describe('command response classification', () => {
   it('rejects creation match status contradictory to archival state', async () => {
     const borrower = {
       id: 22,
-      username: 'old',
-      name: 'Old',
-      contact: '',
-      type: 'individual',
+      playaName: 'old',
+      fullName: 'Old',
+      phoneNumber: '',
+      campDepartment: '',
       archived: false,
     };
     const conflict = {
@@ -393,9 +393,9 @@ describe('command response classification', () => {
       replayed: false,
       fieldErrors: [
         {
-          field: 'username',
-          code: 'username_conflict',
-          message: 'Username matches an existing borrower',
+          field: 'playaName',
+          code: 'playaName_conflict',
+          message: 'PlayaName matches an existing borrower',
         },
         {
           field: 'name',
@@ -403,7 +403,7 @@ describe('command response classification', () => {
           message: 'Name matches an existing borrower',
         },
       ],
-      matches: [{ borrower, status: 'archived', matchedBy: 'username' }],
+      matches: [{ borrower, status: 'archived', matchedBy: 'playa_name' }],
     };
     expect(
       await classifyBorrowerCreateResponse(json(409, conflict), {
@@ -416,10 +416,10 @@ describe('command response classification', () => {
   it('accepts truthful creation conflicts and rejects false match discriminators', async () => {
     const borrower = {
       id: 22,
-      username: 'new',
-      name: 'New Name',
-      contact: '',
-      type: 'individual' as const,
+      playaName: 'new',
+      fullName: 'New Name',
+      phoneNumber: '',
+      campDepartment: '' as const,
       archived: false,
     };
     const conflict = {
@@ -429,18 +429,9 @@ describe('command response classification', () => {
       idempotencyKey: key,
       replayed: false,
       fieldErrors: [
-        {
-          field: 'username',
-          code: 'username_conflict',
-          message: 'Username matches an existing borrower',
-        },
-        {
-          field: 'name',
-          code: 'full_name_conflict',
-          message: 'Name matches an existing borrower',
-        },
+        { field: 'fullName', code: 'duplicate_profile', message: 'כבר קיים שואל עם אותם פרטים' },
       ],
-      matches: [{ borrower, status: 'active', matchedBy: 'username' }],
+      matches: [{ borrower, status: 'active', matchedBy: 'playa_name' }],
     };
     expect(
       await classifyBorrowerCreateResponse(json(409, conflict), {
@@ -454,9 +445,9 @@ describe('command response classification', () => {
           ...conflict,
           matches: [
             {
-              borrower: { ...borrower, username: 'other' },
+              borrower: { ...borrower, playaName: 'other' },
               status: 'active',
-              matchedBy: 'username',
+              matchedBy: 'playa_name',
             },
           ],
         }),
@@ -601,3 +592,31 @@ describe('borrower workflow transport', () => {
     expect(stale).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
+  'rejects malformed %s in search evidence',
+  async (field) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        json(200, {
+          ledgerEpoch: 3,
+          active: [{ ...snapshot().borrower, [field]: 'x'.repeat(101) }],
+          archivedMatches: [],
+        }),
+      ),
+    );
+    await expect(fetchBorrowerSearch('Or')).rejects.toMatchObject({ code: 'invalid_server_truth' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        json(200, {
+          ledgerEpoch: 3,
+          active: [{ ...snapshot().borrower, fullName: ' ' }],
+          archivedMatches: [],
+        }),
+      ),
+    );
+    await expect(fetchBorrowerSearch('Or')).rejects.toMatchObject({ code: 'invalid_server_truth' });
+  },
+);

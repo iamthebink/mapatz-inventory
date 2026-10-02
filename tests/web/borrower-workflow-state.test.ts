@@ -23,10 +23,10 @@ function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSn
   return {
     borrower: {
       id: 7,
-      username: 'or',
-      name: 'Or',
-      contact: '',
-      type: 'individual',
+      playaName: 'or',
+      fullName: 'Or',
+      phoneNumber: '',
+      campDepartment: '',
       archived: false,
     },
     inventory: [
@@ -783,17 +783,17 @@ describe('borrower creation state', () => {
   const request = {
     contractVersion: 1 as const,
     ledgerEpoch: 3,
-    username: 'new',
-    name: 'New',
-    contact: '',
-    type: 'individual' as const,
+    playaName: 'new',
+    fullName: 'New',
+    phoneNumber: '',
+    campDepartment: '' as const,
   };
   const borrower = {
     id: 22,
-    username: 'new',
-    name: 'New',
-    contact: '',
-    type: 'individual' as const,
+    playaName: 'new',
+    fullName: 'New',
+    phoneNumber: '',
+    campDepartment: '' as const,
     archived: false,
   };
 
@@ -887,15 +887,15 @@ describe('borrower creation state', () => {
         outcome: 'rejected',
         idempotencyKey: key1,
         replayed: false,
-        fieldErrors: [{ field: 'username', code: 'duplicate', message: 'Used' }],
-        matches: [{ borrower, status: 'active', matchedBy: 'username' }],
+        fieldErrors: [{ field: 'playaName', code: 'duplicate', message: 'Used' }],
+        matches: [{ borrower, status: 'active', matchedBy: 'playa_name' }],
       },
     });
     expect(state.phase.kind).toBe('conflicted');
     expect(state.values).toEqual(request);
-    state = creationReducer(state, { type: 'change', field: 'username', value: 'changed' });
+    state = creationReducer(state, { type: 'change', field: 'playaName', value: 'changed' });
     expect(state.fieldErrors).toEqual([]);
-    expect(state.values.username).toBe('changed');
+    expect(state.values.playaName).toBe('changed');
 
     state = creationReducer(state, { type: 'dispatch', attemptKey: key2 });
     state = creationReducer(state, {
@@ -914,7 +914,7 @@ describe('borrower creation state', () => {
   });
 
   it('validates creation dispatch and routes invalid current card snapshots to retry recovery', () => {
-    const invalid = createCreationState({ ...request, username: ' x ' });
+    const invalid = createCreationState({ ...request, playaName: ' x ' });
     expect(creationReducer(invalid, { type: 'dispatch', attemptKey: key1 })).toBe(invalid);
 
     let state = creationReducer(createCreationState(request), {
@@ -981,3 +981,19 @@ describe('borrower creation state', () => {
     expect(creationReducer(state, { type: 'dispatch', attemptKey: key2 })).toBe(state);
   });
 });
+
+it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
+  'rejects overlength %s in authoritative snapshots',
+  (field) => {
+    const truth = snapshot();
+    expect(
+      isBorrowerDeskSnapshot({
+        ...truth,
+        borrower: { ...truth.borrower, [field]: 'x'.repeat(101) },
+      }),
+    ).toBe(false);
+    expect(
+      isBorrowerDeskSnapshot({ ...truth, borrower: { ...truth.borrower, fullName: '  ' } }),
+    ).toBe(false);
+  },
+);

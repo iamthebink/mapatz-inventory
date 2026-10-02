@@ -31,9 +31,9 @@ describe('inventory management commands', () => {
       locationId: Number(location.id),
     });
     const borrower = inventory.createBorrower({
-      username: 'reserved-key-borrower',
-      name: 'Reserved key borrower',
-      type: 'individual',
+      playaName: 'reserved-key-borrower',
+      fullName: 'Reserved key borrower',
+      campDepartment: '',
     });
     const preview = inventory.listItems('Reserved key item')[0]!;
     const borrowerPreview = inventory.borrowerDeletionStatus(borrower.id);
@@ -92,8 +92,10 @@ describe('inventory management commands', () => {
           expectedStateRevision: borrowerPreview.stateRevision,
           expectedOutstanding: 0,
           expectedLost: 0,
-          expectedName: borrower.name,
-          expectedUsername: borrower.username,
+          expectedFullName: borrower.fullName,
+          expectedPlayaName: borrower.playaName,
+          expectedPhoneNumber: borrower.phoneNumber,
+          expectedCampDepartment: borrower.campDepartment,
         }),
       () =>
         inventory.issueBatch({
@@ -217,9 +219,9 @@ describe('inventory management commands', () => {
     const { db, inventory } = setup();
     const item = inventory.createItem({ name: 'Checkout race', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'race',
-      name: 'Race',
-      type: 'individual',
+      playaName: 'race',
+      fullName: 'Race',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 20);
     const snapshot = inventory.listItems('Checkout race')[0]!;
@@ -306,9 +308,9 @@ describe('inventory management commands', () => {
     const { db, inventory } = setup();
     const item = inventory.createItem({ name: 'Saw', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'worker',
-      name: 'Worker',
-      type: 'individual',
+      playaName: 'worker',
+      fullName: 'Worker',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 14);
     const checkout = inventory.checkout(item.id, borrower.id, 4);
@@ -442,9 +444,9 @@ describe('inventory management commands', () => {
     const { db, inventory } = setup();
     const item = inventory.createItem({ name: 'Lost only', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'lost-only',
-      name: 'Lost',
-      type: 'individual',
+      playaName: 'lost-only',
+      fullName: 'Lost',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 1);
     const checkout = inventory.checkout(item.id, borrower.id, 1);
@@ -527,9 +529,9 @@ describe('inventory management commands', () => {
     const { db, inventory } = setup();
     const item = inventory.createItem({ name: 'Eligibility race', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'eligibility-race',
-      name: 'Race',
-      type: 'individual',
+      playaName: 'eligibility-race',
+      fullName: 'Race',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 2);
     const preview = inventory.listItems('Eligibility race')[0]!;
@@ -584,9 +586,9 @@ describe('inventory management commands', () => {
       const { db, inventory } = setup();
       const item = inventory.createItem({ name: `${blocker} blocker`, kind: 'non_consumable' });
       const borrower = inventory.createBorrower({
-        username: `${blocker}-blocker`,
-        name: 'Blocker',
-        type: 'individual',
+        playaName: `${blocker}-blocker`,
+        fullName: 'Blocker',
+        campDepartment: '',
       });
       inventory.addStock(item.id, 2);
       const checkout = inventory.checkout(item.id, borrower.id, 1);
@@ -625,13 +627,13 @@ describe('inventory management commands', () => {
     },
   );
 
-  it('deletes a settled borrower history while preserving stock and identity on username reuse', () => {
+  it('deletes a settled borrower history while preserving stock and identity on playaName reuse', () => {
     const { db, inventory } = setup();
     const item = inventory.createItem({ name: 'Surviving stock', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'reusable-user',
-      name: 'Old Name',
-      type: 'individual',
+      playaName: 'reusable-user',
+      fullName: 'Old Name',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 5);
     const checkout = inventory.checkout(item.id, borrower.id, 2);
@@ -646,8 +648,10 @@ describe('inventory management commands', () => {
       expectedStateRevision: status.stateRevision,
       expectedOutstanding: status.outstanding,
       expectedLost: status.lost,
-      expectedName: status.borrower.name,
-      expectedUsername: status.borrower.username,
+      expectedFullName: status.borrower.fullName,
+      expectedPlayaName: status.borrower.playaName,
+      expectedPhoneNumber: status.borrower.phoneNumber,
+      expectedCampDepartment: status.borrower.campDepartment,
     };
 
     const committed = inventory.deleteBorrowerCommand(command);
@@ -674,17 +678,17 @@ describe('inventory management commands', () => {
     });
 
     const replacement = inventory.createBorrower({
-      username: 'reusable-user',
-      name: 'New Name',
-      type: 'individual',
+      playaName: 'reusable-user',
+      fullName: 'New Name',
+      campDepartment: '',
     });
     expect(replacement.id).toBeGreaterThan(borrower.id);
     expect(inventory.deleteBorrowerCommand(command)).toEqual(committed);
     expect(
-      inventory.listBorrowers('', true).find((entry) => entry.username === 'reusable-user'),
+      inventory.listBorrowers('', true).find((entry) => entry.playaName === 'reusable-user'),
     ).toMatchObject({
       id: replacement.id,
-      name: 'New Name',
+      fullName: 'New Name',
     });
     db.close();
   });
@@ -695,9 +699,9 @@ describe('inventory management commands', () => {
       const { db, inventory } = setup();
       const item = inventory.createItem({ name: `${blocker} loan`, kind: 'non_consumable' });
       const borrower = inventory.createBorrower({
-        username: `${blocker}-borrower`,
-        name: 'Borrower blocker',
-        type: 'individual',
+        playaName: `${blocker}-borrower`,
+        fullName: 'Borrower blocker',
+        campDepartment: '',
       });
       inventory.addStock(item.id, 1);
       const checkout = inventory.checkout(item.id, borrower.id, 1);
@@ -712,8 +716,10 @@ describe('inventory management commands', () => {
         expectedStateRevision: status.stateRevision,
         expectedOutstanding: status.outstanding,
         expectedLost: status.lost,
-        expectedName: status.borrower.name,
-        expectedUsername: status.borrower.username,
+        expectedFullName: status.borrower.fullName,
+        expectedPlayaName: status.borrower.playaName,
+        expectedPhoneNumber: status.borrower.phoneNumber,
+        expectedCampDepartment: status.borrower.campDepartment,
       };
 
       expect(() => inventory.deleteBorrowerCommand(command)).toThrow(
@@ -738,9 +744,9 @@ describe('inventory management commands', () => {
   it('rejects a borrower deletion after a stale zero-balance preview without partial writes', () => {
     const { db, inventory } = setup();
     const borrower = inventory.createBorrower({
-      username: 'stale-preview-borrower',
-      name: 'Stale Preview',
-      type: 'individual',
+      playaName: 'stale-preview-borrower',
+      fullName: 'Stale Preview',
+      campDepartment: '',
     });
     const unrelated = inventory.createItem({ name: 'Unrelated state change', kind: 'consumable' });
     const status = inventory.borrowerDeletionStatus(borrower.id);
@@ -756,8 +762,10 @@ describe('inventory management commands', () => {
       expectedStateRevision: status.stateRevision,
       expectedOutstanding: status.outstanding,
       expectedLost: status.lost,
-      expectedName: status.borrower.name,
-      expectedUsername: status.borrower.username,
+      expectedFullName: status.borrower.fullName,
+      expectedPlayaName: status.borrower.playaName,
+      expectedPhoneNumber: status.borrower.phoneNumber,
+      expectedCampDepartment: status.borrower.campDepartment,
     };
 
     expect(() => inventory.deleteBorrowerCommand(command)).toThrow(
@@ -916,9 +924,9 @@ describe('inventory management commands', () => {
       locationId: Number(location.id),
     });
     const borrower = inventory.createBorrower({
-      username: 'metadata-user',
-      name: 'Original borrower',
-      type: 'individual',
+      playaName: 'metadata-user',
+      fullName: 'Original borrower',
+      campDepartment: '',
     });
     const itemPreview = inventory.listItems('Original item')[0]!;
     const borrowerPreview = inventory.borrowerDeletionStatus(borrower.id);
@@ -939,9 +947,9 @@ describe('inventory management commands', () => {
       name: 'Renamed location',
     });
     inventory.updateBorrower(borrower.id, {
-      username: 'renamed-user',
-      name: 'Renamed borrower',
-      type: 'individual',
+      playaName: 'renamed-user',
+      fullName: 'Renamed borrower',
+      campDepartment: '',
     });
 
     const deleteItem = {
@@ -975,8 +983,10 @@ describe('inventory management commands', () => {
       expectedStateRevision: borrowerPreview.stateRevision,
       expectedOutstanding: 0,
       expectedLost: 0,
-      expectedName: borrowerPreview.borrower.name,
-      expectedUsername: borrowerPreview.borrower.username,
+      expectedFullName: borrowerPreview.borrower.fullName,
+      expectedPlayaName: borrowerPreview.borrower.playaName,
+      expectedPhoneNumber: borrowerPreview.borrower.phoneNumber,
+      expectedCampDepartment: borrowerPreview.borrower.campDepartment,
     };
     expect(() => inventory.deleteBorrowerCommand(deleteBorrower)).toThrow(
       expect.objectContaining({ code: 'confirmation_changed' }),
@@ -989,7 +999,7 @@ describe('inventory management commands', () => {
     );
     expect(inventory.listBorrowers('', true)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: borrower.id, name: 'Renamed borrower' }),
+        expect.objectContaining({ id: borrower.id, fullName: 'Renamed borrower' }),
       ]),
     );
     for (const key of [deleteItem.key, retireLocation.key, deleteBorrower.key])
@@ -998,6 +1008,52 @@ describe('inventory management commands', () => {
       ).toEqual({ count: 0 });
     db.close();
   });
+
+  it.each(['phoneNumber', 'campDepartment'] as const)(
+    'protects deletion from isolated %s changes after preview',
+    (field) => {
+      const { db, inventory } = setup();
+      const borrower = inventory.createBorrower({
+        fullName: 'Unchanged',
+        playaName: 'same',
+        phoneNumber: '050',
+        campDepartment: 'Camp',
+      });
+      const item = inventory.createItem({ name: 'History', kind: 'non_consumable' });
+      inventory.addStock(item.id, 1);
+      const checkout = inventory.checkout(item.id, borrower.id, 1);
+      inventory.returnCheckout(checkout, 1, 0);
+      const events = db.prepare('SELECT * FROM inventory_events ORDER BY id').all();
+      const loans = db.prepare('SELECT * FROM loan_state ORDER BY checkout_id').all();
+      const preview = inventory.borrowerDeletionStatus(borrower.id);
+      inventory.updateBorrower(borrower.id, { ...borrower, [field]: 'Changed' });
+      const before = inventory.listBorrowers('', true);
+      const command = {
+        key: `stale-${field}`,
+        ledgerEpoch: inventory.inventoryEpoch(),
+        borrowerId: borrower.id,
+        expectedStateRevision: preview.stateRevision,
+        expectedOutstanding: 0,
+        expectedLost: 0,
+        expectedFullName: preview.borrower.fullName,
+        expectedPlayaName: preview.borrower.playaName,
+        expectedPhoneNumber: preview.borrower.phoneNumber,
+        expectedCampDepartment: preview.borrower.campDepartment,
+      };
+      expect(() => inventory.deleteBorrowerCommand(command)).toThrow(
+        expect.objectContaining({ code: 'confirmation_changed' }),
+      );
+      expect(inventory.listBorrowers('', true)).toEqual(before);
+      expect(db.prepare('SELECT * FROM inventory_events ORDER BY id').all()).toEqual(events);
+      expect(db.prepare('SELECT * FROM loan_state ORDER BY checkout_id').all()).toEqual(loans);
+      expect(
+        db
+          .prepare('SELECT COUNT(*) count FROM inventory_command_receipts WHERE key=?')
+          .get(command.key),
+      ).toEqual({ count: 0 });
+      db.close();
+    },
+  );
 
   it('rolls back location relocation when source deletion fails mid-transaction', () => {
     const { db, inventory } = setup();

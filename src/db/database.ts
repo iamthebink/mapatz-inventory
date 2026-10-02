@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeBorrowerText, normalizeBorrowerPhone } from '../domain/borrower-profile.js';
 import { normalizeItemName } from '../domain/item-name.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,12 @@ export function openDatabase(filename: string): InventoryDatabase {
 }
 
 export function migrate(db: InventoryDatabase): void {
+  db.function('normalize_borrower_text', { deterministic: true }, (value) =>
+    normalizeBorrowerText(String(value)),
+  );
+  db.function('normalize_borrower_phone', { deterministic: true }, (value) =>
+    normalizeBorrowerPhone(String(value)),
+  );
   db.function('normalize_item_name', { deterministic: true }, (value) =>
     normalizeItemName(String(value)),
   );
@@ -47,6 +54,7 @@ export function migrate(db: InventoryDatabase): void {
     ),
   );
   const freshInstall = applied.size === 0;
+
   if (!freshInstall) {
     const existing = new Set(
       (
@@ -62,6 +70,19 @@ export function migrate(db: InventoryDatabase): void {
     [...applied].some((version) => !migrations.some((migration) => migration.version === version))
   )
     throw new Error('Database schema is newer than this application; install the newer version.');
+  if (!freshInstall) {
+    const columns = (db.prepare('PRAGMA table_info(borrowers)').all() as { name: string }[]).map(
+      (row) => row.name,
+    );
+    if (
+      !['playa_name', 'full_name', 'phone_number', 'camp_department'].every((name) =>
+        columns.includes(name),
+      )
+    )
+      throw new Error(
+        'Database uses an unsupported borrower profile schema. Preserve it and use a separate fresh database; no upgrade migration is provided.',
+      );
+  }
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
     const sql = readFileSync(resolve(here, `migrations/${migration.filename}`), 'utf8');

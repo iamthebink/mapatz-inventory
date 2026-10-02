@@ -344,9 +344,9 @@ describe('inventory API permission and edge-case matrix', () => {
     const sourceInventory = new InventoryService(sourceDb);
     const sourceItem = sourceInventory.listItems('', true)[0]!;
     const sourceBorrower = sourceInventory.createBorrower({
-      username: 'recover-me',
-      name: 'Recovery Borrower',
-      type: 'individual',
+      playaName: 'recover-me',
+      fullName: 'Recovery Borrower',
+      campDepartment: '',
     });
     sourceInventory.checkout(sourceItem.id, sourceBorrower.id, 1, 'preserved loan');
     const expected = sourceTransfers.snapshot();
@@ -477,9 +477,9 @@ describe('inventory API permission and edge-case matrix', () => {
     const item = inventory.createItem({ name: 'אוהל', kind: 'non_consumable' });
     inventory.addStock(item.id, 3);
     const borrower = inventory.createBorrower({
-      username: 'CampA',
-      name: 'מחנה א',
-      type: 'camp_organization',
+      playaName: 'CampA',
+      fullName: 'מחנה א',
+      campDepartment: 'מחנה א',
     });
     const checkout = await agent
       .post('/api/checkout')
@@ -497,9 +497,9 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(inventory.listLoans()[0]?.outstanding).toBe(1);
     inventory.archiveBorrower(borrower.id, false);
     const inactive = inventory.createBorrower({
-      username: 'old-user',
-      name: 'ישן',
-      type: 'individual',
+      playaName: 'old-user',
+      fullName: 'ישן',
+      campDepartment: '',
     });
     inventory.archiveBorrower(inactive.id, true);
     await agent
@@ -514,7 +514,11 @@ describe('inventory API permission and edge-case matrix', () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'גנרטור', kind: 'non_consumable' });
     inventory.addStock(item.id, 1);
-    const borrower = inventory.createBorrower({ username: 'power', name: 'חשמל', type: 'other' });
+    const borrower = inventory.createBorrower({
+      playaName: 'power',
+      fullName: 'חשמל',
+      campDepartment: 'מחנה אחר',
+    });
     const checkoutId = inventory.checkout(item.id, borrower.id, 1);
     await agent.post('/api/lost').send({ checkoutId, quantity: 1, lost: true }).expect(403);
     await role(agent, 'admin', 'admin-pass');
@@ -533,9 +537,9 @@ describe('inventory API permission and edge-case matrix', () => {
     const item = inventory.createItem({ name: 'Damaged tool', kind: 'non_consumable' });
     inventory.addStock(item.id, 3);
     const borrower = inventory.createBorrower({
-      username: 'damage-test',
-      name: 'Borrower',
-      type: 'individual',
+      playaName: 'damage-test',
+      fullName: 'Borrower',
+      campDepartment: '',
     });
     const checkoutId = inventory.checkout(item.id, borrower.id, 2);
     inventory.returnCheckout(checkoutId, 0, 2);
@@ -794,9 +798,9 @@ describe('inventory API permission and edge-case matrix', () => {
     const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' });
     inventory.addStock(item.id, 1);
     const borrower = inventory.createBorrower({
-      username: 'drill-user',
-      name: 'קודח',
-      type: 'individual',
+      playaName: 'drill-user',
+      fullName: 'קודח',
+      campDepartment: '',
     });
     const checkoutId = inventory.checkout(item.id, borrower.id, 1);
     await role(agent, 'admin', 'admin-pass');
@@ -857,9 +861,9 @@ describe('inventory management API', () => {
 
     const borrowedItem = inventory.createItem({ name: 'Checked out item', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'delete-race',
-      name: 'Race',
-      type: 'individual',
+      playaName: 'delete-race',
+      fullName: 'Race',
+      campDepartment: '',
     });
     inventory.addStock(borrowedItem.id, 1);
     const stalePreview = inventory.listItems('Checked out item')[0]!;
@@ -879,13 +883,13 @@ describe('inventory management API', () => {
     db.close();
   });
 
-  it('deletes settled borrowers through an admin-only preview and preserves exact retries after username reuse', async () => {
+  it('deletes settled borrowers through an admin-only preview and preserves exact retries after playaName reuse', async () => {
     const { db, inventory, agent } = fixture();
     const item = inventory.createItem({ name: 'Borrower deletion item', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'reuse-user',
-      name: 'Old user',
-      type: 'individual',
+      playaName: 'reuse-user',
+      fullName: 'Old user',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 2);
     const checkoutId = inventory.checkout(item.id, borrower.id, 1);
@@ -900,8 +904,10 @@ describe('inventory management API', () => {
       expectedStateRevision: status.body.stateRevision,
       expectedOutstanding: 0,
       expectedLost: 0,
-      expectedName: status.body.borrower.name,
-      expectedUsername: status.body.borrower.username,
+      expectedFullName: status.body.borrower.fullName,
+      expectedPlayaName: status.body.borrower.playaName,
+      expectedPhoneNumber: status.body.borrower.phoneNumber,
+      expectedCampDepartment: status.body.borrower.campDepartment,
     };
     const deleted = await agent
       .post(`/api/borrowers/${borrower.id}/delete`)
@@ -912,9 +918,9 @@ describe('inventory management API', () => {
       .send(command)
       .expect(200, deleted.body);
     const replacement = inventory.createBorrower({
-      username: 'reuse-user',
-      name: 'New user',
-      type: 'individual',
+      playaName: 'reuse-user',
+      fullName: 'New user',
+      campDepartment: '',
     });
     expect(replacement.id).toBeGreaterThan(borrower.id);
     await agent
@@ -922,10 +928,10 @@ describe('inventory management API', () => {
       .send(command)
       .expect(200, deleted.body);
     expect(
-      inventory.listBorrowers('', true).find((entry) => entry.username === 'reuse-user'),
+      inventory.listBorrowers('', true).find((entry) => entry.playaName === 'reuse-user'),
     ).toMatchObject({
       id: replacement.id,
-      name: 'New user',
+      fullName: 'New user',
     });
     db.close();
   });
@@ -1188,9 +1194,9 @@ describe('inventory management API', () => {
     const { db, inventory, agent } = fixture(clock);
     const item = inventory.createItem({ name: 'Damaged saw', kind: 'non_consumable' });
     const borrower = inventory.createBorrower({
-      username: 'api-saw',
-      name: 'Saw user',
-      type: 'individual',
+      playaName: 'api-saw',
+      fullName: 'Saw user',
+      campDepartment: '',
     });
     inventory.addStock(item.id, 2);
     const checkout = inventory.checkout(item.id, borrower.id, 2);

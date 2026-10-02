@@ -21,8 +21,10 @@ const preview = {
   affected: [
     {
       id: 1,
-      username: 'old-user',
-      name: 'שואל קודם',
+      playaName: 'old-user',
+      fullName: 'שואל קודם',
+      phoneNumber: '052-123',
+      campDepartment: 'Camp South',
       loans: [{ checkoutId: 1, itemId: 1, itemName: 'אוהל', quantity: 3 }],
     },
   ],
@@ -55,6 +57,8 @@ describe('borrower import dialog', () => {
     await user.click(screen.getByRole('button', { name: 'ייבוא' }));
     const confirmation = await screen.findByRole('alertdialog');
     expect(confirmation.textContent).toContain('old-user');
+    expect(confirmation.textContent).toContain('052-123');
+    expect(confirmation.textContent).toContain('Camp South');
     expect(confirmation.textContent).toContain('אוהל: 3 יחידות');
     await waitFor(() =>
       expect(document.activeElement).toBe(

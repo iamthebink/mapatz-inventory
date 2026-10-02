@@ -8,7 +8,7 @@ test('admin replaces borrowers only after confirming equipment returns', async (
 }) => {
   const workbook = new ExcelJS.Workbook();
   workbook.addWorksheet('Borrowers').addRows([
-    ['Username', 'Name', 'Contact', 'Type'],
+    ['Playa Name', 'Full Name', 'Phone Number', 'Camp/Department'],
     ['import-browser', 'שואל מיובא', '', ''],
   ]);
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
@@ -59,7 +59,7 @@ test('admin replaces borrowers only after confirming equipment returns', async (
     ledger.prepare('SELECT archived FROM borrowers WHERE id=?').get(seed.borrower.id)?.archived,
   ).toBe(1);
   expect(
-    ledger.prepare('SELECT archived FROM borrowers WHERE username=?').get('import-browser')
+    ledger.prepare('SELECT archived FROM borrowers WHERE playa_name=?').get('import-browser')
       ?.archived,
   ).toBe(0);
   await page.getByRole('tab', { name: 'שואלים' }).click();
@@ -73,7 +73,7 @@ test('admin imports with default merge while preserving absent borrowers and the
 }) => {
   const workbook = new ExcelJS.Workbook();
   workbook.addWorksheet('Borrowers').addRows([
-    ['Username', 'Name', 'Contact', 'Type'],
+    ['Playa Name', 'Full Name', 'Phone Number', 'Camp/Department'],
     ['merge-browser', 'שואל ממוזג', '', ''],
   ]);
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
@@ -105,7 +105,7 @@ test('admin imports with default merge while preserving absent borrowers and the
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(0);
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   expect(
-    ledger.prepare('SELECT archived FROM borrowers WHERE username=?').get('merge-browser')
+    ledger.prepare('SELECT archived FROM borrowers WHERE playa_name=?').get('merge-browser')
       ?.archived,
   ).toBe(0);
   expect(

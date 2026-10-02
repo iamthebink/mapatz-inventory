@@ -1,3 +1,9 @@
+import {
+  borrowerIdentity,
+  isValidBorrowerProfile,
+  type BorrowerProfile,
+} from '../domain/borrower-profile';
+import type { BorrowerCreateValidation } from '../contracts/borrower-workflow';
 import { desktop } from './desktop';
 import {
   forwardRef,
@@ -12,7 +18,12 @@ import {
 import { Check, ClipboardCheck, TriangleAlert, Undo2, UserPlus } from 'lucide-react';
 import type { Borrower } from '../domain/types';
 import type { BorrowerDeskSnapshot } from '../contracts/borrower-workflow';
-import { fetchBorrowerDeskSnapshot, fetchBorrowerSearch, sendFrozenBorrowerAttempt } from './api';
+import {
+  api,
+  fetchBorrowerDeskSnapshot,
+  fetchBorrowerSearch,
+  sendFrozenBorrowerAttempt,
+} from './api';
 import { ActiveDescendantCombobox, type ComboboxOption } from './ActiveDescendantCombobox';
 import { BorrowerOperationalTables, type ReturnCondition } from './BorrowerOperationalTables';
 import { Dialog, useDialogStack } from './Dialog';
@@ -81,12 +92,6 @@ const translatedFeedback: Record<string, string> = {
   dependent_recovery: 'יש לבטל תחילה את הפעולה התלויה בסימון כאבוד.',
 };
 
-const borrowerTypeNames: Record<Borrower['type'], string> = {
-  individual: 'יחיד',
-  camp_organization: 'ארגון מחנה',
-  other: 'אחר',
-};
-
 function uuid(): string {
   return crypto.randomUUID();
 }
@@ -101,10 +106,10 @@ function focusWithFallback(
 
 function creationHasUnsavedInput(creation: CreationState): boolean {
   return Boolean(
-    creation.values.name ||
-    creation.values.username ||
-    creation.values.contact ||
-    creation.values.type !== 'individual',
+    creation.values.fullName ||
+    creation.values.playaName ||
+    creation.values.phoneNumber ||
+    creation.values.campDepartment,
   );
 }
 
@@ -172,6 +177,13 @@ export const BorrowerWorkflow = forwardRef<
   const [discardOpen, setDiscardOpen] = useState(false);
   const [discardCreationOpen, setDiscardCreationOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [campSuggestions, setCampSuggestions] = useState<string[]>([]);
+  const guidanceDetailsRef = useRef(new Map<string, string>());
+  const guidanceShownRef = useRef(new Set<string>());
+  const guidanceRequestRef = useRef<{
+    key: string;
+    request: Promise<BorrowerCreateValidation>;
+  } | null>(null);
   const [creation, setCreation] = useState<CreationState | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const deskVisibleRef = useRef(deskVisible);
@@ -323,7 +335,7 @@ export const BorrowerWorkflow = forwardRef<
       creation.fieldErrors.length === 0
     )
       return;
-    const field = creation.fieldErrors[0]?.field ?? 'username';
+    const field = creation.fieldErrors[0]?.field ?? 'playaName';
     const timer = window.setTimeout(
       () => document.querySelector<HTMLInputElement>(`[name="${field}"]`)?.focus(),
       0,
@@ -994,18 +1006,101 @@ export const BorrowerWorkflow = forwardRef<
     }
   };
 
+  useEffect(() => {
+    if (!createOpen) return;
+    void api<string[]>('/borrowers/camp-suggestions')
+      .then(setCampSuggestions)
+      .catch(() => setCampSuggestions([]));
+  }, [createOpen]);
+
+  const checkProfileGuidance = useCallback(
+    async (profile: BorrowerProfile, canShow: () => boolean = () => true): Promise<void> => {
+      if (!isValidBorrowerProfile(profile)) return;
+      const key = borrowerIdentity(profile);
+      let request =
+        guidanceRequestRef.current?.key === key ? guidanceRequestRef.current.request : null;
+      if (!request) {
+        request = api<BorrowerCreateValidation>('/borrowers/validate', {
+          method: 'POST',
+          signal: AbortSignal.timeout(3000),
+          body: JSON.stringify({
+            fullName: profile.fullName,
+            playaName: profile.playaName,
+            phoneNumber: profile.phoneNumber,
+            campDepartment: profile.campDepartment,
+          }),
+        });
+        guidanceRequestRef.current = { key, request };
+      }
+      try {
+        const validation = await request;
+        if (!canShow() || !validation.matches.length || validation.fieldErrors.length) return;
+        const evidence = JSON.stringify([
+          key,
+          validation.matches
+            .map(({ borrower }) => [borrower.id, borrowerIdentity(borrower), borrower.archived])
+            .sort(),
+          validation.fieldErrors,
+        ]);
+        const descriptions = validation.matches
+          .map(({ borrower }) =>
+            [borrower.fullName, borrower.playaName, borrower.phoneNumber, borrower.campDepartment]
+              .filter(Boolean)
+              .join(' · '),
+          )
+          .join('; ');
+        guidanceDetailsRef.current.set(key, `נמצאו שואלים עם פרטים דומים: ${descriptions}`);
+        if (guidanceShownRef.current.has(evidence)) return;
+        guidanceShownRef.current.add(evidence);
+        showToast(
+          'נמצאו שואלים עם פרטים דומים',
+          `${descriptions}. אם זהו שואל אחר, אפשר ליצור כרטיס חדש.`,
+          'warning',
+        );
+      } catch {
+        const evidence = `error:${key}`;
+        if (!canShow() || guidanceShownRef.current.has(evidence)) return;
+        guidanceShownRef.current.add(evidence);
+        showToast(
+          'בדיקת שואלים דומים נכשלה',
+          'לא ניתן לבדוק כרגע שואלים דומים. אפשר להמשיך ביצירה; צירוף זהה עדיין יידחה בשרת.',
+          'error',
+        );
+      } finally {
+        if (guidanceRequestRef.current?.request === request) guidanceRequestRef.current = null;
+      }
+    },
+    [showToast],
+  );
+
+  useEffect(() => {
+    if (!createOpen || !creation || !['editing', 'conflicted'].includes(creation.phase.kind))
+      return;
+    let cancelled = false;
+    const timer = window.setTimeout(
+      () => void checkProfileGuidance(creation.values, () => !cancelled),
+      350,
+    );
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [createOpen, creation, checkProfileGuidance]);
+
   const beginCreate = () => {
     if (!searchSnapshot) return;
     setCreation(
       createCreationState({
         contractVersion: 1,
         ledgerEpoch: searchSnapshot.ledgerEpoch,
-        username: '',
-        name: '',
-        contact: '',
-        type: 'individual',
+        playaName: '',
+        fullName: '',
+        phoneNumber: '',
+        campDepartment: '',
       }),
     );
+    guidanceShownRef.current.clear();
+    guidanceDetailsRef.current.clear();
     setCreateOpen(true);
     if (!sentinelRef.current) {
       history.pushState({ mapatzBorrowerWorkflow: true }, '', location.href);
@@ -1116,7 +1211,12 @@ export const BorrowerWorkflow = forwardRef<
     setCreation(next);
     if ('outcome' in result.result && result.result.outcome === 'committed') {
       feedbackRef.current = next.feedback;
-      showToast('הפעולה הושלמה', translatedFeedback.borrower_created!, 'success');
+      const guidance = guidanceDetailsRef.current.get(borrowerIdentity(source.values));
+      showToast(
+        'הפעולה הושלמה',
+        `${translatedFeedback.borrower_created!}${guidance ? `. ${guidance}` : ''}`,
+        guidance ? 'warning' : 'success',
+      );
       if (next.phase.kind !== 'committed') return;
       const createdBorrower = next.phase.borrower;
       setSearch('');
@@ -1129,7 +1229,7 @@ export const BorrowerWorkflow = forwardRef<
     } else if (next.phase.kind === 'editing' || next.phase.kind === 'conflicted')
       queueMicrotask(() => {
         const field = next.fieldErrors[0]?.field;
-        document.querySelector<HTMLInputElement>(`[name="${field ?? 'username'}"]`)?.focus();
+        document.querySelector<HTMLInputElement>(`[name="${field ?? 'playaName'}"]`)?.focus();
       });
   };
 
@@ -1137,7 +1237,7 @@ export const BorrowerWorkflow = forwardRef<
     event.preventDefault();
     if (!creation || creationLocks(creation).dispatch) return;
     let normalized = creation;
-    for (const field of ['username', 'name', 'contact'] as const) {
+    for (const field of ['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const) {
       const value = normalized.values[field].trim();
       if (value !== normalized.values[field])
         normalized = creationReducer(normalized, { type: 'change', field, value });
@@ -1162,6 +1262,7 @@ export const BorrowerWorkflow = forwardRef<
       queueMicrotask(() => createFirstRef.current?.focus());
       return;
     }
+    await checkProfileGuidance(normalized.values);
     frozenAttemptRef.current = attempt;
     await applyCreateResult(
       await dispatchFrozenAttempt(localStorage, attempt, sendFrozenBorrowerAttempt),
@@ -1222,7 +1323,7 @@ export const BorrowerWorkflow = forwardRef<
             searchRequestRef.current += 1;
             setSearch(event.target.value);
           }}
-          placeholder="שם, שם משתמש או פרטי קשר"
+          placeholder="שם מלא, שם פלאיה, מספר טלפון או מחנה / מחלקה"
           disabled={deskBlocked}
           aria-describedby="borrower-directory-summary"
         />
@@ -1247,9 +1348,9 @@ export const BorrowerWorkflow = forwardRef<
           <thead>
             <tr>
               <th scope="col">שם</th>
-              <th scope="col">שם משתמש</th>
-              <th scope="col">פרטי קשר</th>
-              <th scope="col">סוג</th>
+              <th scope="col">שם פלאיה</th>
+              <th scope="col">מספר טלפון</th>
+              <th scope="col">מחנה / מחלקה</th>
             </tr>
           </thead>
           <tbody>
@@ -1263,7 +1364,7 @@ export const BorrowerWorkflow = forwardRef<
               <tr>
                 <td className="borrower-directory-empty" colSpan={4}>
                   {search.trim()
-                    ? 'נסו שם, שם משתמש או פרטי קשר אחרים.'
+                    ? 'נסו שם, שם פלאיה או מספר טלפון אחרים.'
                     : 'ניתן ליצור שואל חדש מהפעולה שבראש העמוד.'}
                 </td>
               </tr>
@@ -1282,22 +1383,22 @@ export const BorrowerWorkflow = forwardRef<
                       type="button"
                       className="borrower-directory-action"
                       disabled={deskBlocked}
-                      aria-label={`פתיחת כרטיס שואל — ${borrower.name}`}
+                      aria-label={`פתיחת כרטיס שואל — ${borrower.fullName}`}
                       onClick={(event) => {
                         event.stopPropagation();
                         void openBorrower(borrower);
                       }}
                     >
-                      {borrower.name}
+                      {borrower.fullName}
                     </button>
                   </td>
-                  <td data-label="שם משתמש">
-                    <bdi dir="ltr">{borrower.username}</bdi>
+                  <td data-label="שם פלאיה">
+                    <bdi>{borrower.playaName || '—'}</bdi>
                   </td>
-                  <td data-label="פרטי קשר">
-                    {borrower.contact ? <bdi dir="ltr">{borrower.contact}</bdi> : '—'}
+                  <td data-label="מספר טלפון">
+                    {borrower.phoneNumber ? <bdi dir="ltr">{borrower.phoneNumber}</bdi> : '—'}
                   </td>
-                  <td data-label="סוג">{borrowerTypeNames[borrower.type]}</td>
+                  <td data-label="מחנה / מחלקה">{borrower.campDepartment || '—'}</td>
                 </tr>
               ))
             )}
@@ -1311,7 +1412,11 @@ export const BorrowerWorkflow = forwardRef<
           <ul>
             {searchSnapshot.archivedMatches.map(({ borrower }) => (
               <li key={borrower.id}>
-                {borrower.name} · <bdi dir="ltr">{borrower.username}</bdi>
+                {borrower.fullName} · <bdi>{borrower.playaName || '—'}</bdi>
+                {' · מספר טלפון: '}
+                <bdi dir="ltr">{borrower.phoneNumber || '—'}</bdi>
+                {' · מחנה / מחלקה: '}
+                {borrower.campDepartment || '—'}
               </li>
             ))}
           </ul>
@@ -1344,7 +1449,7 @@ export const BorrowerWorkflow = forwardRef<
 
       {selectedBorrower && (
         <Dialog
-          title={`כרטיס שואל — ${selectedBorrower.name}`}
+          title={`כרטיס שואל — ${selectedBorrower.fullName}`}
           level="root"
           role="dialog"
           variant="workspace"
@@ -1393,7 +1498,8 @@ export const BorrowerWorkflow = forwardRef<
           }
         >
           <p ref={cardOverviewRef} className="borrower-identity-meta" tabIndex={-1}>
-            <bdi dir="ltr">{selectedBorrower.username}</bdi> · {selectedBorrower.contact}
+            <bdi>{selectedBorrower.playaName}</bdi> ·{' '}
+            <bdi dir="ltr">{selectedBorrower.phoneNumber}</bdi> · {selectedBorrower.campDepartment}
           </p>
           {cardLoadFailed ? (
             <div className="card-load-failure">
@@ -1781,58 +1887,53 @@ export const BorrowerWorkflow = forwardRef<
             className="dialog-form"
             onSubmit={(event) => void submitCreate(event)}
           >
-            {(['username', 'name', 'contact'] as const).map((field, index) => (
-              <label className="field-label" key={field}>
-                {field === 'username' ? 'שם משתמש' : field === 'name' ? 'שם מלא' : 'פרטי קשר'}
-                <input
-                  ref={index === 0 ? createFirstRef : undefined}
-                  name={field}
-                  required={field !== 'contact'}
-                  minLength={field === 'username' ? 2 : field === 'name' ? 1 : undefined}
-                  maxLength={field === 'username' ? 40 : field === 'name' ? 100 : 500}
-                  dir={field === 'username' ? 'ltr' : undefined}
-                  className="input-field"
-                  value={creation.values[field]}
-                  onChange={(event) =>
-                    setCreation(
-                      creationReducer(creation, {
-                        type: 'change',
-                        field,
-                        value: event.target.value,
-                      }),
-                    )
+            {(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const).map(
+              (field, index) => (
+                <label className="field-label" key={field}>
+                  {
+                    {
+                      fullName: 'שם מלא',
+                      playaName: 'שם פלאיה',
+                      phoneNumber: 'מספר טלפון',
+                      campDepartment: 'מחנה / מחלקה',
+                    }[field]
                   }
-                />
-                {creation.fieldErrors
-                  .filter((error) => error.field === field)
-                  .map((error) => (
-                    <span key={error.code} className="field-error">
-                      {error.message}
-                    </span>
-                  ))}
-              </label>
-            ))}
-            <label className="field-label">
-              סוג
-              <select
-                name="type"
-                className="input-field"
-                value={creation.values.type}
-                onChange={(event) =>
-                  setCreation(
-                    creationReducer(creation, {
-                      type: 'change',
-                      field: 'type',
-                      value: event.target.value,
-                    }),
-                  )
-                }
-              >
-                <option value="individual">יחיד</option>
-                <option value="camp_organization">ארגון מחנה</option>
-                <option value="other">אחר</option>
-              </select>
-            </label>
+                  <input
+                    ref={index === 0 ? createFirstRef : undefined}
+                    name={field}
+                    list={field === 'campDepartment' ? 'workflow-camp-suggestions' : undefined}
+                    required={field === 'fullName'}
+                    minLength={field === 'fullName' ? 1 : undefined}
+                    maxLength={100}
+                    type={field === 'phoneNumber' ? 'tel' : 'text'}
+                    dir={field === 'phoneNumber' ? 'ltr' : undefined}
+                    className="input-field"
+                    value={creation.values[field]}
+                    onChange={(event) =>
+                      setCreation(
+                        creationReducer(creation, {
+                          type: 'change',
+                          field,
+                          value: event.target.value,
+                        }),
+                      )
+                    }
+                  />
+                  {creation.fieldErrors
+                    .filter((error) => error.field === field)
+                    .map((error) => (
+                      <span key={error.code} className="field-error">
+                        {error.message}
+                      </span>
+                    ))}
+                </label>
+              ),
+            )}
+            <datalist id="workflow-camp-suggestions">
+              {campSuggestions.map((camp) => (
+                <option key={camp} value={camp} />
+              ))}
+            </datalist>
             {creation.phase.kind === 'conflicted' && (
               <div className="creation-matches">
                 <p>נמצאו שואלים אפשריים תואמים:</p>
@@ -1842,7 +1943,19 @@ export const BorrowerWorkflow = forwardRef<
                     : creation.phase.validation.currentValidation.matches
                   ).map(({ borrower, status }) => (
                     <li key={borrower.id}>
-                      {borrower.name} — {status === 'archived' ? 'בארכיון' : 'פעיל'}
+                      <span>
+                        {borrower.fullName} — {status === 'archived' ? 'בארכיון' : 'פעיל'}
+                      </span>
+                      {' · שם פלאיה: '}
+                      <bdi>{borrower.playaName || '—'}</bdi>
+                      {' · מספר טלפון: '}
+                      <bdi dir="ltr">{borrower.phoneNumber || '—'}</bdi>
+                      {' · מחנה / מחלקה: '}
+                      {borrower.campDepartment || '—'}
+                      {' · '}
+                      {borrowerIdentity(creation.values) === borrowerIdentity(borrower)
+                        ? 'התאמה מלאה'
+                        : 'פרטים דומים'}
                     </li>
                   ))}
                 </ul>

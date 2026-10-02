@@ -9,13 +9,13 @@ import { DialogStackProvider } from '../../src/web/Dialog';
 
 const borrower = {
   id: 7,
-  username: 'or',
-  name: 'אור',
-  contact: '050',
-  type: 'individual' as const,
+  playaName: 'or',
+  fullName: 'אור',
+  phoneNumber: '050',
+  campDepartment: '' as const,
   archived: false,
 };
-const archived = { ...borrower, id: 8, username: 'old', name: 'אור הישן', archived: true };
+const archived = { ...borrower, id: 8, playaName: 'old', fullName: 'אור הישן', archived: true };
 const item = {
   id: 11,
   name: 'אוהל',
@@ -56,7 +56,7 @@ function expectHeldQuantity(quantity: number) {
 
 async function activateBorrowerAction(key: 'Enter' | ' ' = 'Enter') {
   const action = await screen.findByRole('button', {
-    name: `פתיחת כרטיס שואל — ${borrower.name}`,
+    name: `פתיחת כרטיס שואל — ${borrower.fullName}`,
   });
   action.focus();
   await userEvent.keyboard(key === 'Enter' ? '{Enter}' : ' ');
@@ -146,7 +146,7 @@ it('protects a dirty borrower creation draft with a neutral keep and danger disc
   );
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
-  await user.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+  await user.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), 'new-user');
   await user.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
   await user.click(screen.getByRole('button', { name: 'ביטול' }));
 
@@ -202,12 +202,15 @@ it('protects a borrower creation draft when only its type changed', async () => 
   );
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
-  await user.selectOptions(screen.getByRole('combobox', { name: 'סוג' }), 'other');
+  await user.type(screen.getByRole('combobox', { name: 'מחנה / מחלקה' }), 'מחנה אחר');
   await user.click(screen.getByRole('button', { name: 'ביטול' }));
 
   const discard = await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
   await user.click(within(discard).getByRole('button', { name: 'להמשיך לערוך' }));
-  expect(screen.getByRole('combobox', { name: 'סוג' })).toHaveProperty('value', 'other');
+  expect(screen.getByRole('combobox', { name: 'מחנה / מחלקה' })).toHaveProperty(
+    'value',
+    'מחנה אחר',
+  );
 });
 
 beforeEach(() => {
@@ -809,10 +812,10 @@ describe('borrower desk workflow', () => {
     const second = {
       ...borrower,
       id: 9,
-      username: 'new-account',
-      name: 'שואל נוסף',
-      contact: '052',
-      type: 'other' as const,
+      playaName: 'new-account',
+      fullName: 'שואל נוסף',
+      phoneNumber: '052',
+      campDepartment: 'מחנה אחר' as const,
     };
     let resolveFiltered: (() => void) | undefined;
     vi.stubGlobal(
@@ -848,25 +851,27 @@ describe('borrower desk workflow', () => {
     ).toBe(true);
     expect(document.querySelector('.borrower-search-row button')).toBeNull();
     const activeRow = screen
-      .getByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` })
+      .getByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.fullName}` })
       .closest('tr')!;
     expect(within(activeRow).getByText('050').closest('bdi')?.getAttribute('dir')).toBe('ltr');
-    expect(within(activeRow).getByText('יחיד')).toBeTruthy();
+    expect(within(activeRow).getByText('אור')).toBeTruthy();
     const secondRow = screen
-      .getByRole('button', { name: `פתיחת כרטיס שואל — ${second.name}` })
+      .getByRole('button', { name: `פתיחת כרטיס שואל — ${second.fullName}` })
       .closest('tr')!;
     expect(within(secondRow).getByText('052').closest('bdi')?.getAttribute('dir')).toBe('ltr');
-    expect(within(secondRow).getByText('אחר')).toBeTruthy();
+    expect(within(secondRow).getByText('מחנה אחר')).toBeTruthy();
 
     await userEvent.type(search, 'new');
     expect(screen.getAllByText('טוען תוצאות…')).toHaveLength(2);
     expect(
-      screen.queryByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` }),
+      screen.queryByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.fullName}` }),
     ).toBeNull();
     await waitFor(() => expect(resolveFiltered).toBeDefined());
     resolveFiltered?.();
     expect(await screen.findByText('שואל פעיל אחד')).toBeTruthy();
-    expect(screen.getByRole('button', { name: `פתיחת כרטיס שואל — ${second.name}` })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: `פתיחת כרטיס שואל — ${second.fullName}` }),
+    ).toBeTruthy();
   });
 
   it('opens the non-archived borrow catalog on item-search focus and filters it', async () => {
@@ -901,7 +906,7 @@ describe('borrower desk workflow', () => {
     );
 
     await userEvent.click(
-      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.name}` }),
+      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.fullName}` }),
     );
     const itemSearch = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     await waitFor(() =>
@@ -1002,7 +1007,7 @@ describe('borrower desk workflow', () => {
     expect(within(archivedNotice).getByText(/אור הישן/)).toBeTruthy();
     expect(within(archivedNotice).queryByRole('button')).toBeNull();
     const borrowerAction = await screen.findByRole('button', {
-      name: `פתיחת כרטיס שואל — ${borrower.name}`,
+      name: `פתיחת כרטיס שואל — ${borrower.fullName}`,
     });
     await userEvent.click(within(borrowerAction.closest('tr')!).getByText('050'));
 
@@ -1390,9 +1395,9 @@ describe('borrower desk workflow', () => {
     const created = {
       ...borrower,
       id: 12,
-      username: 'new-user',
-      name: 'שואל חדש',
-      contact: '',
+      playaName: 'new-user',
+      fullName: 'שואל חדש',
+      phoneNumber: '',
     };
     let cardLoads = 0;
     let createPosts = 0;
@@ -1413,8 +1418,8 @@ describe('borrower desk workflow', () => {
           expect(JSON.parse(String(init.body))).toMatchObject({
             contractVersion: 1,
             ledgerEpoch: 3,
-            username: 'new-user',
-            name: 'שואל חדש',
+            playaName: 'new-user',
+            fullName: 'שואל חדש',
           });
           return json(
             { outcome: 'committed', idempotencyKey: key, replayed: false, borrower: created },
@@ -1437,7 +1442,7 @@ describe('borrower desk workflow', () => {
     );
     await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'unrelated');
     await userEvent.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), 'new-user');
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
     await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
     const retry = await screen.findByRole('button', { name: 'ניסיון פתיחת הכרטיס מחדש' });
@@ -1459,15 +1464,21 @@ describe('borrower desk workflow', () => {
     );
     window.dispatchEvent(new PopStateEvent('popstate'));
     const createdRow = (
-      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${created.name}` })
+      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${created.fullName}` })
     ).closest('tr')!;
-    expect(within(createdRow).getByText('—')).toBeTruthy();
-    expect(within(createdRow).getByText('יחיד')).toBeTruthy();
+    expect(within(createdRow).getAllByText('—')).toHaveLength(2);
+    expect(within(createdRow).getByText('שואל חדש')).toBeTruthy();
     expect(screen.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveProperty('value', '');
   });
 
   it('opens the created card without waiting for a failed directory refresh', async () => {
-    const created = { ...borrower, id: 12, username: 'new-user', name: 'שואל חדש', contact: '' };
+    const created = {
+      ...borrower,
+      id: 12,
+      playaName: 'new-user',
+      fullName: 'שואל חדש',
+      phoneNumber: '',
+    };
     let emptySearches = 0;
     let rejectRefresh: ((error: Error) => void) | undefined;
     vi.stubGlobal(
@@ -1506,7 +1517,7 @@ describe('borrower desk workflow', () => {
     await userEvent.type(search, 'unrelated');
     await screen.findByText('לא נמצאו שואלים פעילים מתאימים');
     await userEvent.click(screen.getByRole('button', { name: 'יצירת שואל חדש' }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), 'new-user');
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
     await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
 
@@ -1527,7 +1538,7 @@ describe('borrower desk workflow', () => {
     );
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(
-      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${created.name}` }),
+      await screen.findByRole('button', { name: `פתיחת כרטיס שואל — ${created.fullName}` }),
     ).toBeTruthy();
     await new Promise((resolve) => window.setTimeout(resolve, 150));
     expect(emptySearches).toBe(2);
@@ -1535,7 +1546,13 @@ describe('borrower desk workflow', () => {
 
   it('reconciles creation persistence before exact retry and submits normalized values once', async () => {
     vi.stubGlobal('localStorage', failFirstWriteStorage());
-    const created = { ...borrower, id: 12, username: 'new-user', name: 'שואל חדש', contact: '' };
+    const created = {
+      ...borrower,
+      id: 12,
+      playaName: 'new-user',
+      fullName: 'שואל חדש',
+      phoneNumber: '',
+    };
     const bodies: unknown[] = [];
     vi.stubGlobal(
       'fetch',
@@ -1562,14 +1579,14 @@ describe('borrower desk workflow', () => {
       </DialogStackProvider>,
     );
     await userEvent.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), '  new-user  ');
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), '  new-user  ');
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), '  שואל חדש  ');
     await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
     expect(bodies).toHaveLength(0);
     await userEvent.click(await screen.findByRole('button', { name: 'בדיקת הפעולה' }));
     await screen.findByRole('combobox', { name: 'חיפוש פריט' });
     expect(bodies).toEqual([
-      expect.objectContaining({ username: 'new-user', name: 'שואל חדש', contact: '' }),
+      expect.objectContaining({ playaName: 'new-user', fullName: 'שואל חדש', phoneNumber: '' }),
     ]);
   });
 
@@ -1686,11 +1703,11 @@ describe('borrower desk workflow', () => {
       </DialogStackProvider>,
     );
     await userEvent.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), 'new-user');
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
     await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
     await userEvent.click(await screen.findByRole('button', { name: 'טעינת אמת עדכנית' }));
-    expect((screen.getByRole('textbox', { name: 'שם משתמש' }) as HTMLInputElement).value).toBe(
+    expect((screen.getByRole('textbox', { name: 'שם פלאיה' }) as HTMLInputElement).value).toBe(
       'new-user',
     );
     expect((screen.getByRole('textbox', { name: 'שם מלא' }) as HTMLInputElement).value).toBe(
@@ -1702,8 +1719,8 @@ describe('borrower desk workflow', () => {
   it('renders authoritative borrower identity from the loaded desk snapshot', async () => {
     const authoritativeBorrower = {
       ...borrower,
-      name: 'אור המעודכן',
-      contact: '052',
+      fullName: 'אור המעודכן',
+      phoneNumber: '052',
     };
     vi.stubGlobal(
       'fetch',
@@ -1795,7 +1812,13 @@ describe('borrower desk workflow', () => {
   });
 
   it('retries the currently selected borrower after a created-card failure was closed', async () => {
-    const created = { ...borrower, id: 12, username: 'new-user', name: 'שואל חדש', contact: '' };
+    const created = {
+      ...borrower,
+      id: 12,
+      playaName: 'new-user',
+      fullName: 'שואל חדש',
+      phoneNumber: '',
+    };
     const cardLoads: number[] = [];
     vi.stubGlobal(
       'fetch',
@@ -1827,7 +1850,7 @@ describe('borrower desk workflow', () => {
       </DialogStackProvider>,
     );
     await userEvent.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'שם משתמש' }), 'new-user');
+    await userEvent.type(screen.getByRole('textbox', { name: 'שם פלאיה' }), 'new-user');
     await userEvent.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
     await userEvent.click(screen.getByRole('button', { name: 'יצירה' }));
     await userEvent.click(await screen.findByRole('button', { name: 'סגירה בטוחה' }));
@@ -1868,3 +1891,76 @@ describe('borrower desk workflow', () => {
     expect(screen.queryByRole('combobox', { name: 'מעבר למסך אחר' })).toBeNull();
   });
 });
+
+it.each(['match', 'failure', 'stalled'])(
+  'checks guidance before immediate creation and keeps failure nonblocking (%s)',
+  async (scenario) => {
+    const fails = scenario !== 'match';
+    const abort = new AbortController();
+    if (scenario === 'stalled') vi.spyOn(AbortSignal, 'timeout').mockReturnValue(abort.signal);
+    const toast = vi.fn();
+    let posts = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+        const path = String(input);
+        if (path.startsWith('/api/borrowers/search'))
+          return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+        if (path === '/api/borrowers/camp-suggestions') return json([]);
+        if (path === '/api/borrowers/validate') {
+          if (scenario === 'stalled')
+            return new Promise<Response>((_, reject) =>
+              init.signal!.addEventListener('abort', () => reject(new Error('timeout'))),
+            );
+          if (fails) throw new Error('offline');
+          return json({
+            fieldErrors: [],
+            matches: [
+              {
+                borrower: {
+                  ...borrower,
+                  fullName: 'Ada',
+                  phoneNumber: '050',
+                  campDepartment: 'North',
+                },
+                matchedBy: 'full_name',
+                status: 'active',
+              },
+            ],
+          });
+        }
+        if (path === '/api/borrowers') {
+          expect(toast).toHaveBeenCalledWith(
+            fails ? 'בדיקת שואלים דומים נכשלה' : 'נמצאו שואלים עם פרטים דומים',
+            expect.any(String),
+            fails ? 'error' : 'warning',
+          );
+          posts++;
+          return new Promise<Response>(() => {});
+        }
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={toast} />
+      </DialogStackProvider>,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
+    const name = screen.getByRole('textbox', { name: 'שם מלא' });
+    fireEvent.change(name, { target: { value: 'Ada' } });
+    if (scenario === 'failure')
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith('בדיקת שואלים דומים נכשלה', expect.any(String), 'error'),
+      );
+    fireEvent.submit(name.closest('form')!);
+    if (scenario === 'stalled') {
+      await waitFor(() => expect(AbortSignal.timeout).toHaveBeenCalledWith(3000));
+      abort.abort();
+    }
+    await waitFor(() => expect(posts).toBe(1));
+    expect(
+      toast.mock.calls.filter(([, , tone]) => tone === (fails ? 'error' : 'warning')),
+    ).toHaveLength(1);
+  },
+);

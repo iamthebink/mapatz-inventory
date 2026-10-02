@@ -85,7 +85,9 @@ describe('field-scale sample workbook', () => {
     expect(snapshot.locations).toEqual(payload.locations);
     expect(snapshot.radioCount).toBe(40);
     expect(snapshot.radios).toEqual(payload.radios);
-    expect(snapshot.borrowers).toEqual(payload.borrowers);
+    expect(transferBusinessState(snapshot).borrowers).toEqual(
+      transferBusinessState(payload).borrowers,
+    );
     expect(transferBusinessState(snapshot).events).toEqual(transferBusinessState(payload).events);
     expect(new Set(snapshot.events.map((event) => event.kind))).toEqual(
       new Set([

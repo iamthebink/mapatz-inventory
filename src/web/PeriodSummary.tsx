@@ -1,3 +1,4 @@
+import { normalizeBorrowerText, normalizeBorrowerPhone } from '../domain/borrower-profile';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { PeriodSummary as PeriodSummaryResult } from '../contracts/period-summary.js';
@@ -130,13 +131,15 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
   }, [returnRevision]);
 
   const visible = useMemo(() => {
-    const term = search.trim().toLocaleLowerCase('he');
+    const term = normalizeBorrowerText(search);
+    const phoneTerm = normalizeBorrowerPhone(search);
     return (result?.borrowers ?? []).filter(
       ({ borrower }) =>
         !term ||
-        `${borrower.name} ${borrower.username} ${borrower.contact}`
-          .toLocaleLowerCase('he')
-          .includes(term),
+        normalizeBorrowerText(
+          `${borrower.fullName} ${borrower.playaName} ${borrower.phoneNumber} ${borrower.campDepartment}`,
+        ).includes(term) ||
+        (phoneTerm.length > 0 && normalizeBorrowerPhone(borrower.phoneNumber).includes(phoneTerm)),
     );
   }, [result, search]);
 
@@ -204,7 +207,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="שם, מזהה או איש קשר"
+            placeholder="שם מלא, שם פלאיה, מספר טלפון או מחנה / מחלקה"
           />
         </label>
         <button
@@ -255,8 +258,9 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
               <thead>
                 <tr>
                   <th scope="col">שואל</th>
-                  <th scope="col">מזהה</th>
-                  <th scope="col">איש קשר</th>
+                  <th scope="col">שם פלאיה</th>
+                  <th scope="col">מספר טלפון</th>
+                  <th scope="col">מחנה / מחלקה</th>
                   <th scope="col">כמות</th>
                 </tr>
               </thead>
@@ -270,7 +274,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                           <button
                             type="button"
                             className="period-summary-expander"
-                            aria-label={`${isExpanded ? 'הסתרת' : 'הצגת'} ציוד של ${borrower.name}`}
+                            aria-label={`${isExpanded ? 'הסתרת' : 'הצגת'} ציוד של ${borrower.fullName}`}
                             aria-expanded={isExpanded}
                             aria-controls={`period-items-${borrower.id}`}
                             onClick={() =>
@@ -289,7 +293,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                           <button
                             type="button"
                             className="borrower-directory-action"
-                            aria-label={`פתיחת כרטיס שואל — ${borrower.name}`}
+                            aria-label={`פתיחת כרטיס שואל — ${borrower.fullName}`}
                             ref={(node) => {
                               if (node) borrowerNameRefs.current.set(borrower.id, node);
                               else borrowerNameRefs.current.delete(borrower.id);
@@ -299,14 +303,17 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                               openCard(borrower);
                             }}
                           >
-                            {borrower.name}
+                            {borrower.fullName}
                           </button>
                         </div>
                       </td>
                       <td>
-                        <bdi dir="ltr">{borrower.username}</bdi>
+                        <bdi>{borrower.playaName || '—'}</bdi>
                       </td>
-                      <td>{borrower.contact || '—'}</td>
+                      <td>
+                        <bdi dir="ltr">{borrower.phoneNumber || '—'}</bdi>
+                      </td>
+                      <td>{borrower.campDepartment || '—'}</td>
                       <td>{total}</td>
                     </tr>,
                     <tr
@@ -314,7 +321,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                       id={`period-items-${borrower.id}`}
                       hidden={!isExpanded}
                     >
-                      <td colSpan={4}>
+                      <td colSpan={5}>
                         <table className="period-summary-items">
                           <thead>
                             <tr>

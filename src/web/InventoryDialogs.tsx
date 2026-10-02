@@ -19,10 +19,10 @@ export type Item = {
 
 export type Borrower = {
   id: number;
-  username: string;
-  name: string;
-  contact: string;
-  type: 'individual' | 'camp_organization' | 'other';
+  playaName: string;
+  fullName: string;
+  phoneNumber: string;
+  campDepartment: string;
   archived: boolean;
 };
 
@@ -36,10 +36,10 @@ export type DialogSubmission =
   | {
       kind: 'edit-borrower';
       borrowerId: number;
-      name: string;
-      username: string;
-      contact: string;
-      borrowerType: Borrower['type'];
+      fullName: string;
+      playaName: string;
+      phoneNumber: string;
+      campDepartment: string;
     }
   | { kind: 'import'; mode: 'reset' | 'recovery'; file: File };
 
@@ -146,51 +146,68 @@ function EditBorrowerDialog({
         event.preventDefault();
         if (pending) return;
         const form = new FormData(event.currentTarget);
-        const name = value(form, 'name').trim();
-        const username = value(form, 'username').trim();
-        const contact = value(form, 'contact');
-        if (name.length < 1 || name.length > 100) {
-          setError('השם חייב להכיל בין 1 ל־100 תווים לאחר הסרת רווחים.');
-          return;
-        }
-        if (username.length < 2 || username.length > 40) {
-          setError('שם המשתמש חייב להכיל בין 2 ל־40 תווים לאחר הסרת רווחים.');
-          return;
-        }
-        if (contact.length > 500) {
-          setError('פרטי הקשר יכולים להכיל עד 500 תווים.');
+        const fullName = value(form, 'fullName').trim();
+        const playaName = value(form, 'playaName').trim();
+        const phoneNumber = value(form, 'phoneNumber').trim();
+        const campDepartment = value(form, 'campDepartment').trim();
+        if (
+          !fullName ||
+          [fullName, playaName, phoneNumber, campDepartment].some((entry) => entry.length > 100)
+        ) {
+          setError('שם מלא הוא חובה וכל שדה יכול להכיל עד 100 תווים.');
           return;
         }
         setError('');
         void onSubmit({
           kind: 'edit-borrower',
           borrowerId: borrower.id,
-          name,
-          username,
-          contact,
-          borrowerType: value(form, 'type') as Borrower['type'],
+          fullName,
+          playaName,
+          phoneNumber,
+          campDepartment,
         });
       }}
     >
       <label className="field-label">
-        שם
-        <input ref={inputRef} className="input-field" name="name" defaultValue={borrower.name} />
+        שם מלא
+        <input
+          ref={inputRef}
+          className="input-field"
+          name="fullName"
+          required
+          maxLength={100}
+          defaultValue={borrower.fullName}
+        />
       </label>
       <label className="field-label">
-        שם משתמש
-        <input className="input-field" name="username" dir="ltr" defaultValue={borrower.username} />
+        שם פלאיה
+        <input
+          className="input-field"
+          name="playaName"
+          maxLength={100}
+          defaultValue={borrower.playaName}
+        />
       </label>
       <label className="field-label dialog-field-wide">
-        פרטי קשר
-        <input className="input-field" name="contact" defaultValue={borrower.contact} />
+        מספר טלפון
+        <input
+          className="input-field"
+          name="phoneNumber"
+          type="tel"
+          dir="ltr"
+          maxLength={100}
+          defaultValue={borrower.phoneNumber}
+        />
       </label>
       <label className="field-label dialog-field-wide">
-        סוג
-        <select className="input-field" name="type" defaultValue={borrower.type}>
-          <option value="individual">יחיד</option>
-          <option value="camp_organization">ארגון מחנה</option>
-          <option value="other">אחר</option>
-        </select>
+        מחנה / מחלקה
+        <input
+          className="input-field"
+          name="campDepartment"
+          maxLength={100}
+          defaultValue={borrower.campDepartment}
+          list="borrower-camp-suggestions"
+        />
       </label>
     </FormDialog>
   );

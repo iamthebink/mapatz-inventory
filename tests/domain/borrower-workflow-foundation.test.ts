@@ -1,3 +1,4 @@
+import { normalizeBorrowerText } from '../../src/domain/borrower-profile.js';
 import { foundReturned } from '../helpers/found-returned.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openDatabase, transaction, type InventoryDatabase } from '../../src/db/database.js';
 import { InventoryTransferService } from '../../src/domain/import-export.js';
-import { InventoryService, normalizeBorrowerText } from '../../src/domain/inventory.js';
+import { InventoryService } from '../../src/domain/inventory.js';
 
 function receipt(db: InventoryDatabase, key: string): void {
   db.prepare(
@@ -57,63 +58,63 @@ describe('borrower workflow persistence foundation', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const activeIdFirst = inventory.createBorrower({
-      username: 'Ｔie',
-      name: 'Same',
-      contact: 'order',
-      type: 'individual',
+      playaName: 'Ｔie',
+      fullName: 'Same',
+      phoneNumber: 'order',
+      campDepartment: '',
     });
     const activeIdSecond = inventory.createBorrower({
-      username: 'Tie',
-      name: 'Same',
-      contact: 'order',
-      type: 'other',
+      playaName: 'Tie',
+      fullName: 'Same',
+      phoneNumber: 'order',
+      campDepartment: 'מחנה אחר',
     });
-    const activeUsernameSecond = inventory.createBorrower({
-      username: 'z-user',
-      name: 'Ａlpha',
-      contact: 'order',
-      type: 'individual',
+    const activePlayaNameSecond = inventory.createBorrower({
+      playaName: 'z-user',
+      fullName: 'Ａlpha',
+      phoneNumber: 'order',
+      campDepartment: '',
     });
-    const activeUsernameFirst = inventory.createBorrower({
-      username: 'a-user',
-      name: 'Alpha',
-      contact: 'order',
-      type: 'other',
+    const activePlayaNameFirst = inventory.createBorrower({
+      playaName: 'a-user',
+      fullName: 'Alpha',
+      phoneNumber: 'order',
+      campDepartment: 'מחנה אחר',
     });
     const archivedByName = inventory.createBorrower({
-      username: 'retired-name',
-      name: '  Alice  ',
-      type: 'other',
+      playaName: 'retired-name',
+      fullName: '  Alice  ',
+      campDepartment: 'מחנה אחר',
     });
-    const archivedByContact = inventory.createBorrower({
-      username: 'retired-contact',
-      name: 'Yankee',
-      contact: '  Alice  ',
-      type: 'other',
+    const archivedByPhoneNumber = inventory.createBorrower({
+      playaName: 'retired-phoneNumber',
+      fullName: 'Yankee',
+      phoneNumber: '  Alice  ',
+      campDepartment: 'מחנה אחר',
     });
-    const archivedByUsername = inventory.createBorrower({
-      username: 'ＡLICE',
-      name: 'Zulu',
-      contact: 'alice',
-      type: 'individual',
+    const archivedByPlayaName = inventory.createBorrower({
+      playaName: 'ＡLICE',
+      fullName: 'Zulu',
+      phoneNumber: 'alice',
+      campDepartment: '',
     });
     const archivedSubstring = inventory.createBorrower({
-      username: 'alice-old',
-      name: 'Substring Only',
-      type: 'other',
+      playaName: 'alice-old',
+      fullName: 'Substring Only',
+      campDepartment: 'מחנה אחר',
     });
     for (const borrower of [
       archivedByName,
-      archivedByContact,
-      archivedByUsername,
+      archivedByPhoneNumber,
+      archivedByPlayaName,
       archivedSubstring,
     ])
       inventory.archiveBorrower(borrower.id, true);
 
     expect(normalizeBorrowerText('  ＡLICE\t Able  ')).toBe('alice able');
     expect(inventory.searchBorrowers('order').active).toEqual([
-      activeUsernameFirst,
-      activeUsernameSecond,
+      activePlayaNameFirst,
+      activePlayaNameSecond,
       activeIdFirst,
       activeIdSecond,
     ]);
@@ -121,14 +122,14 @@ describe('borrower workflow persistence foundation', () => {
       ledgerEpoch: 1,
       active: [],
       archivedMatches: [
-        { borrower: { ...archivedByUsername, archived: true }, matchedBy: 'username' },
-        { borrower: { ...archivedByContact, archived: true }, matchedBy: 'contact' },
+        { borrower: { ...archivedByPlayaName, archived: true }, matchedBy: 'playa_name' },
+        { borrower: { ...archivedByPhoneNumber, archived: true }, matchedBy: 'phone_number' },
         { borrower: { ...archivedByName, archived: true }, matchedBy: 'full_name' },
       ],
     });
     expect(inventory.searchBorrowers('')).toEqual({
       ledgerEpoch: 1,
-      active: [activeUsernameFirst, activeUsernameSecond, activeIdFirst, activeIdSecond],
+      active: [activePlayaNameFirst, activePlayaNameSecond, activeIdFirst, activeIdSecond],
       archivedMatches: [],
     });
     expect(db.isTransaction).toBe(false);
@@ -141,9 +142,9 @@ describe('borrower workflow persistence foundation', () => {
     const reader = openDatabase(filename);
     const writer = openDatabase(filename);
     const original = new InventoryService(reader).createBorrower({
-      username: 'old-match',
-      name: 'Old Match',
-      type: 'individual',
+      playaName: 'old-match',
+      fullName: 'Old Match',
+      campDepartment: '',
     });
     const interleaved = interleaveAfterRead(
       reader,
@@ -157,7 +158,7 @@ describe('borrower workflow persistence foundation', () => {
             .run();
           writer.prepare('UPDATE borrowers SET archived=1 WHERE id=?').run(original.id);
           writer
-            .prepare('INSERT INTO borrowers(username,name,type) VALUES (?,?,?)')
+            .prepare('INSERT INTO borrowers(playa_name,full_name,camp_department) VALUES (?,?,?)')
             .run('new-match', 'New Match', 'individual');
         }),
     );
@@ -169,7 +170,7 @@ describe('borrower workflow persistence foundation', () => {
       ledger_epoch: 2,
     });
     expect(new InventoryService(writer).searchBorrowers('match').active).toEqual([
-      expect.objectContaining({ username: 'new-match' }),
+      expect.objectContaining({ playaName: 'new-match' }),
     ]);
     expect(reader.isTransaction).toBe(false);
     reader.close();
@@ -184,9 +185,9 @@ describe('borrower workflow persistence foundation', () => {
     const writer = openDatabase(filename);
     const setup = new InventoryService(reader);
     const borrower = setup.createBorrower({
-      username: 'old-borrower',
-      name: 'Old Borrower',
-      type: 'individual',
+      playaName: 'old-borrower',
+      fullName: 'Old Borrower',
+      campDepartment: '',
     });
     const item = setup.createItem({ name: 'Old Item', kind: 'non_consumable' });
     setup.addStock(item.id, 2);
@@ -236,11 +237,15 @@ describe('borrower workflow persistence foundation', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const borrower = inventory.createBorrower({
-      username: 'desk',
-      name: 'Desk Borrower',
-      type: 'individual',
+      playaName: 'desk',
+      fullName: 'Desk Borrower',
+      campDepartment: '',
     });
-    const other = inventory.createBorrower({ username: 'other', name: 'Other', type: 'other' });
+    const other = inventory.createBorrower({
+      playaName: 'other',
+      fullName: 'Other',
+      campDepartment: 'מחנה אחר',
+    });
     const first = inventory.createItem({ name: 'First', kind: 'non_consumable' });
     const lostOnly = inventory.createItem({ name: 'Lost only', kind: 'non_consumable' });
     const returned = inventory.createItem({ name: 'Returned', kind: 'non_consumable' });

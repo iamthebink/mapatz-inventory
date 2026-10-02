@@ -55,10 +55,10 @@ function creation(key = key2): FrozenCreateAttempt {
     body: {
       contractVersion: 1,
       ledgerEpoch: 3,
-      username: 'new',
-      name: 'New',
-      contact: '',
-      type: 'individual',
+      playaName: 'new',
+      fullName: 'New',
+      phoneNumber: '',
+      campDepartment: '',
     },
   };
 }
@@ -186,10 +186,10 @@ describe('frozen attempt validation and storage', () => {
     const snapshot = {
       borrower: {
         id: 7,
-        username: 'or',
-        name: 'Or',
-        contact: '',
-        type: 'individual' as const,
+        playaName: 'or',
+        fullName: 'Or',
+        phoneNumber: '',
+        campDepartment: '' as const,
         archived: false,
       },
       inventory: [
@@ -240,10 +240,10 @@ describe('frozen attempt validation and storage', () => {
     const snapshot = {
       borrower: {
         id: 7,
-        username: 'or',
-        name: 'Or',
-        contact: '',
-        type: 'individual' as const,
+        playaName: 'or',
+        fullName: 'Or',
+        phoneNumber: '',
+        campDepartment: '' as const,
         archived: false,
       },
       inventory: [
@@ -313,7 +313,9 @@ describe('frozen attempt validation and storage', () => {
       },
       { ...creation(), subjectId: 1 },
       { ...creation(), stateRevision: undefined },
-      { ...creation(), body: { ...creation().body, username: ' x ' } },
+      { ...creation(), body: { ...creation().body, playaName: ' x ' } },
+      { ...creation(), body: { ...creation().body, campDepartment: ' x ' } },
+      { ...creation(), body: { ...creation().body, campDepartment: 'x'.repeat(101) } },
     ];
     for (const candidate of invalid) expect(parseFrozenAttempt(candidate)).toBeNull();
   });
@@ -350,7 +352,7 @@ describe('frozen attempt validation and storage', () => {
         },
       },
       { ...creation(), body: { ...creation().body, extra: true } },
-      { ...creation(), body: { ...creation().body, contact: ' x ' } },
+      { ...creation(), body: { ...creation().body, phoneNumber: ' x ' } },
     ];
     for (const candidate of invalid) expect(parseFrozenAttempt(candidate)).toBeNull();
   });
@@ -554,10 +556,10 @@ describe('frozen dispatch and recovery', () => {
               replayed: true,
               borrower: {
                 id: 2,
-                username: 'new',
-                name: 'New',
-                contact: '',
-                type: 'individual',
+                playaName: 'new',
+                fullName: 'New',
+                phoneNumber: '',
+                campDepartment: '',
                 archived: false,
               },
             },
@@ -616,10 +618,10 @@ describe('frozen dispatch and recovery', () => {
               replayed: true,
               borrower: {
                 id: 2,
-                username: 'new',
-                name: 'New',
-                contact: '',
-                type: 'individual',
+                playaName: 'new',
+                fullName: 'New',
+                phoneNumber: '',
+                campDepartment: '',
                 archived: false,
               },
             },
@@ -652,10 +654,10 @@ describe('frozen dispatch and recovery', () => {
         replayed: true,
         borrower: {
           id: 2,
-          username: 'new',
-          name: 'New',
-          contact: '',
-          type: 'individual',
+          playaName: 'new',
+          fullName: 'New',
+          phoneNumber: '',
+          campDepartment: '',
           archived: false,
         },
       },
@@ -686,10 +688,10 @@ describe('frozen dispatch and recovery', () => {
         replayed: true,
         borrower: {
           id: 2,
-          username: 'new',
-          name: 'New',
-          contact: '',
-          type: 'individual',
+          playaName: 'new',
+          fullName: 'New',
+          phoneNumber: '',
+          campDepartment: '',
           archived: false,
         },
       },
@@ -701,10 +703,10 @@ describe('frozen dispatch and recovery', () => {
     const operationSnapshot = {
       borrower: {
         id: 7,
-        username: 'or',
-        name: 'Or',
-        contact: '',
-        type: 'individual' as const,
+        playaName: 'or',
+        fullName: 'Or',
+        phoneNumber: '',
+        campDepartment: '' as const,
         archived: false,
       },
       inventory: [
@@ -828,10 +830,10 @@ describe('frozen dispatch and recovery', () => {
         replayed: true,
         borrower: {
           id: 0,
-          username: 'new',
-          name: 'New',
-          contact: '',
-          type: 'individual',
+          playaName: 'new',
+          fullName: 'New',
+          phoneNumber: '',
+          campDepartment: '',
           archived: false,
         },
       },
@@ -863,3 +865,48 @@ describe('frozen dispatch and recovery', () => {
     }
   });
 });
+
+it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
+  'retains frozen creation after malformed %s evidence',
+  async (field) => {
+    const attempt = creation();
+    persistFrozenAttempt(storage(), attempt);
+    const resolved = await resolveFrozenAttempt(
+      storage(),
+      attempt,
+      async () =>
+        ({
+          kind: 'definitive',
+          status: 201,
+          result: {
+            outcome: 'committed',
+            idempotencyKey: attempt.idempotencyKey,
+            replayed: false,
+            borrower: {
+              id: 22,
+              fullName: attempt.body.fullName,
+              playaName: attempt.body.playaName,
+              phoneNumber: attempt.body.phoneNumber,
+              campDepartment: attempt.body.campDepartment,
+              [field]: 'x'.repeat(101),
+              archived: false,
+            },
+          },
+        }) as never,
+    );
+    expect(resolved).toMatchObject({ kind: 'ambiguous', cleared: false });
+    expect(storage().getItem(frozenAttemptStorageKey(attempt))).not.toBeNull();
+  },
+);
+
+it.each([' x ', 'x'.repeat(101)])(
+  'keeps invalid persisted camp envelopes fail-closed (%s)',
+  (campDepartment) => {
+    const attempt = creation();
+    const key = frozenAttemptStorageKey(attempt);
+    const record = JSON.stringify({ ...attempt, body: { ...attempt.body, campDepartment } });
+    storage().setItem(key, record);
+    expect(enumerateFrozenAttempts(storage())).toMatchObject({ valid: [], invalidKeys: [key] });
+    expect(storage().getItem(key)).toBe(record);
+  },
+);

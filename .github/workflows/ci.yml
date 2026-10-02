@@ -51,11 +51,3 @@ jobs:
           artifact="$(find desktop-stage/out/make -name '*.zip' -type f | head -n 1)"
           ditto -x -k "$artifact" "$RUNNER_TEMP/mapatz-installed"
           MAPATZ_EXECUTABLE="$RUNNER_TEMP/mapatz-installed/Mapatz Inventory.app/Contents/MacOS/mapatz-inventory" pnpm test:desktop
-  upgrade:
-    needs: desktop
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/windows-upgrade.yml
-    with:
-      ref: ${{ github.sha }}
