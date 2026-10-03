@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ComponentPropsWithoutRef } from 'react';
 
-/** Moves the existing column cells, preserving semantics, focus and horizontal scrolling. */
+/** The browser pins the existing cells; JavaScript only measures their layout limits. */
 export function StickyTable({
   children,
   className = '',
@@ -17,37 +17,29 @@ export function StickyTable({
     for (let ancestor = table.parentElement; ancestor; ancestor = ancestor.parentElement) {
       ancestors.push(ancestor);
     }
-    const dialog = table.closest('.dialog');
+    const dialog = table.closest<HTMLElement>('.dialog');
     const nav = dialog ? null : document.querySelector<HTMLElement>('.app-nav');
+    // Dialog tables have no horizontal overflow wrapper, so CSS sticky can
+    // follow their existing scroll owner directly without any measurements.
+    if (dialog) return;
 
     function update() {
       frame = 0;
       if (!table) return;
       const header = table.tHead;
       if (!header) return;
-      // Horizontal overflow wrappers also compute overflow-y:auto. They are not
-      // vertical scroll owners unless they have an actual vertical scroll range.
-      const scrollOwner = ancestors.find((ancestor) => {
-        const overflow = getComputedStyle(ancestor).overflowY;
-        return /auto|scroll/.test(overflow) && ancestor.scrollHeight > ancestor.clientHeight + 1;
-      });
-      let boundary = scrollOwner
-        ? scrollOwner.getBoundingClientRect().top + scrollOwner.clientTop
-        : 0;
-      if (dialog) {
-        const dialogHeader = dialog.querySelector<HTMLElement>('.dialog-shell-header');
-        if (dialogHeader)
-          boundary = Math.max(boundary, dialogHeader.getBoundingClientRect().bottom);
-      } else if (nav) {
-        boundary = Math.max(boundary, nav.getBoundingClientRect().bottom);
-      }
+      // Measure the unmoved row, not its animated cells. Mobile cards keep this
+      // row visually hidden and need no pinning animation.
       const headerRect = header.getBoundingClientRect();
-      const tableRect = table.getBoundingClientRect();
       const visible = headerRect.height > 2 && getComputedStyle(header).position !== 'absolute';
-      const translation = visible
-        ? Math.max(0, Math.min(boundary - headerRect.top, tableRect.bottom - headerRect.bottom))
-        : 0;
-      table.style.setProperty('--table-header-offset', `${translation}px`);
+      table.style.setProperty('--table-header-animation', visible ? 'pin-table-header' : 'none');
+      if (!visible) return;
+
+      const start = headerRect.top + window.scrollY - (nav?.getBoundingClientRect().height ?? 0);
+      const travel = Math.max(0, table.getBoundingClientRect().bottom - headerRect.bottom);
+      table.style.setProperty('--table-header-start', `${start}px`);
+      table.style.setProperty('--table-header-end', `${start + travel}px`);
+      table.style.setProperty('--table-header-travel', `${travel}px`);
     }
 
     function schedule() {
@@ -55,17 +47,15 @@ export function StickyTable({
       else if (!frame) frame = requestAnimationFrame(update);
     }
     scheduleRef.current = schedule;
-    document.addEventListener('scroll', schedule, true);
     window.addEventListener('resize', schedule);
     const resizeObserver =
       typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
     for (const element of [table, ...ancestors, nav]) {
       if (element) resizeObserver?.observe(element);
     }
-    // Changes elsewhere can move this table without changing its own dimensions
-    // (expanded details, data loading, a preceding table or a dialog transition).
+    // Preceding content can move the table without resizing the table itself.
     const mutationObserver = new MutationObserver(schedule);
-    mutationObserver.observe(dialog ?? document.body, {
+    mutationObserver.observe(document.body, {
       subtree: true,
       childList: true,
       characterData: true,
@@ -76,11 +66,12 @@ export function StickyTable({
     return () => {
       scheduleRef.current = null;
       if (frame) cancelAnimationFrame(frame);
-      document.removeEventListener('scroll', schedule, true);
       window.removeEventListener('resize', schedule);
       resizeObserver?.disconnect();
       mutationObserver.disconnect();
-      table.style.removeProperty('--table-header-offset');
+      for (const property of ['animation', 'start', 'end', 'travel']) {
+        table.style.removeProperty(`--table-header-${property}`);
+      }
     };
   }, []);
 

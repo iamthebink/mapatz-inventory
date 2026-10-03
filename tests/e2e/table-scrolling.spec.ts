@@ -154,6 +154,7 @@ for (const width of [1280, 390]) {
           return Math.abs(header!.y - bounds!.y);
         })
         .toBeLessThan(2);
+      await expect(table.locator('thead th').first()).toHaveCSS('position', 'sticky');
       const header = await table.locator('thead th').first().boundingBox();
       const footer = await card.locator('.dialog-shell-actions').boundingBox();
       expect(header!.y + header!.height).toBeLessThan(footer!.y);
@@ -181,9 +182,9 @@ for (const variant of ['directory', 'consumables'] as const) {
     );
     await expect
       .poll(() =>
-        table.evaluate((element) => element.style.getPropertyValue('--table-header-offset')),
+        table.evaluate((element) => element.style.getPropertyValue('--table-header-animation')),
       )
-      .toBe('0px');
+      .toBe('none');
     const header = await table.locator('thead').boundingBox();
     expect(header!.height).toBeLessThanOrEqual(1);
     await expect(table.locator('thead')).toHaveCSS('position', 'absolute');
@@ -231,4 +232,73 @@ test('updates a pinned header when preceding content moves without a scroll even
     })
     .toBeLessThan(2);
   expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+});
+
+test('keeps headers pinned through native scroll timelines without per-scroll style updates', async ({
+  page,
+}) => {
+  await seedTables(page);
+  await page.goto('/ledger');
+  const table = page.locator('.data-table');
+  await pinOnPage(page, table);
+  const header = table.locator('thead th').first();
+  await expect(header).toHaveCSS('animation-timeline', 'scroll(root)');
+  await table.evaluate(async (element) => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    element.setAttribute('data-scroll-style-writes', '0');
+    let writes = 0;
+    const observer = new MutationObserver((records) => {
+      writes += records.length;
+      element.setAttribute('data-scroll-style-writes', String(writes));
+    });
+    observer.observe(element, { attributes: true, attributeFilter: ['style'] });
+  });
+  const layoutStyles = await table.getAttribute('style');
+  for (const delta of [80, 120, -65, 200, -150]) {
+    const previousScroll = await page.evaluate(() => window.scrollY);
+    await page.mouse.wheel(0, delta);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(previousScroll + delta);
+    await expect
+      .poll(async () => {
+        const rect = await header.boundingBox();
+        const nav = await page.locator('.app-nav').boundingBox();
+        return Math.abs(rect!.y - nav!.y - nav!.height);
+      })
+      .toBeLessThan(2);
+    expect(await table.getAttribute('style')).toBe(layoutStyles);
+    await expect(table).toHaveAttribute('data-scroll-style-writes', '0');
+  }
+});
+
+test('uses the actual scroll owner when a dialog scrolls as a whole', async ({ page }) => {
+  const { borrower } = await seedTables(page);
+  await page.goto('/desk');
+  await page.getByRole('searchbox', { name: 'חיפוש שואל' }).fill(borrower.playaName);
+  await page.getByRole('button', { name: `פתיחת כרטיס שואל — ${borrower.fullName}` }).click();
+  const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
+  // Exercise the standard Dialog layout, which scrolls the shell instead of its body.
+  await card.evaluate((element) => element.classList.remove('dialog-workspace'));
+  const table = card.locator('.holdings-section table');
+  await expect(table.locator('tbody tr')).toHaveCount(36);
+  await expect(card.locator('.dialog-shell-body')).toHaveCSS('overflow-y', 'visible');
+  await table.evaluate((element) => {
+    const owner = element.closest('.dialog')!;
+    owner.scrollTop +=
+      element.getBoundingClientRect().top - owner.getBoundingClientRect().top + 250;
+  });
+  await expect
+    .poll(async () => {
+      const header = await table.locator('thead th').first().boundingBox();
+      const pinTop = await card.evaluate(
+        (element) =>
+          element.getBoundingClientRect().top +
+          element.clientTop +
+          Number.parseFloat(getComputedStyle(element).paddingTop),
+      );
+      return Math.abs(header!.y - pinTop);
+    })
+    .toBeLessThan(2);
+  await expect(table.locator('thead th').first()).toHaveCSS('position', 'sticky');
 });
