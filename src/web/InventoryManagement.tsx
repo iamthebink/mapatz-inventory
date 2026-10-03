@@ -1,3 +1,4 @@
+import { StickyTable } from './StickyTable';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Archive, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
 import { ApiError, api } from './api';
@@ -749,13 +750,13 @@ export function InventoryManagement({
           <span className="inventory-locations-count">{filteredLocations.length} מיקומים</span>
         </div>
         <div className="table-shell">
-          <table className="data-table">
+          <StickyTable className="data-table">
             <thead>
               <tr>
-                <th>שם</th>
-                <th>קוד</th>
-                <th>מצב</th>
-                <th>פעולות</th>
+                <th scope="col">שם</th>
+                <th scope="col">קוד</th>
+                <th scope="col">מצב</th>
+                <th scope="col">פעולות</th>
               </tr>
             </thead>
             <tbody>
@@ -807,7 +808,7 @@ export function InventoryManagement({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </StickyTable>
         </div>
         {filteredLocations.length === 0 && (
           <p className="inventory-locations-empty">לא נמצאו מיקומים</p>

@@ -21,6 +21,36 @@ let sequence = 0;
 
 app.get('/__e2e__/health', (_request, response) => response.json({ ready: true }));
 app.get('/__e2e__/database', (_request, response) => response.json({ databasePath }));
+app.post('/__e2e__/table-data', (_request, response) => {
+  sequence += 1;
+  const prefix = `table-${sequence}`;
+  const borrower = inventory.createBorrower({
+    fullName: `שואל טבלאות ${prefix}`,
+    playaName: prefix,
+    phoneNumber: '',
+    campDepartment: '',
+  });
+  for (let index = 0; index < 36; index += 1) {
+    const item = inventory.createItem({ name: `ציוד ${prefix}-${index}`, kind: 'non_consumable' });
+    inventory.addStock(item.id, 5);
+    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    inventory.markLost(checkout, 1, true);
+    const consumable = inventory.createItem({
+      name: `מתכלה ${prefix}-${index}`,
+      kind: 'consumable',
+    });
+    inventory.addStock(consumable.id, 5);
+    const other = inventory.createBorrower({
+      fullName: `שואל ${prefix}-${index}`,
+      playaName: `${prefix}-${index}`,
+      phoneNumber: '',
+      campDepartment: '',
+    });
+    inventory.checkout(item.id, other.id, 1);
+    inventory.createLocation(`${prefix}-${index}`, `מיקום ${prefix}-${index}`);
+  }
+  response.json({ borrower, prefix });
+});
 app.post('/__e2e__/seed', (_request, response) => {
   sequence += 1;
   const stockItem = inventory.createItem({

@@ -1,3 +1,4 @@
+import { StickyTable } from './StickyTable';
 import {
   borrowerIdentity,
   isValidBorrowerProfile,
@@ -1343,7 +1344,7 @@ export const BorrowerWorkflow = forwardRef<
                   : `${searchSnapshot.active.length} שואלים פעילים`}
           </p>
         </div>
-        <table className="borrower-directory-table">
+        <StickyTable className="borrower-directory-table">
           <caption className="sr-only">ספריית שואלים פעילים</caption>
           <thead>
             <tr>
@@ -1403,7 +1404,7 @@ export const BorrowerWorkflow = forwardRef<
               ))
             )}
           </tbody>
-        </table>
+        </StickyTable>
       </div>
       {directoryResolved && searchSnapshot.archivedMatches.length > 0 && (
         <aside className="borrower-archived-notice" aria-labelledby="archived-match-heading">

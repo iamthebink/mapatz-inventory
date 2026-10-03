@@ -1,4 +1,5 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { StickyTable } from './StickyTable';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from 'lucide-react';
 
 export type TableColumn<T> = {
@@ -18,6 +19,7 @@ type Props<T> = {
   toolbar?: ReactNode;
   emptyMessage?: string;
   initialSort?: { key: string; direction: 'asc' | 'desc' };
+  pagination?: boolean;
 };
 
 export function DataTable<T>({
@@ -29,8 +31,13 @@ export function DataTable<T>({
   toolbar,
   emptyMessage = 'אין רשומות להצגה',
   initialSort,
+  pagination = false,
 }: Props<T>) {
+  const tableShellRef = useRef<HTMLDivElement>(null);
+  const restoreReadingStartRef = useRef(false);
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [sort, setSort] = useState(
     initialSort ?? {
       key: columns.find((column) => column.sortValue)?.key ?? '',
@@ -55,8 +62,41 @@ export function DataTable<T>({
     });
   }, [columns, query, rows, searchText, sort]);
 
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageStart = currentPage * pageSize;
+  const displayedRows = pagination
+    ? visibleRows.slice(pageStart, pageStart + pageSize)
+    : visibleRows;
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount - 1));
+  }, [pageCount]);
+
+  useLayoutEffect(() => {
+    if (!restoreReadingStartRef.current) return;
+    restoreReadingStartRef.current = false;
+    const table = tableShellRef.current?.querySelector('table');
+    if (!table) return;
+    const boundary = Math.max(
+      0,
+      document.querySelector('.app-nav')?.getBoundingClientRect().bottom ?? 0,
+    );
+    const top = table.getBoundingClientRect().top;
+    // Sorting starts a fresh reading order. Move its natural start into view
+    // without replacing or refocusing the actual header control.
+    if (top < boundary) window.scrollBy({ top: top - boundary, behavior: 'instant' });
+  }, [sort]);
+
+  function changeQuery(value: string) {
+    setQuery(value);
+    setPage(0);
+  }
+
   function toggleSort(column: TableColumn<T>) {
     if (!column.sortValue) return;
+    restoreReadingStartRef.current = true;
+    setPage(0);
     setSort((current) =>
       current.key === column.key
         ? { key: column.key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
@@ -83,14 +123,14 @@ export function DataTable<T>({
             aria-label="סינון הטבלה"
             placeholder={searchPlaceholder}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => changeQuery(event.target.value)}
           />
           {query && (
             <button
               type="button"
               className="icon-button absolute left-1.5 top-1/2 -translate-y-1/2"
               aria-label="ניקוי סינון"
-              onClick={() => setQuery('')}
+              onClick={() => changeQuery('')}
             >
               <X className="size-4" />
             </button>
@@ -101,12 +141,72 @@ export function DataTable<T>({
           {visibleRows.length} מתוך {rows.length}
         </span>
       </div>
-      <div className="table-shell">
-        <table className="data-table">
+      {pagination && (
+        <nav className="table-pagination" aria-label="דפדוף בטבלה">
+          <label className="flex items-center gap-2">
+            שורות בעמוד
+            <select
+              className="input-field w-auto"
+              aria-label="שורות בעמוד"
+              value={pageSize}
+              onChange={(event) => {
+                setPageSize(Number(event.target.value));
+                setPage(0);
+              }}
+            >
+              {[25, 50, 100].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span aria-live="polite">
+            {visibleRows.length > 0
+              ? `${pageStart + 1}–${pageStart + displayedRows.length} מתוך ${visibleRows.length}`
+              : '0 רשומות'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="secondary-button"
+              aria-label="העמוד הקודם"
+              disabled={currentPage === 0 || visibleRows.length === 0}
+              onClick={() => setPage(currentPage - 1)}
+            >
+              הקודם
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              aria-label="העמוד הבא"
+              disabled={currentPage >= pageCount - 1 || visibleRows.length === 0}
+              onClick={() => setPage(currentPage + 1)}
+            >
+              הבא
+            </button>
+          </div>
+        </nav>
+      )}
+      <div ref={tableShellRef} className="table-shell">
+        <StickyTable className="data-table">
           <thead>
             <tr>
               {columns.map((column) => (
-                <th key={column.key} className={column.className}>
+                <th
+                  key={column.key}
+                  scope="col"
+                  className={column.className}
+                  aria-sort={
+                    column.sortValue
+                      ? sort.key === column.key
+                        ? sort.direction === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                      : undefined
+                  }
+                >
                   {column.sortValue ? (
                     <button
                       type="button"
@@ -130,7 +230,7 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((row) => (
+            {displayedRows.map((row) => (
               <tr key={rowKey(row)}>
                 {columns.map((column) => (
                   <td key={column.key} className={column.className}>
@@ -140,7 +240,7 @@ export function DataTable<T>({
               </tr>
             ))}
           </tbody>
-        </table>
+        </StickyTable>
         {visibleRows.length === 0 && (
           <div className="grid min-h-32 place-items-center px-4 text-sm text-ctp-subtext">
             {emptyMessage}

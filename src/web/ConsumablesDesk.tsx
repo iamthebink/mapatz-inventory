@@ -1,3 +1,4 @@
+import { StickyTable } from './StickyTable';
 import { useEffect, useRef, useState } from 'react';
 import { Check, ClipboardCheck, PackageMinus, RefreshCw, Undo2 } from 'lucide-react';
 import type { Item } from '../domain/types';
@@ -326,7 +327,7 @@ export function ConsumablesDesk({
               />
             </div>
             <div className="table-shell consumables-table-scroll">
-              <table className="consumables-table">
+              <StickyTable className="consumables-table">
                 <thead>
                   <tr>
                     <th scope="col">פריט</th>
@@ -355,7 +356,7 @@ export function ConsumablesDesk({
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </StickyTable>
             </div>
             {visible.length === 0 && (
               <p className="consumables-empty">

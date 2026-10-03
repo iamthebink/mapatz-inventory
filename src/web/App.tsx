@@ -1335,6 +1335,7 @@ export function App() {
           >
             <DataTable
               rows={ledger}
+              pagination
               columns={ledgerColumns}
               rowKey={(event) => event.id}
               searchText={(event) =>

@@ -1,3 +1,4 @@
+import { StickyTable } from './StickyTable';
 import { useEffect, useState } from 'react';
 import { CircleHelp, MapPin, Radio as RadioIcon, RefreshCw, SearchCheck } from 'lucide-react';
 import type { Radio, RadioFleet } from '../domain/types.js';
@@ -122,7 +123,7 @@ export function Radios({ active, showToast }: Props) {
         ) : fleet.count === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-ctp-subtext">אין מכשירי קשר מוגדרים.</p>
         ) : (
-          <table className="data-table min-w-[680px]">
+          <StickyTable className="data-table min-w-[680px]">
             <thead>
               <tr>
                 <th scope="col">מספר</th>
@@ -193,7 +194,7 @@ export function Radios({ active, showToast }: Props) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </StickyTable>
         )}
       </div>
       {edit && (

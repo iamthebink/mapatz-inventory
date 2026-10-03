@@ -1,3 +1,4 @@
+import { StickyTable } from './StickyTable';
 import {
   ChevronDown,
   CircleCheck,
@@ -241,7 +242,7 @@ export function BorrowerOperationalTables({
           {held.length === 0 ? (
             <p className="operational-empty">אין ציוד אצל השואל</p>
           ) : (
-            <table
+            <StickyTable
               className="operational-table borrower-equipment-table"
               aria-labelledby="holdings-heading"
             >
@@ -355,7 +356,7 @@ export function BorrowerOperationalTables({
                   );
                 })}
               </tbody>
-            </table>
+            </StickyTable>
           )}
         </section>
 
@@ -370,7 +371,7 @@ export function BorrowerOperationalTables({
           {lost.length === 0 ? (
             <p className="operational-empty">אין ציוד אבוד לשואל</p>
           ) : (
-            <table
+            <StickyTable
               className="operational-table borrower-equipment-table"
               aria-labelledby="lost-equipment-heading"
             >
@@ -412,7 +413,7 @@ export function BorrowerOperationalTables({
                   );
                 })}
               </tbody>
-            </table>
+            </StickyTable>
           )}
         </details>
       </div>

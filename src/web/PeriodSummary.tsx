@@ -1,3 +1,4 @@
+import { StickyTable } from './StickyTable';
 import { normalizeBorrowerText, normalizeBorrowerPhone } from '../domain/borrower-profile';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
@@ -254,7 +255,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
           <p>אין שואלים התואמים לחיפוש.</p>
         ) : (
           <div className="period-summary-table-scroll">
-            <table className="period-summary-table">
+            <StickyTable className="period-summary-table">
               <thead>
                 <tr>
                   <th scope="col">שואל</th>
@@ -343,7 +344,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
                   ];
                 })}
               </tbody>
-            </table>
+            </StickyTable>
           </div>
         ))}
     </section>
