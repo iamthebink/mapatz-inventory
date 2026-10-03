@@ -162,6 +162,25 @@ afterEach(() => {
 });
 
 describe('inventory management in App', () => {
+  it.each([false, true])(
+    'respects dialog focus restoration over the desk (disabled: %s)',
+    async (disabled) => {
+      const { user } = setup('operator', '/');
+      const search = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+      await waitFor(() => expect(document.activeElement).toBe(search));
+      const admin = screen.getByRole('button', { name: 'הפעל מצב מנהל' });
+      await user.click(admin);
+      const dialog = await screen.findByRole('dialog', { name: 'הפעלת מצב מנהל' });
+      // Model an initiator that became unavailable while its dialog was open.
+      (admin as HTMLButtonElement).disabled = disabled;
+      await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      // Let the desk's deferred focus effect run after the stack restores its initiator.
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+      expect(document.activeElement).toBe(disabled ? search : admin);
+    },
+  );
+
   it('creates a borrower from a dialog and refreshes the catalog', async () => {
     const { user, requests } = setup();
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));

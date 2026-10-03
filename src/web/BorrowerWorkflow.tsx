@@ -278,10 +278,25 @@ export const BorrowerWorkflow = forwardRef<
 
   useEffect(() => onStartupChange?.(startup), [onStartupChange, startup]);
 
+  const previousDialogDepthRef = useRef(stack.depth);
   useEffect(() => {
+    const dialogClosed = previousDialogDepthRef.current > 0 && stack.depth === 0;
+    previousDialogDepthRef.current = stack.depth;
     if (!deskVisible || startup !== 'ready' || selectedBorrower || createOpen || stack.depth > 0)
       return;
     const timer = window.setTimeout(() => {
+      // Dialog teardown restores its initiator before this timer. Keep that focus
+      // instead of taking it from another workflow (for example admin recovery).
+      const focused = document.activeElement;
+      if (
+        dialogClosed &&
+        focused instanceof HTMLElement &&
+        focused !== document.body &&
+        focused.isConnected &&
+        !focused.closest('[inert], [hidden], [aria-hidden="true"], fieldset:disabled') &&
+        !focused.matches(':disabled, [aria-disabled="true"]')
+      )
+        return;
       if (operation?.phase.kind === 'refresh-required') directoryRecoveryRef.current?.focus();
       else searchRef.current?.focus();
     }, 0);

@@ -168,8 +168,12 @@ test('packaged desktop recovery reveals the current password after the full ritu
     await expect(passwordOutput).toHaveCSS('white-space', 'pre-wrap');
     await context.page.getByRole('button', { name: 'העתקת הסיסמה' }).click();
     await expect(context.page.getByRole('status', { name: /הצלחה: העתקת הסיסמה/ })).toBeVisible();
+    // Chromium writes native CRLF line endings to the Windows clipboard.
+    // Compare the exact native representation; keep all other whitespace intact.
+    const clipboardPassword =
+      process.platform === 'win32' ? exactPassword.replace(/\n/g, '\r\n') : exactPassword;
     expect(await context.application.evaluate(({ clipboard }) => clipboard.readText())).toBe(
-      exactPassword,
+      clipboardPassword,
     );
     const readDenied = await context.page.evaluate(async () => {
       try {
@@ -215,7 +219,7 @@ test('packaged desktop recovery reveals the current password after the full ritu
       .poll(() => child.evaluate(() => document.body.dataset.clipboardResult))
       .toBe('NotAllowedError');
     expect(await context.application.evaluate(({ clipboard }) => clipboard.readText())).toBe(
-      exactPassword,
+      clipboardPassword,
     );
     await context.page.locator('#clipboard-child-test').evaluate((iframe) => iframe.remove());
     await context.page.screenshot({ path: test.info().outputPath('recovery-reveal.png') });
@@ -404,10 +408,16 @@ test('unknown recovery blocks quit, dirty creation asks before discard, and seco
     expect(application.windows()).toHaveLength(1);
     await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
     await page.getByLabel('שם מלא', { exact: true }).fill('טיוטה');
-    page.once('dialog', (dialog) => void dialog.dismiss());
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
-    await expect(page.getByRole('dialog')).toBeVisible();
+    const discard = page.getByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
+    await expect(discard).toBeVisible();
+    await discard.getByRole('button', { name: 'להמשיך לערוך' }).click();
+    await expect(page.getByRole('dialog', { name: 'יצירת שואל חדש' })).toBeVisible();
+    await expect(page.getByLabel('שם מלא', { exact: true })).toHaveValue('טיוטה');
+    expect(application.windows()).toHaveLength(1);
     await page.getByRole('button', { name: 'ביטול', exact: true }).click();
+    await discard.getByRole('button', { name: 'מחיקת טיוטה' }).click();
+    await expect(page.getByRole('dialog', { name: 'יצירת שואל חדש' })).toHaveCount(0);
     await page.evaluate(() => localStorage.setItem('mapatz:frozen-attempt:v1:broken', '{}'));
     await page.reload();
     await expect(page.getByText('לא ניתן לקבוע בוודאות את מצב הפעולה. נסו שוב.')).toBeVisible();
