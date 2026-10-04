@@ -70,6 +70,9 @@ test('keeps summary search and expansion through a guarded card return', async (
 });
 
 test('refreshes the originating summary after reviewed save and close', async ({ page, seed }) => {
+  // Slow commits expose history-listener replacement during native popstate dispatch.
+  const browser = await page.context().newCDPSession(page);
+  await browser.send('Emulation.setCPUThrottlingRate', { rate: 6 });
   await page.goto('/summary');
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await search.fill(seed.borrower.playaName);

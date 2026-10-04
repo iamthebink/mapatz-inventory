@@ -11,6 +11,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -540,8 +541,9 @@ export const BorrowerWorkflow = forwardRef<
     return () => window.removeEventListener('beforeunload', unload);
   }, [createOpen, creation, operation]);
 
-  useEffect(() => {
-    const pop = () => {
+  const popHandlerRef = useRef<() => void>(() => {});
+  useLayoutEffect(() => {
+    popHandlerRef.current = () => {
       if (suppressPopRef.current) {
         suppressPopRef.current = false;
         const complete = navigationRef.current;
@@ -577,8 +579,6 @@ export const BorrowerWorkflow = forwardRef<
         requestExit(null);
       }
     };
-    window.addEventListener('popstate', pop);
-    return () => window.removeEventListener('popstate', pop);
   }, [
     createOpen,
     creation,
@@ -589,6 +589,14 @@ export const BorrowerWorkflow = forwardRef<
     requestExit,
     stack.depth,
   ]);
+
+  useEffect(() => {
+    // An earlier history listener can trigger a React commit during dispatch.
+    // Replacing this subscription would miss that same event and lose completion.
+    const pop = () => popHandlerRef.current();
+    window.addEventListener('popstate', pop);
+    return () => window.removeEventListener('popstate', pop);
+  }, []);
 
   useEffect(() => {
     const feedback = operation?.feedback ?? creation?.feedback;

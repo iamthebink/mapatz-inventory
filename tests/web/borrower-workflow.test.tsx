@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createRef } from 'react';
+import { flushSync } from 'react-dom';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActiveDescendantCombobox } from '../../src/web/ActiveDescendantCombobox';
-import { BorrowerWorkflow } from '../../src/web/BorrowerWorkflow';
+import { BorrowerWorkflow, type BorrowerWorkflowHandle } from '../../src/web/BorrowerWorkflow';
 import { DialogStackProvider } from '../../src/web/Dialog';
 
 const borrower = {
@@ -225,6 +227,55 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it('returns to the originating summary once when an earlier history listener rerenders the workflow', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.startsWith('/api/borrowers/search'))
+        return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+      if (path === '/api/borrowers/7/desk-snapshot') return json(desk());
+      throw new Error(`Unexpected ${path}`);
+    }),
+  );
+  const ref = createRef<BorrowerWorkflowHandle>();
+  const returned = vi.fn();
+  const startupChanged = vi.fn();
+  const showToast = vi.fn();
+  const workflow = (deskVisible: boolean) => (
+    <DialogStackProvider>
+      <BorrowerWorkflow
+        ref={ref}
+        showToast={showToast}
+        deskVisible={deskVisible}
+        onStartupChange={startupChanged}
+      />
+    </DialogStackProvider>
+  );
+  let rerenderWorkflow: (() => void) | undefined;
+  const earlierHistoryListener = () => rerenderWorkflow?.();
+  window.addEventListener('popstate', earlierHistoryListener);
+  try {
+    const view = render(workflow(false));
+    // A parent history listener may synchronously render before the workflow's
+    // own listener receives the same event. The pending completion must survive.
+    rerenderWorkflow = () => flushSync(() => view.rerender(workflow(true)));
+    await waitFor(() => expect(startupChanged).toHaveBeenLastCalledWith('ready'));
+    act(() => ref.current?.openFromSummary(borrower, returned));
+    const card = await screen.findByRole('dialog', { name: /כרטיס שואל/ });
+    await userEvent.click(within(card).getAllByRole('button', { name: 'סגירה' }).at(-1)!);
+    expect(history.back).toHaveBeenCalledOnce();
+    expect(returned).not.toHaveBeenCalled();
+
+    fireEvent.popState(window);
+    expect(returned).toHaveBeenCalledOnce();
+    fireEvent.popState(window);
+    expect(returned).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener('popstate', earlierHistoryListener);
+  }
 });
 
 describe('active descendant search', () => {
