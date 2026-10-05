@@ -3,7 +3,6 @@ import { launchElectron, finishApplication, saveDiagnostics } from './electron-h
 import { mkdtemp, rm, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-
 async function cleanupProfile(profile: string) {
   const { readFile } = await import('node:fs/promises');
   const log = await readFile(join(profile, 'desktop.log')).catch(() =>
@@ -14,7 +13,6 @@ async function cleanupProfile(profile: string) {
   await test.info().attach('desktop.log', { path: logPath, contentType: 'text/plain' });
   await rm(profile, { recursive: true, force: true });
 }
-
 async function executable() {
   if (process.env.MAPATZ_EXECUTABLE) return process.env.MAPATZ_EXECUTABLE;
   const out = resolve('desktop-stage/out');
@@ -30,7 +28,6 @@ async function executable() {
       : 'mapatz-inventory.exe',
   );
 }
-
 test('packaged SQLite transactions, workbook roundtrip, setup and persistent relaunch', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'mapatz-desktop-'));
   const executablePath = await executable();
@@ -91,7 +88,6 @@ process.parentPort.postMessage(restored.worksheets[0].getCell('A1').value); db.c
     await cleanupProfile(profile);
   }
 });
-
 async function freshApp() {
   const profile = await mkdtemp(join(tmpdir(), 'mapatz-matrix-'));
   const executablePath = await executable();
@@ -111,9 +107,8 @@ async function freshApp() {
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   return { application, page, profile, launch, executablePath };
 }
-
 test('packaged desktop recovery reveals the current password after the full ritual', async () => {
-  test.setTimeout(90_000);
+  test.setTimeout(90000);
   const context = await freshApp();
   try {
     const exactPassword = '  camp\t password\n123  ';
@@ -256,7 +251,6 @@ test('packaged desktop recovery reveals the current password after the full ritu
     await cleanupProfile(context.profile);
   }
 });
-
 test('lost response survives replacement, replays once, and retains credential and origin', async () => {
   const context = await freshApp();
   let application = context.application;
@@ -346,7 +340,6 @@ test('lost response survives replacement, replays once, and retains credential a
     await cleanupProfile(context.profile);
   }
 });
-
 test('export UI reports disk completion and failure, keeps cancel neutral, and requires the launch token', async () => {
   const { application, page, profile } = await freshApp();
   try {
@@ -394,7 +387,6 @@ test('export UI reports disk completion and failure, keeps cancel neutral, and r
     await cleanupProfile(profile);
   }
 });
-
 test('unknown recovery blocks quit, dirty creation asks before discard, and second launch has one owner', async () => {
   const { application, page, profile, executablePath } = await freshApp();
   try {
@@ -432,7 +424,6 @@ test('unknown recovery blocks quit, dirty creation asks before discard, and seco
     await cleanupProfile(profile);
   }
 });
-
 test('port collision and newer schema fail visibly without replacing data', async () => {
   const context = await freshApp();
   const { readFile } = await import('node:fs/promises');
@@ -471,7 +462,6 @@ test('port collision and newer schema fail visibly without replacing data', asyn
       defaultId: 0,
       cancelId: 1,
     });
-
     await stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     const db = new DatabaseSync(join(context.profile, 'inventory.sqlite'));
@@ -491,7 +481,6 @@ test('port collision and newer schema fail visibly without replacing data', asyn
     await cleanupProfile(context.profile);
   }
 });
-
 test('packaged inventory borrow/return, failed command rollback, and recovery workbook roundtrip', async () => {
   const { application, page, profile } = await freshApp();
   try {
@@ -530,18 +519,20 @@ test('packaged inventory borrow/return, failed command rollback, and recovery wo
           { contractVersion: 1, ledgerEpoch: 1, items: parts },
           crypto.randomUUID(),
         );
-      const borrowed = await command([{ itemId: item.id, borrow: [{ quantity: 2, note: '' }] }]);
+      const borrowed = await command([
+        { itemId: item.id, borrow: [{ quantity: 2, note: '', locationId: 1 }] },
+      ]);
       const before = await (await fetch('/api/ledger')).json();
       const rejected = await command([
         {
           itemId: item.id,
-          borrow: [{ quantity: 100, note: '' }],
-          return: [{ usable: 1, damaged: 0, note: '' }],
+          borrow: [{ quantity: 100, note: '', locationId: 1 }],
+          return: [{ usable: 1, damaged: 0, note: '', locationId: 1 }],
         },
       ]);
       const after = await (await fetch('/api/ledger')).json();
       const returned = await command([
-        { itemId: item.id, return: [{ usable: 1, damaged: 1, note: '' }] },
+        { itemId: item.id, return: [{ usable: 1, damaged: 1, note: '', locationId: 1 }] },
       ]);
       const workbook = await (await fetch('/api/workbook')).arrayBuffer();
       const restored = await fetch('/api/workbook/recovery', {
@@ -573,7 +564,6 @@ test('packaged inventory borrow/return, failed command rollback, and recovery wo
     await cleanupProfile(profile);
   }
 });
-
 for (const response of [0, 1])
   test(`backend failure offers retry/quit and safely executes choice ${response}`, async () => {
     const context = await freshApp();
@@ -606,7 +596,12 @@ for (const response of [0, 1])
       await expect
         .poll(() =>
           application.evaluate(
-            () => (globalThis as typeof globalThis & { failureOptions?: unknown }).failureOptions,
+            () =>
+              (
+                globalThis as typeof globalThis & {
+                  failureOptions?: unknown;
+                }
+              ).failureOptions,
           ),
         )
         .toMatchObject({
@@ -617,7 +612,13 @@ for (const response of [0, 1])
         });
       const options = await application.evaluate(
         () =>
-          (globalThis as typeof globalThis & { failureOptions: { detail: string } }).failureOptions,
+          (
+            globalThis as typeof globalThis & {
+              failureOptions: {
+                detail: string;
+              };
+            }
+          ).failureOptions,
       );
       expect(options.detail).toContain('desktop.log');
       const retryMarker = join(context.profile, 'retry-requested');
@@ -651,7 +652,6 @@ for (const response of [0, 1])
       await cleanupProfile(context.profile);
     }
   });
-
 test('dirty staged quit requires discard and saving quit keeps backend alive', async () => {
   const { application, page, profile } = await freshApp();
   try {
@@ -718,7 +718,6 @@ test('dirty staged quit requires discard and saving quit keeps backend alive', a
     await cleanupProfile(profile);
   }
 });
-
 test('first-run validation and cancel leave setup retryable without a credential', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'mapatz-setup-'));
   const executablePath = await executable();
@@ -745,7 +744,6 @@ test('first-run validation and cancel leave setup retryable without a credential
     await cleanupProfile(profile);
   }
 });
-
 test('non-desk reload blocks all app work until frozen recovery resolves', async () => {
   const { application, page, profile } = await freshApp();
   try {
@@ -763,7 +761,6 @@ test('non-desk reload blocks all app work until frozen recovery resolves', async
     await cleanupProfile(profile);
   }
 });
-
 for (const emptyKind of ['zero-byte', 'empty-sqlite'])
   test(`initialized profile rejects ${emptyKind} replacement without bootstrap`, async () => {
     const context = await freshApp();
@@ -798,7 +795,6 @@ for (const emptyKind of ['zero-byte', 'empty-sqlite'])
       await cleanupProfile(context.profile);
     }
   });
-
 for (const fault of ['profile-write', 'renderer-load'])
   test(`startup ${fault} failure still offers Quit when diagnostics cannot be written`, async () => {
     const profile = await mkdtemp(join(tmpdir(), 'mapatz-startup-fault-'));
@@ -843,7 +839,12 @@ for (const fault of ['profile-write', 'renderer-load'])
       await expect
         .poll(() =>
           application.evaluate(
-            () => (globalThis as typeof globalThis & { failureOptions?: unknown }).failureOptions,
+            () =>
+              (
+                globalThis as typeof globalThis & {
+                  failureOptions?: unknown;
+                }
+              ).failureOptions,
           ),
         )
         .toMatchObject({ buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'], cancelId: 1 });
@@ -866,7 +867,6 @@ for (const fault of ['profile-write', 'renderer-load'])
       await cleanupProfile(profile);
     }
   });
-
 test('repeated clean quits stop the backend and main process', async () => {
   for (let iteration = 0; iteration < 8; iteration += 1) {
     const context = await freshApp();
@@ -880,7 +880,6 @@ test('repeated clean quits stop the backend and main process', async () => {
     }
   }
 });
-
 test('quit drains an incomplete local HTTP connection without a windowless process', async () => {
   const context = await freshApp();
   const { createConnection } = await import('node:net');
@@ -891,14 +890,13 @@ test('quit drains an incomplete local HTTP connection without a windowless proce
   const child = context.application.process();
   const closing = finishApplication(context.application, true);
   try {
-    await expect.poll(() => child.exitCode, { timeout: 3_000 }).toBe(0);
+    await expect.poll(() => child.exitCode, { timeout: 3000 }).toBe(0);
   } finally {
     socket.destroy();
     await closing;
     await cleanupProfile(context.profile);
   }
 });
-
 test('normal quit lets an accepted command finish before closing SQLite', async () => {
   const context = await freshApp();
   const { application, page, profile } = context;
@@ -907,12 +905,21 @@ test('normal quit lets an accepted command finish before closing SQLite', async 
     session.defaultSession.webRequest.onSendHeaders((details) => {
       const token = details.requestHeaders['x-mapatz-desktop-token'];
       if (typeof token === 'string')
-        (globalThis as typeof globalThis & { launchToken?: string }).launchToken = token;
+        (
+          globalThis as typeof globalThis & {
+            launchToken?: string;
+          }
+        ).launchToken = token;
     });
   });
   await page.evaluate(async () => fetch('/api/session'));
   const token = await application.evaluate(
-    () => (globalThis as typeof globalThis & { launchToken?: string }).launchToken,
+    () =>
+      (
+        globalThis as typeof globalThis & {
+          launchToken?: string;
+        }
+      ).launchToken,
   );
   expect(token).toBeTruthy();
   const port = Number(new URL(page.url()).port);
@@ -963,7 +970,6 @@ test('normal quit lets an accepted command finish before closing SQLite', async 
     await cleanupProfile(profile);
   }
 });
-
 async function interceptResetRestart(
   application: Awaited<ReturnType<typeof launchElectron>>,
   profile: string,
@@ -975,22 +981,24 @@ async function interceptResetRestart(
         .writeFileSync(process.getBuiltinModule('path').join(profile, 'reset-relaunch'), 'yes');
   }, profile);
 }
-
 async function initiateReset(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchElectron>>['firstWindow']>>,
 ) {
   await page.evaluate(() => {
     void fetch('/api/system/reset', { method: 'POST' }).then(async (response) => {
-      (window as typeof window & { resetResponse?: unknown }).resetResponse = {
+      (
+        window as typeof window & {
+          resetResponse?: unknown;
+        }
+      ).resetResponse = {
         status: response.status,
         body: await response.json(),
       };
     });
   });
 }
-
 test('factory reset cancels unchanged, rejects renderer IPC, drains and clears pending state, then supports workbook recovery', async () => {
-  test.setTimeout(90_000);
+  test.setTimeout(90000);
   const context = await freshApp();
   let application = context.application;
   try {
@@ -1032,7 +1040,9 @@ test('factory reset cancels unchanged, rejects renderer IPC, drains and clears p
       await context.page.evaluate(async () => {
         try {
           await (
-            window.mapatzDesktop as unknown as { confirmReset(phrase: string): Promise<void> }
+            window.mapatzDesktop as unknown as {
+              confirmReset(phrase: string): Promise<void>;
+            }
           ).confirmReset('איפוס מערכת');
           return 'accepted';
         } catch {
@@ -1046,7 +1056,12 @@ test('factory reset cancels unchanged, rejects renderer IPC, drains and clears p
     await expect
       .poll(() =>
         context.page.evaluate(
-          () => (window as typeof window & { resetResponse?: unknown }).resetResponse,
+          () =>
+            (
+              window as typeof window & {
+                resetResponse?: unknown;
+              }
+            ).resetResponse,
         ),
       )
       .toEqual({ status: 200, body: { outcome: 'cancelled' } });
@@ -1125,7 +1140,6 @@ test('factory reset cancels unchanged, rejects renderer IPC, drains and clears p
     await cleanupProfile(context.profile);
   }
 });
-
 for (const corrupt of [false, true])
   test(`failure recovery factory reset works with ${corrupt ? 'corrupt SQLite' : 'incompatible SQLite'}`, async () => {
     const context = await freshApp();
@@ -1153,7 +1167,12 @@ for (const corrupt of [false, true])
       await expect
         .poll(() =>
           application.evaluate(
-            () => (globalThis as typeof globalThis & { resetFailure?: unknown }).resetFailure,
+            () =>
+              (
+                globalThis as typeof globalThis & {
+                  resetFailure?: unknown;
+                }
+              ).resetFailure,
           ),
         )
         .toMatchObject({ buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'] });
@@ -1187,7 +1206,6 @@ for (const corrupt of [false, true])
       await cleanupProfile(context.profile);
     }
   });
-
 for (const fault of ['invalid-profile', 'missing-profile', 'corrupt-database', 'newer-database'])
   test(`built Electron runtime resets startup ${fault} independently of main window`, async () => {
     const profile = await mkdtemp(join(tmpdir(), 'mapatz-reset-pre-window-'));
@@ -1235,8 +1253,11 @@ await import(${JSON.stringify(new URL('file://' + resolve('desktop-stage/dist/de
         .poll(() =>
           application.evaluate(
             () =>
-              (globalThis as typeof globalThis & { startupResetFailure?: unknown })
-                .startupResetFailure,
+              (
+                globalThis as typeof globalThis & {
+                  startupResetFailure?: unknown;
+                }
+              ).startupResetFailure,
           ),
         )
         .toMatchObject({ buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'] });
@@ -1261,8 +1282,13 @@ await import(${JSON.stringify(new URL('file://' + resolve('desktop-stage/dist/de
           .poll(() =>
             application.evaluate(
               () =>
-                (globalThis as typeof globalThis & { startupResetFailure?: { message: string } })
-                  .startupResetFailure?.message,
+                (
+                  globalThis as typeof globalThis & {
+                    startupResetFailure?: {
+                      message: string;
+                    };
+                  }
+                ).startupResetFailure?.message,
             ),
           )
           .toContain('בוטל');
@@ -1297,7 +1323,6 @@ await import(${JSON.stringify(new URL('file://' + resolve('desktop-stage/dist/de
       await rm(bootstrap, { recursive: true, force: true });
     }
   });
-
 test('storage-clear failure preserves database and offers retry that completes', async () => {
   const context = await freshApp();
   let application = context.application;
@@ -1339,7 +1364,12 @@ test('storage-clear failure preserves database and offers retry that completes',
     await expect
       .poll(() =>
         application.evaluate(
-          () => (globalThis as typeof globalThis & { clearFailure?: unknown }).clearFailure,
+          () =>
+            (
+              globalThis as typeof globalThis & {
+                clearFailure?: unknown;
+              }
+            ).clearFailure,
         ),
       )
       .toMatchObject({
@@ -1365,16 +1395,26 @@ test('storage-clear failure preserves database and offers retry that completes',
       .poll(() =>
         application.evaluate(
           () =>
-            (globalThis as typeof globalThis & { clearFailure?: { message: string } }).clearFailure
-              ?.message,
+            (
+              globalThis as typeof globalThis & {
+                clearFailure?: {
+                  message: string;
+                };
+              }
+            ).clearFailure?.message,
         ),
       )
       .toContain('ייתכן שחלק מהנתונים כבר נמחקו');
     expect(
       await application.evaluate(
         () =>
-          (globalThis as typeof globalThis & { clearFailure?: { message: string } }).clearFailure
-            ?.message,
+          (
+            globalThis as typeof globalThis & {
+              clearFailure?: {
+                message: string;
+              };
+            }
+          ).clearFailure?.message,
       ),
     ).not.toContain('הנתונים נשמרו');
     const confirmedRetryOpened = application.waitForEvent('window');
@@ -1399,11 +1439,10 @@ test('storage-clear failure preserves database and offers retry that completes',
     await cleanupProfile(context.profile);
   }
 });
-
 for (const outcome of ['retry', 'exit'])
   test(`backend stop timeout never deletes a live owner and permits ${outcome}`, async () => {
     test.skip(process.platform === 'win32', 'SIGSTOP is available on the local Unix runtime');
-    test.setTimeout(90_000);
+    test.setTimeout(90000);
     const context = await freshApp();
     let application = context.application;
     let backendPid: number | undefined;
@@ -1448,9 +1487,14 @@ for (const outcome of ['retry', 'exit'])
         .poll(
           () =>
             application.evaluate(
-              () => (globalThis as typeof globalThis & { stopFailure?: unknown }).stopFailure,
+              () =>
+                (
+                  globalThis as typeof globalThis & {
+                    stopFailure?: unknown;
+                  }
+                ).stopFailure,
             ),
-          { timeout: 40_000 },
+          { timeout: 40000 },
         )
         .toMatchObject({
           message: expect.stringContaining('no files were deleted'),
@@ -1515,7 +1559,6 @@ for (const outcome of ['retry', 'exit'])
       await cleanupProfile(context.profile);
     }
   });
-
 test('admin settings reset button requires admin and returns from local cancellation', async () => {
   const context = await freshApp();
   try {
@@ -1548,7 +1591,6 @@ test('admin settings reset button requires admin and returns from local cancella
     await cleanupProfile(context.profile);
   }
 });
-
 test('confirmation renderer crash cancels and permits another confirmation and ordinary exit', async () => {
   const context = await freshApp();
   try {
@@ -1572,7 +1614,12 @@ test('confirmation renderer crash cancels and permits another confirmation and o
     await expect
       .poll(() =>
         context.page.evaluate(
-          () => (window as typeof window & { resetResponse?: unknown }).resetResponse,
+          () =>
+            (
+              window as typeof window & {
+                resetResponse?: unknown;
+              }
+            ).resetResponse,
         ),
       )
       .toEqual({ status: 200, body: { outcome: 'cancelled' } });
@@ -1604,7 +1651,6 @@ test('confirmation renderer crash cancels and permits another confirmation and o
     await cleanupProfile(context.profile);
   }
 });
-
 test('backend death while confirmation is open surfaces failure after cancellation and permits exit', async () => {
   const context = await freshApp();
   try {
@@ -1654,8 +1700,11 @@ test('backend death while confirmation is open surfaces failure after cancellati
       .poll(() =>
         context.application.evaluate(
           () =>
-            (globalThis as typeof globalThis & { deferredBackendFailure?: unknown })
-              .deferredBackendFailure,
+            (
+              globalThis as typeof globalThis & {
+                deferredBackendFailure?: unknown;
+              }
+            ).deferredBackendFailure,
         ),
       )
       .toMatchObject({

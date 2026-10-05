@@ -14,11 +14,9 @@ import {
   projectItem,
   projectedItems,
 } from '../../src/web/borrower-workflow-state.js';
-
 const key1 = '00000000-0000-4000-8000-000000000001';
 const key2 = '00000000-0000-4000-8000-000000000002';
 const key3 = '00000000-0000-4000-8000-000000000003';
-
 function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSnapshot {
   return {
     borrower: {
@@ -35,7 +33,7 @@ function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSn
         name: 'Tent',
         kind: 'non_consumable',
         lotSize: null,
-        locationId: null,
+        balances: [{ locationId: 1, available: 6, damaged: 0 }],
         archived: false,
         aliases: [],
         available: 6,
@@ -47,9 +45,18 @@ function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSn
     stateRevision: 8,
     ledgerEpoch: 3,
     ...overrides,
+    locations: [
+      {
+        id: 1,
+        name: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+        code: 'monster',
+        archived: false,
+        isDefault: true,
+      },
+    ],
+    defaultLocationId: 1,
   };
 }
-
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     Object.freeze(value);
@@ -57,7 +64,6 @@ function deepFreeze<T>(value: T): T {
   }
   return value;
 }
-
 describe('borrower operation state', () => {
   it('keeps consumable issuance out of holdings and fails closed on unsafe issue totals', () => {
     const consumable = {
@@ -66,6 +72,7 @@ describe('borrower operation state', () => {
       name: 'Ties',
       kind: 'consumable' as const,
       available: 5,
+      balances: [{ locationId: 1, available: 5, damaged: 0 }],
     };
     const base = snapshot({ inventory: [...snapshot().inventory, consumable] });
     expect(
@@ -78,7 +85,7 @@ describe('borrower operation state', () => {
     state = operationReducer(state, {
       type: 'stage-issue',
       itemId: consumable.id,
-      part: { quantity: 2, note: 'supplies' },
+      part: { quantity: 2, note: 'supplies', locationId: 1 },
     });
     expect(projectItem(state, consumable.id)).toMatchObject({
       projectedHeld: 0,
@@ -87,13 +94,13 @@ describe('borrower operation state', () => {
     });
     expect(operationRequest(state).items).toContainEqual({
       itemId: consumable.id,
-      issue: [{ quantity: 2, note: 'supplies' }],
+      issue: [{ quantity: 2, note: 'supplies', locationId: 1 }],
     });
     expect(canSave(state)).toBe(true);
     state = operationReducer(state, {
       type: 'stage-issue',
       itemId: consumable.id,
-      part: { quantity: Number.MAX_SAFE_INTEGER, note: '' },
+      part: { quantity: Number.MAX_SAFE_INTEGER, note: '', locationId: 1 },
     });
     expect(projectItem(state, consumable.id)?.compatible).toBe(false);
     expect(canSave(state)).toBe(false);
@@ -108,14 +115,13 @@ describe('borrower operation state', () => {
     state = operationReducer(state, {
       type: 'stage-lost-credit',
       itemId: 11,
-      part: { quantity: 3, condition: 'usable', note: 'received' },
+      part: { quantity: 3, condition: 'usable', note: 'received', locationId: 1 },
     });
-
     expect(operationRequest(state).items).toEqual([
       {
         itemId: 11,
         lost: [{ quantity: 2, note: 'missing' }],
-        lostCredit: [{ quantity: 3, condition: 'usable', note: 'received' }],
+        lostCredit: [{ quantity: 3, condition: 'usable', note: 'received', locationId: 1 }],
       },
     ]);
     expect(projectItem(state, 11)).toMatchObject({
@@ -127,11 +133,9 @@ describe('borrower operation state', () => {
       projectedAvailability: 9,
       compatible: true,
     });
-
     const blocked = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lost' });
     expect(blocked.staged).toEqual(state.staged);
     expect(blocked.feedback?.code).toBe('dependent_recovery');
-
     state = operationReducer(state, {
       type: 'rollback',
       itemId: 11,
@@ -141,23 +145,30 @@ describe('borrower operation state', () => {
     expect(state.staged).toEqual([]);
     expect(projectItem(state, 11)).toMatchObject({ projectedHeld: 5, lostNow: 2 });
   });
-
   it('stages lost credits against the independent lost balance and projects usable stock', () => {
     let state = createOperationState(
       7,
       snapshot({
-        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        inventory: [
+          {
+            ...snapshot().inventory[0]!,
+            available: 0,
+            balances: [{ locationId: 1, available: 0, damaged: 0 }],
+          },
+        ],
         holdings: [{ itemId: 11, returnable: 0, lost: 2 }],
       }),
     );
     state = operationReducer(state, {
       type: 'stage-lost-credit',
       itemId: 11,
-      part: { quantity: 1, condition: 'usable', note: 'found' },
+      part: { quantity: 1, condition: 'usable', note: 'found', locationId: 1 },
     });
-
     expect(operationRequest(state).items).toEqual([
-      { itemId: 11, lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }] },
+      {
+        itemId: 11,
+        lostCredit: [{ quantity: 1, condition: 'usable', note: 'found', locationId: 1 }],
+      },
     ]);
     expect(projectItem(state, 11)).toMatchObject({
       returnableNow: 0,
@@ -169,36 +180,40 @@ describe('borrower operation state', () => {
     });
     expect(state.announcement).toBe('Tent: החזרת אבוד, כמות 1; יתרת הציוד האבוד כעת 1');
     expect(canSave(state)).toBe(true);
-
     state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'lostCredit' });
     expect(state.staged).toEqual([]);
   });
-
   it('keeps damaged recovery out of usable funding and cancels recovery conditions independently', () => {
     let state = createOperationState(
       7,
       snapshot({
-        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        inventory: [
+          {
+            ...snapshot().inventory[0]!,
+            available: 0,
+            balances: [{ locationId: 1, available: 0, damaged: 0 }],
+          },
+        ],
         holdings: [{ itemId: 11, returnable: 0, lost: 2 }],
       }),
     );
     state = operationReducer(state, {
       type: 'stage-lost-credit',
       itemId: 11,
-      part: { quantity: 1, condition: 'damaged', note: 'broken' },
+      part: { quantity: 1, condition: 'damaged', note: 'broken', locationId: 1 },
     });
     expect(projectItem(state, 11)).toMatchObject({ lostNow: 1, projectedAvailability: 0 });
     state = operationReducer(state, {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     expect(projectItem(state, 11)?.compatible).toBe(false);
     state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'borrow' });
     state = operationReducer(state, {
       type: 'stage-lost-credit',
       itemId: 11,
-      part: { quantity: 1, condition: 'usable', note: 'intact' },
+      part: { quantity: 1, condition: 'usable', note: 'intact', locationId: 1 },
     });
     expect(projectItem(state, 11)).toMatchObject({ lostNow: 0, projectedAvailability: 1 });
     state = operationReducer(state, {
@@ -208,36 +223,37 @@ describe('borrower operation state', () => {
       condition: 'damaged',
     });
     expect(operationRequest(state).items).toEqual([
-      { itemId: 11, lostCredit: [{ quantity: 1, condition: 'usable', note: 'intact' }] },
+      {
+        itemId: 11,
+        lostCredit: [{ quantity: 1, condition: 'usable', note: 'intact', locationId: 1 }],
+      },
     ]);
   });
-
   it('preserves ordered directional buckets, immutable truth, projection formulas, and announcements', () => {
     const base = deepFreeze(snapshot());
     let state = createOperationState(7, base);
     state = operationReducer(state, {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 2, note: 'first' },
+      part: { quantity: 2, note: 'first', locationId: 1 },
     });
     state = operationReducer(state, {
       type: 'stage-return',
       itemId: 11,
-      part: { usable: 1, damaged: 1, note: 'second' },
+      part: { usable: 1, damaged: 1, note: 'second', locationId: 1 },
     });
     state = operationReducer(state, {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: 'third' },
+      part: { quantity: 1, note: 'third', locationId: 1 },
     });
-
     expect(operationRequest(state).items[0]).toEqual({
       itemId: 11,
       borrow: [
-        { quantity: 2, note: 'first' },
-        { quantity: 1, note: 'third' },
+        { quantity: 2, note: 'first', locationId: 1 },
+        { quantity: 1, note: 'third', locationId: 1 },
       ],
-      return: [{ usable: 1, damaged: 1, note: 'second' }],
+      return: [{ usable: 1, damaged: 1, note: 'second', locationId: 1 }],
     });
     expect(projectItem(state, 11)).toMatchObject({
       stagedBorrow: 3,
@@ -250,24 +266,22 @@ describe('borrower operation state', () => {
     });
     expect(state.announcement).toContain('השאלה, כמות 1; באחריות השואל כעת 6');
     expect(base.holdings[0]).toEqual({ itemId: 11, returnable: 5, lost: 2 });
-
     state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'return' });
     expect(state.staged[0]?.borrow).toHaveLength(2);
     expect(state.staged[0]?.return).toEqual([]);
   });
-
   it('updates ordered borrow parts and ignores fractional indexes without an announcement', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: 'a' },
+      part: { quantity: 1, note: 'a', locationId: 1 },
     });
     state = { ...state, announcement: null };
     const unchanged = operationReducer(state, {
       type: 'update-borrow',
       itemId: 11,
       index: 0.5,
-      part: { quantity: 4, note: 'bad' },
+      part: { quantity: 4, note: 'bad', locationId: 1 },
     });
     expect(unchanged).toBe(state);
     expect(unchanged.announcement).toBeNull();
@@ -275,23 +289,27 @@ describe('borrower operation state', () => {
       type: 'update-borrow',
       itemId: 11,
       index: 0,
-      part: { quantity: 2, note: 'updated' },
+      part: { quantity: 2, note: 'updated', locationId: 1 },
     });
-    expect(updated.staged[0]?.borrow).toEqual([{ quantity: 2, note: 'updated' }]);
+    expect(updated.staged[0]?.borrow).toEqual([{ quantity: 2, note: 'updated', locationId: 1 }]);
   });
-
   it('fails closed for unsafe arithmetic and duplicate snapshot identities', () => {
     const unsafe = snapshot({
-      inventory: [{ ...snapshot().inventory[0]!, available: Number.MAX_SAFE_INTEGER }],
+      inventory: [
+        {
+          ...snapshot().inventory[0]!,
+          available: Number.MAX_SAFE_INTEGER,
+          balances: [{ locationId: 1, available: Number.MAX_SAFE_INTEGER, damaged: 0 }],
+        },
+      ],
     });
     let state = createOperationState(7, unsafe);
     state = operationReducer(state, {
       type: 'stage-return',
       itemId: 11,
-      part: { usable: 1, damaged: 0, note: '' },
+      part: { usable: 1, damaged: 0, note: '', locationId: 1 },
     });
     expect(canSave(state)).toBe(false);
-
     const duplicateItem = {
       ...snapshot(),
       inventory: [...snapshot().inventory, snapshot().inventory[0]!],
@@ -303,13 +321,12 @@ describe('borrower operation state', () => {
     expect(isBorrowerDeskSnapshot(duplicateItem)).toBe(false);
     expect(isBorrowerDeskSnapshot(duplicateHolding)).toBe(false);
   });
-
   it('does not credit incompatible usable returns to availability', () => {
     let state = createOperationState(7, snapshot());
     state = operationReducer(state, {
       type: 'stage-return',
       itemId: 11,
-      part: { usable: 6, damaged: 0, note: '' },
+      part: { usable: 6, damaged: 0, note: '', locationId: 1 },
     });
     expect(projectItem(state, 11)).toMatchObject({
       returnableNow: -1,
@@ -317,7 +334,6 @@ describe('borrower operation state', () => {
       compatible: false,
     });
     expect(canSave(state)).toBe(false);
-
     state = createOperationState(
       7,
       snapshot({
@@ -333,29 +349,27 @@ describe('borrower operation state', () => {
     state = operationReducer(state, {
       type: 'stage-return',
       itemId: 11,
-      part: { usable: 1, damaged: 0, note: '' },
+      part: { usable: 1, damaged: 0, note: '', locationId: 1 },
     });
     expect(projectItem(state, 11)).toMatchObject({
       projectedAvailability: 6,
       compatible: false,
     });
-
     state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-return',
       itemId: 12,
-      part: { usable: 1, damaged: 0, note: '' },
+      part: { usable: 1, damaged: 0, note: '', locationId: 1 },
     });
     expect(projectItem(state, 12)).toMatchObject({
       projectedAvailability: 0,
       compatible: false,
     });
   });
-
   it('guards attempt identity, preserves unknown authorization, and retires rejected keys', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     expect(operationLocks(state)).toEqual({ mutation: true, exit: true });
@@ -364,7 +378,6 @@ describe('borrower operation state', () => {
     const frozen = operationReducer(state, { type: 'authorization', attemptKey: key1 });
     expect(frozen.phase.kind).toBe('unknown');
     expect(frozen.staged).toHaveLength(1);
-
     const nowValid = operationReducer(frozen, {
       type: 'result',
       attemptKey: key1,
@@ -385,12 +398,11 @@ describe('borrower operation state', () => {
       operationReducer(nowValid, { type: 'dispatch', attemptKey: key2, intent: 'save' }).phase.kind,
     ).toBe('saving');
   });
-
   it('replaces valid conflict truth but rejects cross-borrower and duplicate snapshots', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     const conflict = {
@@ -402,6 +414,7 @@ describe('borrower operation state', () => {
       conflicts: [
         {
           scope: 'borrow' as const,
+          locationId: 1,
           code: 'insufficient_stock' as const,
           itemId: 11,
           requested: 1,
@@ -410,7 +423,13 @@ describe('borrower operation state', () => {
       ],
       snapshot: snapshot({
         stateRevision: 9,
-        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        inventory: [
+          {
+            ...snapshot().inventory[0]!,
+            available: 0,
+            balances: [{ locationId: 1, available: 0, damaged: 0 }],
+          },
+        ],
       }),
     };
     const conflicted = operationReducer(state, {
@@ -423,7 +442,6 @@ describe('borrower operation state', () => {
     expect(conflicted.staged).toHaveLength(1);
     expect(canSave(conflicted)).toBe(false);
     expect(operationLocks(conflicted).mutation).toBe(false);
-
     for (const badSnapshot of [
       snapshot({ borrower: { ...snapshot().borrower, id: 99 } }),
       { ...snapshot(), holdings: [...snapshot().holdings, snapshot().holdings[0]!] },
@@ -436,12 +454,11 @@ describe('borrower operation state', () => {
       expect(ignored).toBe(state);
     }
   });
-
   it('clears staging before identity-owned refresh and restores recovery after repeat failures', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     state = operationReducer(state, {
@@ -489,12 +506,11 @@ describe('borrower operation state', () => {
       }),
     ).toBe(state);
   });
-
   it('refreshes a normal save and models save-and-close recovery truthfully', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     state = operationReducer(state, {
@@ -516,11 +532,10 @@ describe('borrower operation state', () => {
       focus: 'item-search',
       unverifiedProjection: null,
     });
-
     let closed = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     closed = operationReducer(closed, {
       type: 'dispatch',
@@ -545,11 +560,10 @@ describe('borrower operation state', () => {
     });
     expect(closed.phase.kind).toBe('closed');
     expect(operationPresentation(closed)).toEqual({ cardOpen: false, searchEnabled: true });
-
     let epochClosed = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     epochClosed = operationReducer(epochClosed, {
       type: 'dispatch',
@@ -587,12 +601,11 @@ describe('borrower operation state', () => {
     });
     expect(operationPresentation(epochClosed)).toEqual({ cardOpen: false, searchEnabled: true });
   });
-
   it('requires authoritative reload after an epoch change', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     state = operationReducer(state, {
@@ -614,7 +627,6 @@ describe('borrower operation state', () => {
         snapshot: snapshot({ borrower: { ...snapshot().borrower, id: 8 } }),
       }),
     ).toBe(state);
-
     const reloadId = '00000000-0000-4000-8000-000000000301';
     state = operationReducer(state, { type: 'reload-started', reloadId });
     expect(
@@ -637,12 +649,11 @@ describe('borrower operation state', () => {
     });
     expect(state.usedReloadIds).toContain(reloadId);
   });
-
   it('rejects invalid identities, makes empty rollback inert, and models storage failure', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     expect(operationReducer(state, { type: 'rollback', itemId: 11, direction: 'return' })).toBe(
       state,
@@ -664,7 +675,7 @@ describe('borrower operation state', () => {
       operationReducer(failed, {
         type: 'stage-borrow',
         itemId: 11,
-        part: { quantity: 2, note: '' },
+        part: { quantity: 2, note: '', locationId: 1 },
       }),
     ).toBe(failed);
     const recovered = operationReducer(failed, {
@@ -674,14 +685,12 @@ describe('borrower operation state', () => {
     });
     expect(recovered.phase.kind).toBe('unknown');
   });
-
   it('owns caller data, keeps staged-only rows and notes visible, and retires every attempt key', () => {
     const source = snapshot();
     let state = createOperationState(7, source);
     source.inventory[0]!.available = 0;
     expect(state.snapshot.inventory[0]!.available).toBe(6);
-
-    const part = { quantity: 2, note: 'owned' };
+    const part = { quantity: 2, note: 'owned', locationId: 1 };
     state = operationReducer(state, { type: 'stage-borrow', itemId: 99, part });
     part.quantity = 9;
     const row = projectedItems(state).find((candidate) => candidate.itemId === 99);
@@ -694,12 +703,11 @@ describe('borrower operation state', () => {
     const materialized = operationRequest(state);
     materialized.items[0]!.borrow![0]!.quantity = 8;
     expect(state.staged[0]!.borrow[0]!.quantity).toBe(2);
-
     state = operationReducer(state, { type: 'rollback', itemId: 99, direction: 'borrow' });
     state = operationReducer(state, {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     state = operationReducer(state, { type: 'authorization', attemptKey: key1 });
@@ -712,12 +720,11 @@ describe('borrower operation state', () => {
       operationReducer(state, { type: 'dispatch', attemptKey: key3, intent: 'save' }).phase.kind,
     ).toBe('saving');
   });
-
   it('rejects non-monotonic conflict, refresh, and reload truth', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',
       itemId: 11,
-      part: { quantity: 1, note: '' },
+      part: { quantity: 1, note: '', locationId: 1 },
     });
     state = operationReducer(state, { type: 'dispatch', attemptKey: key1, intent: 'save' });
     const conflict = {
@@ -729,6 +736,7 @@ describe('borrower operation state', () => {
       conflicts: [
         {
           scope: 'borrow' as const,
+          locationId: 1,
           code: 'insufficient_stock' as const,
           itemId: 11,
           requested: 1,
@@ -737,7 +745,13 @@ describe('borrower operation state', () => {
       ],
       snapshot: snapshot({
         stateRevision: 7,
-        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        inventory: [
+          {
+            ...snapshot().inventory[0]!,
+            available: 0,
+            balances: [{ locationId: 1, available: 0, damaged: 0 }],
+          },
+        ],
       }),
     };
     expect(operationReducer(state, { type: 'result', attemptKey: key1, result: conflict })).toBe(
@@ -751,12 +765,17 @@ describe('borrower operation state', () => {
           ...conflict,
           snapshot: snapshot({
             ledgerEpoch: 4,
-            inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+            inventory: [
+              {
+                ...snapshot().inventory[0]!,
+                available: 0,
+                balances: [{ locationId: 1, available: 0, damaged: 0 }],
+              },
+            ],
           }),
         },
       }),
     ).toBe(state);
-
     state = operationReducer(state, {
       type: 'result',
       attemptKey: key1,
@@ -778,7 +797,6 @@ describe('borrower operation state', () => {
     expect(epochChanged.phase.kind).toBe('reload-required');
   });
 });
-
 describe('borrower creation state', () => {
   const request = {
     contractVersion: 1 as const,
@@ -796,7 +814,6 @@ describe('borrower creation state', () => {
     campDepartment: '' as const,
     archived: false,
   };
-
   it('preserves values on first authorization and freezes unknown authorization', () => {
     let state = creationReducer(createCreationState(request), {
       type: 'dispatch',
@@ -811,7 +828,6 @@ describe('borrower creation state', () => {
       'unknown',
     );
   });
-
   it('identity-owns initial and retried card loads', () => {
     let state = creationReducer(createCreationState(request), {
       type: 'dispatch',
@@ -872,7 +888,6 @@ describe('borrower creation state', () => {
       }),
     ).toBe(state);
   });
-
   it('preserves validation values, exposes conflicts, and requires a new key after now-valid replay', () => {
     let state = creationReducer(createCreationState(request), {
       type: 'dispatch',
@@ -896,7 +911,6 @@ describe('borrower creation state', () => {
     state = creationReducer(state, { type: 'change', field: 'playaName', value: 'changed' });
     expect(state.fieldErrors).toEqual([]);
     expect(state.values.playaName).toBe('changed');
-
     state = creationReducer(state, { type: 'dispatch', attemptKey: key2 });
     state = creationReducer(state, {
       type: 'result',
@@ -912,11 +926,9 @@ describe('borrower creation state', () => {
     });
     expect(creationReducer(state, { type: 'dispatch', attemptKey: key2 })).toBe(state);
   });
-
   it('validates creation dispatch and routes invalid current card snapshots to retry recovery', () => {
     const invalid = createCreationState({ ...request, playaName: ' x ' });
     expect(creationReducer(invalid, { type: 'dispatch', attemptKey: key1 })).toBe(invalid);
-
     let state = creationReducer(createCreationState(request), {
       type: 'dispatch',
       attemptKey: key1,
@@ -935,7 +947,6 @@ describe('borrower creation state', () => {
     expect(state.phase.kind).toBe('card-load-failed');
     expect(state.focus).toBe('retry-card');
   });
-
   it('identity-owns creation epoch reloads and exposes persistence failures', () => {
     let state = creationReducer(createCreationState(request), {
       type: 'dispatch',
@@ -962,7 +973,6 @@ describe('borrower creation state', () => {
     state = creationReducer(state, { type: 'reload-succeeded', reloadId, ledgerEpoch: 4 });
     expect(state.values.ledgerEpoch).toBe(4);
     expect(state.phase.kind).toBe('editing');
-
     state = creationReducer(state, { type: 'dispatch', attemptKey: key2 });
     state = creationReducer(state, {
       type: 'storage-failure',
@@ -981,7 +991,6 @@ describe('borrower creation state', () => {
     expect(creationReducer(state, { type: 'dispatch', attemptKey: key2 })).toBe(state);
   });
 });
-
 it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
   'rejects overlength %s in authoritative snapshots',
   (field) => {

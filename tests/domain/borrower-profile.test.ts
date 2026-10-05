@@ -4,7 +4,6 @@ import { InventoryService } from '../../src/domain/inventory.js';
 import { InventoryTransferService } from '../../src/domain/import-export.js';
 import { borrowerIdentity, normalizeBorrowerText } from '../../src/domain/borrower-profile.js';
 import { exportWorkbook, parseRecoveryWorkbook } from '../../src/io/workbook.js';
-
 const databases: InventoryDatabase[] = [];
 afterEach(() => databases.splice(0).forEach((db) => db.close()));
 function fixture() {
@@ -13,7 +12,6 @@ function fixture() {
   return { db, inventory: new InventoryService(db), transfer: new InventoryTransferService(db) };
 }
 const profile = { fullName: 'Ada Lovelace', playaName: '', phoneNumber: '', campDepartment: '' };
-
 describe('borrower composite profiles', () => {
   it('creates a minimal trimmed profile and permits every repeated individual field', () => {
     const { inventory } = fixture();
@@ -28,7 +26,6 @@ describe('borrower composite profiles', () => {
       inventory.createBorrower({ fullName: 'Ada', playaName: 'x'.repeat(101) }),
     ).toThrow();
   });
-
   it('enforces normalized tuple uniqueness for direct inserts and updates, including archives', () => {
     const { db, inventory } = fixture();
     const existing = inventory.createBorrower({
@@ -59,7 +56,6 @@ describe('borrower composite profiles', () => {
     ).toBe('other');
     expect(() => insert.run('', '', '', '')).toThrow(/CHECK/);
   });
-
   it('warns on real profile matches, permits deliberate distinct creation, and ignores camp-only matches', () => {
     const { inventory } = fixture();
     const existing = inventory.createBorrower({
@@ -88,7 +84,6 @@ describe('borrower composite profiles', () => {
     inventory.archiveBorrower(existing.id, true);
     expect(inventory.borrowerCampSuggestions()).toEqual(['Camp A', 'Camp B']);
   });
-
   it('merges exact tuples, creates distinct ones, and rejects duplicated input before any returns', () => {
     const { inventory } = fixture();
     const archived = inventory.createBorrower({ ...profile, phoneNumber: '050-123' });
@@ -105,9 +100,33 @@ describe('borrower composite profiles', () => {
     expect(
       inventory.listBorrowers('', true).find((borrower) => borrower.id === archived.id)!,
     ).toMatchObject({ archived: false, phoneNumber: '050-123' });
-    const item = inventory.createItem({ name: 'Tent', kind: 'non_consumable' });
-    inventory.addStock(item.id, 2);
-    inventory.checkout(item.id, archived.id, 1);
+    const item = inventory.createItem({
+      name: 'Tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.checkout(
+      item.id,
+      archived.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const before = inventory.listLedger();
     expect(() =>
       inventory.importBorrowers(
@@ -119,16 +138,33 @@ describe('borrower composite profiles', () => {
     expect(inventory.listLedger()).toEqual(before);
     expect(inventory.listLoans()[0]).toMatchObject({ borrowerId: archived.id, outstanding: 1 });
   });
-
   it('round-trips same-name distinct borrowers and remaps every retained event and loan', async () => {
     const source = fixture();
     const first = source.inventory.createBorrower({ ...profile, phoneNumber: '050' });
     const second = source.inventory.createBorrower({ ...profile, phoneNumber: '052' });
-    const item = source.inventory.createItem({ name: 'Chairs', kind: 'non_consumable' });
-    source.inventory.addStock(item.id, 5);
-    const firstCheckout = source.inventory.checkout(item.id, first.id, 2);
-    const secondCheckout = source.inventory.checkout(item.id, second.id, 1);
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfer.snapshot()));
+    const item = source.inventory.createItem({
+      name: 'Chairs',
+      kind: 'non_consumable',
+      locationId: Number(source.inventory.listLocations()[0]!.id),
+    });
+    source.inventory.addStock(item.id, 5, '', Number(source.inventory.listLocations()[0]!.id));
+    const firstCheckout = source.inventory.checkout(
+      item.id,
+      first.id,
+      2,
+      '',
+      Number(source.inventory.listLocations()[0]!.id),
+    );
+    const secondCheckout = source.inventory.checkout(
+      item.id,
+      second.id,
+      1,
+      '',
+      Number(source.inventory.listLocations()[0]!.id),
+    );
+    const payload = await parseRecoveryWorkbook(
+      await exportWorkbook(source.transfer.snapshot(), 'מפלצת'),
+    );
     const destination = fixture();
     destination.transfer.replaceWithRecovery(payload);
     const restored = destination.transfer.snapshot();
@@ -143,7 +179,13 @@ describe('borrower composite profiles', () => {
     expect(restored.loans.find((loan) => loan.checkoutId === secondCheckout)!.borrowerId).toBe(
       profiles.get('052')!.id,
     );
-    destination.inventory.returnCheckout(firstCheckout, 1, 0);
+    destination.inventory.returnCheckout(
+      firstCheckout,
+      1,
+      0,
+      '',
+      Number(destination.inventory.listLocations()[0]!.id),
+    );
     expect(
       destination.inventory.listLoans().find((loan) => loan.checkoutId === firstCheckout),
     ).toMatchObject({ outstanding: 1 });

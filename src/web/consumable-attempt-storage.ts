@@ -1,6 +1,6 @@
 import { isCommandUuid } from './borrower-workflow-recovery';
 
-export type Entry = { itemId: number; quantity: number; note: string };
+export type Entry = { itemId: number; locationId: number; quantity: number; note: string };
 export type Attempt = { key: string; ledgerEpoch: number; items: Entry[] };
 export const storageKey = 'mapatz-consumable-batch-attempt';
 export function clearStoredAttempt() {
@@ -31,6 +31,8 @@ export function storedAttempt(): Attempt | null {
         (item) =>
           Number.isSafeInteger(item.itemId) &&
           item.itemId > 0 &&
+          Number.isSafeInteger(item.locationId) &&
+          item.locationId > 0 &&
           Number.isSafeInteger(item.quantity) &&
           item.quantity > 0 &&
           typeof item.note === 'string' &&

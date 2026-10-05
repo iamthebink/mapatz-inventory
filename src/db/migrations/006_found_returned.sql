@@ -4,13 +4,15 @@ CREATE TABLE inventory_events_new (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN (
     'stock_added','stock_removed','issued','checked_out','returned_usable',
-    'returned_damaged','marked_lost','found_returned','found_returned_damaged','repaired','written_off'
+    'returned_damaged','marked_lost','found_returned','found_returned_damaged','repaired','written_off','transferred_out','transferred_in','damaged_transferred_out','damaged_transferred_in'
   )),
   item_id INTEGER NOT NULL REFERENCES items(id),
   borrower_id INTEGER REFERENCES borrowers(id),
   quantity INTEGER NOT NULL CHECK (quantity > 0),
   related_event_id INTEGER REFERENCES inventory_events_new(id),
   note TEXT NOT NULL DEFAULT '',
+  location_name TEXT,
+  location_code TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK ((kind = 'checked_out' AND borrower_id IS NOT NULL) OR (kind <> 'checked_out'))
 );

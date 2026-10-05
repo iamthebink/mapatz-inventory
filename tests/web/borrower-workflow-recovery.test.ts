@@ -21,10 +21,8 @@ import {
   persistFrozenAttempt,
   resolveFrozenAttempt,
 } from '../../src/web/borrower-workflow-recovery.js';
-
 const key1 = '00000000-0000-4000-8000-000000000001';
 const key2 = '00000000-0000-4000-8000-000000000002';
-
 function operation(key = key1): FrozenOperationAttempt {
   return {
     version: 1,
@@ -38,11 +36,10 @@ function operation(key = key1): FrozenOperationAttempt {
     body: {
       contractVersion: 1,
       ledgerEpoch: 3,
-      items: [{ itemId: 11, borrow: [{ quantity: 2, note: 'ordered' }] }],
+      items: [{ itemId: 11, borrow: [{ quantity: 2, note: 'ordered', locationId: 1 }] }],
     },
   };
 }
-
 function creation(key = key2): FrozenCreateAttempt {
   return {
     version: 1,
@@ -62,7 +59,6 @@ function creation(key = key2): FrozenCreateAttempt {
     },
   };
 }
-
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
   get length(): number {
@@ -84,14 +80,11 @@ class MemoryStorage implements Storage {
     this.values.set(key, value);
   }
 }
-
 let testStorage = new MemoryStorage();
 const storage = (): Storage => testStorage;
-
 beforeEach(() => {
   testStorage = new MemoryStorage();
 });
-
 describe('frozen attempt validation and storage', () => {
   it('persists an exact borrower deletion command and restores it after reload', () => {
     const attempt = {
@@ -125,7 +118,6 @@ describe('frozen attempt validation and storage', () => {
     );
     expect(readFrozenManagementAttempt(testStorage, BORROWER_DELETION_STORAGE_KEY)).toBeNull();
   });
-
   it('keeps attempts from separate tabs under distinct keys and clears only the reconciled key', () => {
     const first = {
       version: 1 as const,
@@ -145,25 +137,26 @@ describe('frozen attempt validation and storage', () => {
     expect(clearFrozenManagementAttempt(testStorage, undefined, key1)).toBe(true);
     expect(readFrozenManagementAttempts(testStorage)).toEqual([second]);
   });
-
   it('requires explicit recovery condition in frozen operation bodies', () => {
     const borrowOnly = operation();
     expect(parseFrozenAttempt(borrowOnly)).toEqual(borrowOnly);
-
     const mixed = operation();
     mixed.body.items = [
       {
         itemId: 11,
-        return: [{ usable: 1, damaged: 0, note: 'desk' }],
+        return: [{ usable: 1, damaged: 0, note: 'desk', locationId: 1 }],
         lost: [{ quantity: 2, note: 'missing' }],
-        lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }],
+        lostCredit: [{ quantity: 1, condition: 'usable', note: 'found', locationId: 1 }],
       },
     ];
     expect(parseFrozenAttempt(mixed)).toEqual(mixed);
     expect(
       parseFrozenAttempt({
         ...mixed,
-        body: { ...mixed.body, items: [{ itemId: 11, lostCredit: [{ quantity: 1, note: '' }] }] },
+        body: {
+          ...mixed.body,
+          items: [{ itemId: 11, lostCredit: [{ quantity: 1, note: '', locationId: 1 }] }],
+        },
       }),
     ).toBeNull();
     expect(
@@ -176,11 +169,13 @@ describe('frozen attempt validation and storage', () => {
       }),
     ).toBeNull();
   });
-
   it('validates and mirrors a frozen lost-credit conflict exactly', () => {
     const attempt = operation();
     attempt.body.items = [
-      { itemId: 11, lostCredit: [{ quantity: 2, condition: 'usable', note: 'recover' }] },
+      {
+        itemId: 11,
+        lostCredit: [{ quantity: 2, condition: 'usable', note: 'recover', locationId: 1 }],
+      },
     ];
     expect(parseFrozenAttempt(attempt)).toEqual(attempt);
     const snapshot = {
@@ -198,7 +193,7 @@ describe('frozen attempt validation and storage', () => {
           name: 'Tent',
           kind: 'non_consumable' as const,
           lotSize: null,
-          locationId: null,
+          balances: [{ locationId: 1, available: 0, damaged: 0 }],
           archived: false,
           aliases: [],
           available: 0,
@@ -209,6 +204,16 @@ describe('frozen attempt validation and storage', () => {
       holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
       stateRevision: 4,
       ledgerEpoch: 3,
+      locations: [
+        {
+          id: 1,
+          name: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+          code: 'monster',
+          archived: false,
+          isDefault: true,
+        },
+      ],
+      defaultLocationId: 1,
     };
     expect(
       isExactBorrowerOperationConflictSet(
@@ -227,14 +232,13 @@ describe('frozen attempt validation and storage', () => {
       ),
     ).toBe(true);
   });
-
   it('classifies a damaged recovery with insufficient usable stock as a definitive 409', async () => {
     const attempt = operation();
     attempt.body.items = [
       {
         itemId: 11,
-        borrow: [{ quantity: 1, note: 'replacement' }],
-        lostCredit: [{ quantity: 1, condition: 'damaged', note: 'broken' }],
+        borrow: [{ quantity: 1, note: 'replacement', locationId: 1 }],
+        lostCredit: [{ quantity: 1, condition: 'damaged', note: 'broken', locationId: 1 }],
       },
     ];
     const snapshot = {
@@ -252,7 +256,7 @@ describe('frozen attempt validation and storage', () => {
           name: 'Tent',
           kind: 'non_consumable' as const,
           lotSize: null,
-          locationId: null,
+          balances: [{ locationId: 1, available: 0, damaged: 0 }],
           archived: false,
           aliases: [],
           available: 0,
@@ -263,10 +267,21 @@ describe('frozen attempt validation and storage', () => {
       holdings: [{ itemId: 11, returnable: 0, lost: 1 }],
       stateRevision: 4,
       ledgerEpoch: 3,
+      locations: [
+        {
+          id: 1,
+          name: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+          code: 'monster',
+          archived: false,
+          isDefault: true,
+        },
+      ],
+      defaultLocationId: 1,
     };
     const conflicts = [
       {
         scope: 'borrow' as const,
+        locationId: 1,
         code: 'insufficient_stock' as const,
         itemId: 11,
         requested: 1,
@@ -291,7 +306,6 @@ describe('frozen attempt validation and storage', () => {
     expect(resolved).toMatchObject({ kind: 'definitive', cleared: true });
     expect(storage().getItem(frozenAttemptStorageKey(attempt))).toBeNull();
   });
-
   it('validates complete self-routing envelopes and rejects inconsistent bodies', () => {
     expect(parseFrozenAttempt(operation())).toEqual(operation());
     expect(parseFrozenAttempt(creation())).toEqual(creation());
@@ -306,8 +320,8 @@ describe('frozen attempt validation and storage', () => {
         body: {
           ...operation().body,
           items: [
-            { itemId: 11, borrow: [{ quantity: 1, note: '' }] },
-            { itemId: 11, return: [{ usable: 1, damaged: 0, note: '' }] },
+            { itemId: 11, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
+            { itemId: 11, return: [{ usable: 1, damaged: 0, note: '', locationId: 1 }] },
           ],
         },
       },
@@ -319,7 +333,6 @@ describe('frozen attempt validation and storage', () => {
     ];
     for (const candidate of invalid) expect(parseFrozenAttempt(candidate)).toBeNull();
   });
-
   it('mirrors strict server UUID, note, key, and safe-aggregate invariants', () => {
     const huge = Number.MAX_SAFE_INTEGER;
     const invalid = [
@@ -333,7 +346,7 @@ describe('frozen attempt validation and storage', () => {
         ...operation(),
         body: {
           ...operation().body,
-          items: [{ itemId: 11, borrow: [{ quantity: 1, note: 'x'.repeat(501) }] }],
+          items: [{ itemId: 11, borrow: [{ quantity: 1, note: 'x'.repeat(501), locationId: 1 }] }],
         },
       },
       {
@@ -344,8 +357,8 @@ describe('frozen attempt validation and storage', () => {
             {
               itemId: 11,
               borrow: [
-                { quantity: huge, note: '' },
-                { quantity: 1, note: '' },
+                { quantity: huge, note: '', locationId: 1 },
+                { quantity: 1, note: '', locationId: 1 },
               ],
             },
           ],
@@ -356,7 +369,6 @@ describe('frozen attempt validation and storage', () => {
     ];
     for (const candidate of invalid) expect(parseFrozenAttempt(candidate)).toBeNull();
   });
-
   it('verifies writes, rejects collisions, and detects silent writes', () => {
     expect(persistFrozenAttempt(storage(), operation())).toEqual({ ok: true });
     expect(
@@ -374,7 +386,6 @@ describe('frozen attempt validation and storage', () => {
       failure: { operation: 'write' },
     });
   });
-
   it('removes only an exact match and detects silent removal', () => {
     persistFrozenAttempt(storage(), operation());
     expect(
@@ -395,7 +406,6 @@ describe('frozen attempt validation and storage', () => {
     storage().removeItem(frozenAttemptStorageKey(operation()));
     expect(clearFrozenAttempt(storage(), operation())).toEqual({ ok: true });
   });
-
   it('enumerates deterministically, preserves invalid records, and continues after per-record reads fail', () => {
     storage().setItem(frozenAttemptStorageKey(creation()), JSON.stringify(creation()));
     storage().setItem(frozenAttemptStorageKey(operation()), JSON.stringify(operation()));
@@ -417,7 +427,6 @@ describe('frozen attempt validation and storage', () => {
     expect(result.failures).toHaveLength(1);
     expect(base.getItem('mapatz:frozen-attempt:v1:bad')).toBe('{');
   });
-
   it('fails closed when enumeration throws', () => {
     const storage = {
       get length(): number {
@@ -434,7 +443,6 @@ describe('frozen attempt validation and storage', () => {
     });
   });
 });
-
 describe('frozen dispatch and recovery', () => {
   it('persists before fetch, sends the exact envelope, and clears a definitive result', async () => {
     const seen: FrozenAttempt[] = [];
@@ -451,7 +459,6 @@ describe('frozen dispatch and recovery', () => {
     expect(result).toMatchObject({ kind: 'definitive', cleared: true });
     expect(storage().length).toBe(0);
   });
-
   it('owns and freezes the exact bytes handed to transport', async () => {
     const callerAttempt = operation();
     const result = await dispatchFrozenAttempt(storage(), callerAttempt, async (attempt) => {
@@ -468,7 +475,6 @@ describe('frozen dispatch and recovery', () => {
     });
     expect(result).toMatchObject({ kind: 'definitive', cleared: true });
   });
-
   it('does not dispatch after silent persistence failure', async () => {
     const transport = vi.fn();
     const storage = {
@@ -482,7 +488,6 @@ describe('frozen dispatch and recovery', () => {
     expect(result).toMatchObject({ kind: 'storage-failure', cleared: false });
     expect(transport).not.toHaveBeenCalled();
   });
-
   it('preserves exact attempts for network, 5xx ambiguity, and recovery authorization', async () => {
     for (const outcome of [
       { kind: 'ambiguous' as const, reason: 'network' as const },
@@ -502,14 +507,12 @@ describe('frozen dispatch and recovery', () => {
     expect(auth).toMatchObject({ kind: 'authorization', cleared: false });
     expect(storage().getItem(frozenAttemptStorageKey(operation()))).not.toBeNull();
   });
-
   it('clears first-dispatch authorization but blocks on silent clear failure', async () => {
     const result = await dispatchFrozenAttempt(storage(), operation(), async () => ({
       kind: 'authorization',
       status: 403,
     }));
     expect(result).toMatchObject({ kind: 'authorization', cleared: true });
-
     persistFrozenAttempt(storage(), operation());
     const silentRemove = {
       length: storage().length,
@@ -529,7 +532,6 @@ describe('frozen dispatch and recovery', () => {
       failure: { operation: 'remove' },
     });
   });
-
   it('resolves all readable valid startup records and remains fail closed for invalid records', async () => {
     persistFrozenAttempt(storage(), operation());
     persistFrozenAttempt(storage(), creation());
@@ -570,13 +572,11 @@ describe('frozen dispatch and recovery', () => {
     expect(initialized.invalidKeys).toEqual(['mapatz:frozen-attempt:v1:unsupported']);
     expect(storage().getItem('mapatz:frozen-attempt:v1:unsupported')).not.toBeNull();
   });
-
   it('reports startup readiness only after every valid attempt is definitively resolved', async () => {
     expect(await initializeFrozenAttemptRecovery(storage(), vi.fn())).toMatchObject({
       ready: true,
       results: [],
     });
-
     persistFrozenAttempt(storage(), operation());
     const ambiguous = await initializeFrozenAttemptRecovery(storage(), async () => ({
       kind: 'ambiguous',
@@ -584,7 +584,6 @@ describe('frozen dispatch and recovery', () => {
     }));
     expect(ambiguous.ready).toBe(false);
     expect(ambiguous.results[0]).toMatchObject({ kind: 'ambiguous', cleared: false });
-
     const authorization = await initializeFrozenAttemptRecovery(storage(), async () => ({
       kind: 'authorization',
       status: 403,
@@ -592,7 +591,6 @@ describe('frozen dispatch and recovery', () => {
     expect(authorization.ready).toBe(false);
     expect(authorization.results[0]).toMatchObject({ kind: 'authorization', cleared: false });
   });
-
   it('re-enumerates after awaited recovery and resolves records added during transport', async () => {
     persistFrozenAttempt(storage(), operation());
     const seen: string[] = [];
@@ -630,7 +628,6 @@ describe('frozen dispatch and recovery', () => {
     expect(seen).toEqual([key1, key2]);
     expect(initialized.ready).toBe(true);
   });
-
   it('validates direct recovery input and preserves wrong-kind definitive outcomes', async () => {
     const malformed = { ...operation(), endpoint: '/borrowers/8/operations' };
     storage().setItem(frozenAttemptStorageKey(malformed), JSON.stringify(malformed));
@@ -642,7 +639,6 @@ describe('frozen dispatch and recovery', () => {
     );
     expect(rejected).toMatchObject({ kind: 'storage-failure', cleared: false });
     expect(transport).not.toHaveBeenCalled();
-
     storage().clear();
     persistFrozenAttempt(storage(), operation());
     const wrongKind = await resolveFrozenAttempt(storage(), operation(), async () => ({
@@ -664,7 +660,6 @@ describe('frozen dispatch and recovery', () => {
     }));
     expect(wrongKind).toMatchObject({ kind: 'ambiguous', cleared: false });
     expect(storage().getItem(frozenAttemptStorageKey(operation()))).not.toBeNull();
-
     storage().clear();
     persistFrozenAttempt(storage(), creation());
     const reverseWrongKind = await resolveFrozenAttempt(
@@ -678,7 +673,6 @@ describe('frozen dispatch and recovery', () => {
         }) as never,
     );
     expect(reverseWrongKind).toMatchObject({ kind: 'ambiguous', cleared: false });
-
     const wrongStatus = await resolveFrozenAttempt(storage(), creation(), async () => ({
       kind: 'definitive',
       status: 409,
@@ -698,7 +692,6 @@ describe('frozen dispatch and recovery', () => {
     }));
     expect(wrongStatus).toMatchObject({ kind: 'ambiguous', cleared: false });
   });
-
   it('revalidates exact same-kind result attribution before clearing', async () => {
     const operationSnapshot = {
       borrower: {
@@ -715,7 +708,7 @@ describe('frozen dispatch and recovery', () => {
           name: 'Tent',
           kind: 'non_consumable' as const,
           lotSize: null,
-          locationId: null,
+          balances: [{ locationId: 1, available: 0, damaged: 0 }],
           archived: false,
           aliases: [],
           available: 0,
@@ -726,6 +719,16 @@ describe('frozen dispatch and recovery', () => {
       holdings: [],
       stateRevision: 4,
       ledgerEpoch: 3,
+      locations: [
+        {
+          id: 1,
+          name: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+          code: 'monster',
+          archived: false,
+          isDefault: true,
+        },
+      ],
+      defaultLocationId: 1,
     };
     const contradictoryOperationResults = [
       {
@@ -743,6 +746,7 @@ describe('frozen dispatch and recovery', () => {
         conflicts: [
           {
             scope: 'borrow',
+            locationId: 1,
             code: 'insufficient_stock',
             itemId: 11,
             requested: 1,
@@ -760,6 +764,7 @@ describe('frozen dispatch and recovery', () => {
         conflicts: [
           {
             scope: 'borrow',
+            locationId: 1,
             code: 'insufficient_stock',
             itemId: 11,
             requested: 2,
@@ -785,12 +790,14 @@ describe('frozen dispatch and recovery', () => {
       expect(resolved).toMatchObject({ kind: 'ambiguous', cleared: false });
       expect(storage().getItem(frozenAttemptStorageKey(operation()))).not.toBeNull();
     }
-
     const multiItemAttempt: FrozenOperationAttempt = {
       ...operation(),
       body: {
         ...operation().body,
-        items: [...operation().body.items, { itemId: 12, borrow: [{ quantity: 2, note: '' }] }],
+        items: [
+          ...operation().body.items,
+          { itemId: 12, borrow: [{ quantity: 2, note: '', locationId: 1 }] },
+        ],
       },
     };
     const incompleteSnapshot = {
@@ -811,6 +818,7 @@ describe('frozen dispatch and recovery', () => {
         conflicts: [
           {
             scope: 'borrow',
+            locationId: 1,
             code: 'insufficient_stock',
             itemId: 11,
             requested: 2,
@@ -822,7 +830,6 @@ describe('frozen dispatch and recovery', () => {
     }));
     expect(incomplete).toMatchObject({ kind: 'ambiguous', cleared: false });
     expect(storage().getItem(frozenAttemptStorageKey(multiItemAttempt))).not.toBeNull();
-
     const contradictoryCreateResults = [
       {
         outcome: 'committed',
@@ -865,7 +872,6 @@ describe('frozen dispatch and recovery', () => {
     }
   });
 });
-
 it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
   'retains frozen creation after malformed %s evidence',
   async (field) => {
@@ -898,7 +904,6 @@ it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
     expect(storage().getItem(frozenAttemptStorageKey(attempt))).not.toBeNull();
   },
 );
-
 it.each([' x ', 'x'.repeat(101)])(
   'keeps invalid persisted camp envelopes fail-closed (%s)',
   (campDepartment) => {

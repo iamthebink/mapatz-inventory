@@ -10,23 +10,20 @@ import {
 } from '../../src/domain/import-export.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 import { parseRecoveryWorkbook, parseResetWorkbook } from '../../src/io/workbook.js';
-
 const samplePath = fileURLToPath(
   new URL('../../sample_data/mapatz-full-recovery-sample.xlsx', import.meta.url),
 );
-
 async function sampleWorkbook(): Promise<Buffer> {
   return readFile(samplePath);
 }
-
 describe('field-scale sample workbook', () => {
   it('fully recovers the authoritative business state', async () => {
     const payload = await parseRecoveryWorkbook(await sampleWorkbook());
     expect(payload).toMatchObject({
       locations: expect.arrayContaining([
-        { name: 'צוללת', archived: false },
-        { name: 'צהובה', archived: false },
-        { name: 'מפלצת', archived: false },
+        { name: 'צוללת', archived: false, isDefault: false },
+        { name: 'צהובה', archived: false, isDefault: false },
+        { name: 'מפלצת', archived: false, isDefault: false },
       ]),
     });
     expect(payload.items).toHaveLength(72);
@@ -76,12 +73,10 @@ describe('field-scale sample workbook', () => {
         .filter((event) => event.kind === 'found_returned')
         .reduce((sum, event) => sum + event.quantity, 0),
     ).toBe(3);
-
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
     transfers.replaceWithRecovery(payload);
     const snapshot = transfers.snapshot();
-
     expect(snapshot.locations).toEqual(payload.locations);
     expect(snapshot.radioCount).toBe(40);
     expect(snapshot.radios).toEqual(payload.radios);
@@ -108,7 +103,6 @@ describe('field-scale sample workbook', () => {
     );
     expect(transferBusinessState(snapshot).loans).toEqual(transferBusinessState(payload).loans);
     expect(snapshot.stateRevision).toBe(payload.stateRevision);
-
     const inventory = new InventoryService(db);
     const items = inventory.listItems('', true);
     const loans = inventory.listLoans();
@@ -121,18 +115,16 @@ describe('field-scale sample workbook', () => {
     expect(consumablesUsageReport(snapshot)).toHaveLength(36);
     db.close();
   });
-
   it('rebases the editable reset totals into clean opening stock', async () => {
     const payload = await parseResetWorkbook(await sampleWorkbook());
     expect(payload.locations).toHaveLength(3);
-    expect(payload.items).toHaveLength(72);
-    expect(payload.items.reduce((total, item) => total + item.total, 0)).toBe(4_093);
-
+    expect(new Set(payload.items.map((item) => item.name)).size).toBe(72);
+    expect(payload.items).toHaveLength(94);
+    expect(payload.items.reduce((total, item) => total + item.total, 0)).toBe(4093);
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
     transfers.replaceWithReset(payload);
     const snapshot = transfers.snapshot();
-
     expect(snapshot.locations).toEqual(payload.locations);
     expect(snapshot.borrowers).toEqual([]);
     expect(snapshot.items).toHaveLength(payload.items.length);
@@ -140,12 +132,18 @@ describe('field-scale sample workbook', () => {
     expect(snapshot.events.every((event) => event.kind === 'stock_added')).toBe(true);
     expect(snapshot.items).toEqual(
       snapshot.items
-        .map((actual) => payload.items.find((item) => item.name === actual.name)!)
+        .map((actual) =>
+          payload.items.find(
+            (item) => item.name === actual.name && item.location === actual.location,
+          )!,
+        )
         .map(({ total, ...item }, index) => ({
           id: snapshot.items[index]!.id,
           ...item,
           createdAt: snapshot.items[index]!.createdAt,
-          startingStock: total,
+          startingStock: payload.items
+            .filter((row) => row.name === item.name)
+            .reduce((sum, row) => sum + row.total, 0),
           baselineThroughEventId: snapshot.items[index]!.baselineThroughEventId,
           available: total,
           borrowed: 0,
@@ -157,20 +155,22 @@ describe('field-scale sample workbook', () => {
     );
     expect(new InventoryService(db).listLoans()).toEqual([]);
     expect(unresolvedDamageReport(snapshot)).toEqual([]);
-    expect(consumablesUsageReport(snapshot)).toEqual(
-      expect.arrayContaining(
-        payload.items
-          .filter((item) => item.kind === 'consumable')
-          .map((item) =>
-            expect.objectContaining({
-              startOfCycleStock: item.total,
-              addedDuringCycle: 0,
-              usage: 0,
-              left: item.total,
-            }),
-          ),
-      ),
-    );
+    for (const name of new Set(
+      payload.items.filter((item) => item.kind === 'consumable').map((item) => item.name),
+    )) {
+      const total = payload.items
+        .filter((item) => item.name === name)
+        .reduce((sum, item) => sum + item.total, 0);
+      expect(consumablesUsageReport(snapshot)).toContainEqual(
+        expect.objectContaining({
+          itemName: name,
+          startOfCycleStock: total,
+          addedDuringCycle: 0,
+          usage: 0,
+          left: total,
+        }),
+      );
+    }
     db.close();
   });
 });

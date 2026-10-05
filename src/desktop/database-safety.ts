@@ -49,6 +49,8 @@ export function validateInitializedDatabase(filename: string): void {
         'credentials',
         'inventory_events',
         'item_state',
+        'item_location_balances',
+        'inventory_settings',
         'loan_state',
         'state_clock',
       ].every((name) => tables.has(name)) ||

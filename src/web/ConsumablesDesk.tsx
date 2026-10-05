@@ -1,3 +1,4 @@
+import type { Location } from './InventoryDialogs';
 import { StickyTable } from './StickyTable';
 import { useEffect, useRef, useState } from 'react';
 import { Check, ClipboardCheck, PackageMinus, RefreshCw, Undo2 } from 'lucide-react';
@@ -18,12 +19,14 @@ const itemCount = (count: number) => (count === 1 ? 'פריט אחד' : `${count
 
 export function ConsumablesDesk({
   items,
+  locations,
   ledgerEpoch,
   refresh,
   showToast,
   registerLeaveGuard,
 }: {
   items: Item[];
+  locations: Location[];
   ledgerEpoch: number | null;
   refresh: () => Promise<void>;
   showToast: (title: string, message: string, tone: ToastTone) => void;
@@ -35,6 +38,7 @@ export function ConsumablesDesk({
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [quantity, setQuantity] = useState('1');
+  const [locationId, setLocationId] = useState('');
   const [note, setNote] = useState('');
   const [quantityError, setQuantityError] = useState('');
   const [entries, setEntries] = useState<Entry[]>(initialAttempt.current?.items ?? []);
@@ -91,16 +95,21 @@ export function ConsumablesDesk({
     items.find((item) => item.id === itemId)?.name ?? 'פריט לא זמין';
   const draftError = (): string | null => {
     if (entries.length === 0) return 'יש להוסיף פריט אחד לפחות.';
-    const totals = new Map<number, number>();
+    const totals = new Map<string, number>();
     for (const entry of entries) {
       const item = active.find((candidate) => candidate.id === entry.itemId);
       if (!item) return `${itemName(entry.itemId)}: הפריט אינו זמין עוד.`;
       if (!Number.isSafeInteger(entry.quantity) || entry.quantity < 1)
         return `${item.name}: יש להזין כמות חיובית ושלמה.`;
-      const total = (totals.get(entry.itemId) ?? 0) + entry.quantity;
-      if (!Number.isSafeInteger(total) || total > item.available)
-        return `${item.name}: ניתן לנפק עד ${item.available} יחידות בסך הכול.`;
-      totals.set(entry.itemId, total);
+      const key = JSON.stringify([entry.itemId, entry.locationId]);
+      if (!locations.some((l) => l.id === entry.locationId && !l.archived))
+        return 'יש לבחור מיקום פעיל';
+      const available =
+        item.balances.find((p) => p.locationId === entry.locationId)?.available ?? 0;
+      const total = (totals.get(key) ?? 0) + entry.quantity;
+      if (!Number.isSafeInteger(total) || total > available)
+        return `${item.name}: ניתן לנפק עד ${available} יחידות במיקום שנבחר.`;
+      totals.set(key, total);
     }
     return null;
   };
@@ -154,6 +163,17 @@ export function ConsumablesDesk({
   const openQuantity = (item: Item, trigger: HTMLButtonElement) => {
     rowTrigger.current = trigger;
     setSelectedId(item.id);
+    const defaultLocation = locations.find(
+      (l) =>
+        l.isDefault &&
+        !l.archived &&
+        (item.balances.find((p) => p.locationId === l.id)?.available ?? 0) -
+          entries
+            .filter((entry) => entry.itemId === item.id && entry.locationId === l.id)
+            .reduce((sum, entry) => sum + entry.quantity, 0) >
+          0,
+    );
+    setLocationId(defaultLocation?.id.toString() ?? '');
     setQuantity('1');
     setNote('');
     setQuantityError('');
@@ -162,26 +182,33 @@ export function ConsumablesDesk({
     const amount = Number(quantity);
     const item = active.find((candidate) => candidate.id === selectedId);
     const already = entries.reduce(
-      (sum, entry) => sum + (entry.itemId === selectedId ? entry.quantity : 0),
+      (sum, entry) =>
+        sum +
+        (entry.itemId === selectedId && entry.locationId === Number(locationId)
+          ? entry.quantity
+          : 0),
       0,
     );
+    const available =
+      item?.balances.find((p) => p.locationId === Number(locationId))?.available ?? 0;
     if (
+      !locations.some((l) => l.id === Number(locationId) && !l.archived) ||
       !item ||
       !/^\d+$/.test(quantity) ||
       !Number.isSafeInteger(amount) ||
       amount < 1 ||
       !Number.isSafeInteger(already + amount) ||
-      already + amount > item.available
+      already + amount > available
     ) {
       setQuantityError(
         item
-          ? `${item.name}: יש להזין כמות חיובית ושלמה עד ${Math.max(0, item.available - already)}.`
+          ? `${item.name}: יש להזין כמות חיובית ושלמה עד ${Math.max(0, available - already)}.`
           : 'יש לבחור פריט מהרשימה.',
       );
       queueMicrotask(() => quantityField.current?.focus());
       return;
     }
-    const next: Entry = { itemId: item.id, quantity: amount, note };
+    const next: Entry = { itemId: item.id, locationId: Number(locationId), quantity: amount, note };
     setEntries((current) => [...current, next]);
     closeQuantity();
   };
@@ -387,6 +414,10 @@ export function ConsumablesDesk({
                     <div className="consumables-draft-top">
                       <div>
                         <strong>{itemName(entry.itemId)}</strong>
+                        <small>
+                          {locations.find((l) => l.id === entry.locationId)?.name ??
+                            'מיקום לא זמין'}
+                        </small>
                         {entry.note && <small>{entry.note}</small>}
                       </div>
                       <span className="consumables-quantity-chip">× {entry.quantity}</span>
@@ -469,6 +500,31 @@ export function ConsumablesDesk({
               <strong>{selected.name}</strong> · זמין {selected.available}
             </p>
             <label className="field-label">
+              מיקום מקור
+              <select
+                className="input-field"
+                value={locationId}
+                onChange={(event) => {
+                  setLocationId(event.target.value);
+                  setQuantityError('');
+                }}
+              >
+                <option value="">בחרו מיקום</option>
+                {locations
+                  .filter(
+                    (l) =>
+                      !l.archived &&
+                      (selected.balances.find((p) => p.locationId === l.id)?.available ?? 0) > 0,
+                  )
+                  .map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name} · זמין{' '}
+                      {selected.balances.find((p) => p.locationId === l.id)?.available ?? 0}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="field-label">
               כמות
               <input
                 ref={quantityField}
@@ -533,9 +589,14 @@ export function ConsumablesDesk({
                   entries.some(
                     (entry) =>
                       entries
-                        .filter((row) => row.itemId === entry.itemId)
+                        .filter(
+                          (row) =>
+                            row.itemId === entry.itemId && row.locationId === entry.locationId,
+                        )
                         .reduce((sum, row) => sum + row.quantity, 0) >
-                      (active.find((item) => item.id === entry.itemId)?.available ?? 0),
+                      (active
+                        .find((item) => item.id === entry.itemId)
+                        ?.balances.find((p) => p.locationId === entry.locationId)?.available ?? 0),
                   )
                 }
                 onClick={() => void submit()}
@@ -549,7 +610,8 @@ export function ConsumablesDesk({
           <div className="borrower-review-list">
             {entries.map((entry, index) => (
               <p key={index}>
-                {itemName(entry.itemId)} · כמות {entry.quantity}
+                {itemName(entry.itemId)} · {locations.find((l) => l.id === entry.locationId)?.name}{' '}
+                · כמות {entry.quantity}
                 {entry.note && ` · ${entry.note}`}
               </p>
             ))}

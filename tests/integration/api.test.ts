@@ -8,15 +8,21 @@ import { openDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 import { InventoryTransferService } from '../../src/domain/import-export.js';
 import { WORKBOOK_CONTRACT } from '../../src/io/workbook-contract.js';
-import { exportWorkbook, parseResetWorkbook } from '../../src/io/workbook.js';
+import {
+  exportWorkbook,
+  parseResetWorkbook,
+  parseRecoveryWorkbook,
+} from '../../src/io/workbook.js';
 import { createApp } from '../../src/server/index.js';
-
 const cleanup: string[] = [];
 afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
-
-function fixture(clock: { now: number } = { now: 1_000 }) {
+function fixture(
+  clock: {
+    now: number;
+  } = { now: 1000 },
+) {
   const db = openDatabase(':memory:');
   const inventory = new InventoryService(db);
   const app = createApp({
@@ -27,11 +33,9 @@ function fixture(clock: { now: number } = { now: 1_000 }) {
   });
   return { db, inventory, app, agent: request.agent(app), clock };
 }
-
 function role(agent: ReturnType<typeof request.agent>, target: string, password?: string) {
   return agent.post('/api/session/role').send({ role: target, password });
 }
-
 function expectRecoveredState(
   actual: ReturnType<InventoryTransferService['snapshot']>,
   expected: ReturnType<InventoryTransferService['snapshot']>,
@@ -42,7 +46,6 @@ function expectRecoveredState(
   for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
-
 describe('inventory API permission and edge-case matrix', () => {
   it('keeps password recovery unavailable in browser mode and requires the desktop token for exact recovery', async () => {
     const browser = fixture();
@@ -51,7 +54,6 @@ describe('inventory API permission and edge-case matrix', () => {
       browser.db.prepare("SELECT recoverable_password FROM credentials WHERE role='admin'").get(),
     ).toEqual({ recoverable_password: null });
     browser.db.close();
-
     const db = openDatabase(':memory:');
     const token = 'desktop-launch-token';
     const app = createApp({
@@ -71,7 +73,6 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(
       db.prepare("SELECT recoverable_password FROM credentials WHERE role='admin'").get(),
     ).toEqual({ recoverable_password: 'exact 👋 password' });
-
     const agent = request.agent(app);
     await agent
       .post('/api/session/role')
@@ -100,7 +101,6 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(200);
     db.close();
   });
-
   it('exposes the exact password in the local development recovery preview', async () => {
     const db = openDatabase(':memory:');
     const app = createApp({
@@ -116,7 +116,6 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(response.body).toEqual({ password: 'preview-password' });
     db.close();
   });
-
   it('reveals the changed desktop password after reopening the same database', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-desktop-credential-'));
     cleanup.push(directory);
@@ -142,7 +141,6 @@ describe('inventory API permission and edge-case matrix', () => {
       .send({ password: 'new password 🔑' })
       .expect(204);
     db.close();
-
     db = openDatabase(filename);
     const reopened = createApp({
       database: db,
@@ -157,7 +155,6 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(response.body).toEqual({ password: 'new password 🔑' });
     db.close();
   });
-
   it('preserves the desktop recovery credential across workbook reset and recovery', async () => {
     const db = openDatabase(':memory:');
     const token = 'desktop-launch-token';
@@ -169,8 +166,23 @@ describe('inventory API permission and edge-case matrix', () => {
       serveWeb: false,
     });
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Existing', kind: 'consumable' });
-    inventory.addStock(item.id, 3);
+    const item = inventory.createItem({
+      name: 'Existing',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const transfers = new InventoryTransferService(db);
     const before = transfers.snapshot();
     const recover = () =>
@@ -179,7 +191,6 @@ describe('inventory API permission and edge-case matrix', () => {
         .set('x-mapatz-desktop-token', token)
         .expect(200)
         .expect(({ body }) => expect(body.password).toBe('still-here'));
-
     transfers.replaceWithReset({ locations: [], items: [] });
     await recover();
     transfers.replaceWithRecovery(before);
@@ -188,8 +199,23 @@ describe('inventory API permission and edge-case matrix', () => {
   });
   it('enforces admin-only workbook export and returns the standard offline XLSX', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'Exported', kind: 'consumable' });
-    inventory.addStock(item.id, 4);
+    const item = inventory.createItem({
+      name: 'Exported',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      4,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent.get('/api/workbook').expect(403);
     await role(agent, 'admin', 'admin-pass').expect(200);
     const response = await agent
@@ -207,11 +233,25 @@ describe('inventory API permission and edge-case matrix', () => {
     });
     db.close();
   });
-
   it('requires reset confirmation, validates before mutation, and preserves destination credentials', async () => {
     const { db, inventory, agent } = fixture();
-    const oldItem = inventory.createItem({ name: 'Old', kind: 'consumable' });
-    inventory.addStock(oldItem.id, 9);
+    const oldItem = inventory.createItem({
+      name: 'Old',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      oldItem.id,
+      9,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const oldEventId = inventory.listLedger()[0]!.id;
     const oldLocation = inventory.saveInventoryLocation({
       key: 'pre-reset-location-1',
@@ -225,7 +265,7 @@ describe('inventory API permission and edge-case matrix', () => {
     const workbook = await exportWorkbook({
       radioCount: 0,
       radios: [],
-      locations: [{ name: 'Imported Place', archived: false }],
+      locations: [{ name: 'Imported Place', archived: false, isDefault: false }],
       items: [
         {
           id: 4,
@@ -279,7 +319,6 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('invalid_workbook'));
     expect(inventory.listItems('', true)[0]?.name).toBe('Old');
-
     await agent
       .post('/api/workbook/reset')
       .set('content-type', WORKBOOK_CONTRACT.mimeType)
@@ -297,7 +336,10 @@ describe('inventory API permission and edge-case matrix', () => {
     });
     const location = db
       .prepare('SELECT id,name FROM locations WHERE id=?')
-      .get(imported.locationId) as { id: number; name: string };
+      .get(imported.balances[0]!.locationId) as {
+      id: number;
+      name: string;
+    };
     expect(location).toMatchObject({ name: 'Imported Place' });
     expect(location.id).toBeGreaterThan(Number(oldLocation.id));
     const newLocation = inventory.saveInventoryLocation({
@@ -306,8 +348,23 @@ describe('inventory API permission and edge-case matrix', () => {
       code: 'new-location',
       name: 'New location',
     });
-    const newItem = inventory.createItem({ name: 'Post reset item', kind: 'consumable' });
-    inventory.addStock(newItem.id, 1);
+    const newItem = inventory.createItem({
+      name: 'Post reset item',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      newItem.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const newEvent = inventory.listLedger()[0]!;
     expect(Number(newLocation.id)).toBeGreaterThan(Number(oldLocation.id));
     expect(newItem.id).toBeGreaterThan(oldItem.id);
@@ -323,12 +380,11 @@ describe('inventory API permission and edge-case matrix', () => {
     });
     db.close();
   });
-
   it('enforces confirmed admin recovery and preserves destination credentials', async () => {
     const sourceDb = openDatabase(':memory:');
     const sourceTransfers = new InventoryTransferService(sourceDb);
     sourceTransfers.replaceWithReset({
-      locations: [{ name: 'Recovery Location', archived: false }],
+      locations: [{ name: 'Recovery Location', archived: false, isDefault: false }],
       items: [
         {
           name: 'Recovered Equipment',
@@ -348,13 +404,33 @@ describe('inventory API permission and edge-case matrix', () => {
       fullName: 'Recovery Borrower',
       campDepartment: '',
     });
-    sourceInventory.checkout(sourceItem.id, sourceBorrower.id, 1, 'preserved loan');
+    sourceInventory.checkout(
+      sourceItem.id,
+      sourceBorrower.id,
+      1,
+      'preserved loan',
+      Number(sourceInventory.listLocations()[0]!.id),
+    );
     const expected = sourceTransfers.snapshot();
-    const exported = await exportWorkbook(expected);
-
+    const exported = await exportWorkbook(expected, 'Recovery Location');
     const { db, inventory, agent } = fixture();
-    const old = inventory.createItem({ name: 'Destination Data', kind: 'consumable' });
-    inventory.addStock(old.id, 8);
+    const old = inventory.createItem({
+      name: 'Destination Data',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      old.id,
+      8,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const credentialsBefore = db
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
@@ -378,7 +454,6 @@ describe('inventory API permission and edge-case matrix', () => {
       .set('x-mapatz-confirmed', 'true')
       .send(exported)
       .expect(204);
-
     expectRecoveredState(new InventoryTransferService(db).snapshot(), expected);
     expect(
       db.prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role').all(),
@@ -388,7 +463,6 @@ describe('inventory API permission and edge-case matrix', () => {
     sourceDb.close();
     db.close();
   });
-
   it('starts as an operator, requires the admin password for elevation, and downgrades freely', async () => {
     const { db, agent } = fixture();
     await agent
@@ -400,35 +474,60 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(({ body }) => expect(body.message).toBe('סיסמה שגויה'));
     await role(agent, 'admin', 'admin-pass')
       .expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 601_000 }));
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 601000 }));
     await role(agent, 'operator')
       .expect(200)
       .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
     await role(agent, 'guest').expect(400);
     db.close();
   });
-
   it('allows operator work by default and still restricts admin mutations', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'כפפה', kind: 'consumable' });
-    inventory.addStock(item.id, 5);
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
-    await agent.post('/api/stock/add').send({ itemId: item.id, quantity: 1 }).expect(403);
+    const item = inventory.createItem({
+      name: 'כפפה',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    await agent
+      .post('/api/issue')
+      .send({ locationId: 1, itemId: item.id, quantity: 1 })
+      .expect(201);
+    await agent
+      .post('/api/stock/add')
+      .send({ locationId: 1, itemId: item.id, quantity: 1 })
+      .expect(403);
     await role(agent, 'admin', 'admin-pass').expect(200);
-    await agent.post('/api/stock/add').send({ itemId: item.id, quantity: 1 }).expect(201);
+    await agent
+      .post('/api/stock/add')
+      .send({ locationId: 1, itemId: item.id, quantity: 1 })
+      .expect(201);
     db.close();
   });
-
   it('keeps camp equipment admin-counted and outside issue and checkout operations', async () => {
     const { db, inventory, agent } = fixture();
-    await agent.post('/api/items').send({ name: 'שולחן קבוע', kind: 'camp_equipment' }).expect(403);
+    await agent
+      .post('/api/items')
+      .send({ locationId: 1, name: 'שולחן קבוע', kind: 'camp_equipment' })
+      .expect(403);
     await role(agent, 'admin', 'admin-pass').expect(200);
     const created = await agent
       .post('/api/items')
-      .send({ name: 'שולחן קבוע', kind: 'camp_equipment' })
+      .send({ locationId: 1, name: 'שולחן קבוע', kind: 'camp_equipment' })
       .expect(201);
     const itemId = Number(created.body.id);
-    await agent.post('/api/stock/add').send({ itemId, quantity: 7 }).expect(201);
+    await agent.post('/api/stock/add').send({ locationId: 1, itemId, quantity: 7 }).expect(201);
     await agent
       .post('/api/stock/remove')
       .send({ itemId, quantity: 2 })
@@ -436,12 +535,12 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(({ body }) => expect(body.error).toBe('not_found'));
     await agent
       .post('/api/issue')
-      .send({ itemId, quantity: 1 })
+      .send({ locationId: 1, itemId, quantity: 1 })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('wrong_item_kind'));
     await agent
       .post('/api/checkout')
-      .send({ itemId, borrowerId: 999, quantity: 1 })
+      .send({ locationId: 1, itemId, borrowerId: 999, quantity: 1 })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('wrong_item_kind'));
     expect(inventory.listItems(created.body.name)[0]).toMatchObject({
@@ -452,30 +551,64 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(inventory.listLedger().map((event) => event.kind)).toEqual(['stock_added']);
     db.close();
   });
-
   it('issues consumables borrower-free and rejects borrower fields, invalid quantities, and insufficient stock', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'מים', kind: 'consumable' });
-    inventory.addStock(item.id, 2);
+    const item = inventory.createItem({
+      name: 'מים',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent
       .post('/api/issue')
-      .send({ itemId: item.id, quantity: 1, borrowerId: 4 })
+      .send({ locationId: 1, itemId: item.id, quantity: 1, borrowerId: 4 })
       .expect(400);
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 0 }).expect(400);
     await agent
       .post('/api/issue')
-      .send({ itemId: item.id, quantity: 3 })
+      .send({ locationId: 1, itemId: item.id, quantity: 0 })
+      .expect(400);
+    await agent
+      .post('/api/issue')
+      .send({ locationId: 1, itemId: item.id, quantity: 3 })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('insufficient_stock'));
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 2 }).expect(201);
+    await agent
+      .post('/api/issue')
+      .send({ locationId: 1, itemId: item.id, quantity: 2 })
+      .expect(201);
     expect(inventory.listLedger().find((event) => event.kind === 'issued')?.borrower_id).toBeNull();
     db.close();
   });
-
   it('checks out only to an active borrower and partially returns usable/damaged quantities atomically', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'אוהל', kind: 'non_consumable' });
-    inventory.addStock(item.id, 3);
+    const item = inventory.createItem({
+      name: 'אוהל',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const borrower = inventory.createBorrower({
       playaName: 'CampA',
       fullName: 'מחנה א',
@@ -483,15 +616,15 @@ describe('inventory API permission and edge-case matrix', () => {
     });
     const checkout = await agent
       .post('/api/checkout')
-      .send({ itemId: item.id, borrowerId: borrower.id, quantity: 2 })
+      .send({ locationId: 1, itemId: item.id, borrowerId: borrower.id, quantity: 2 })
       .expect(201);
     await agent
       .post('/api/return')
-      .send({ checkoutId: checkout.body.eventId, usable: 1, damaged: 0 })
+      .send({ locationId: 1, checkoutId: checkout.body.eventId, usable: 1, damaged: 0 })
       .expect(201);
     await agent
       .post('/api/return')
-      .send({ checkoutId: checkout.body.eventId, usable: 2, damaged: 0 })
+      .send({ locationId: 1, checkoutId: checkout.body.eventId, usable: 2, damaged: 0 })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('over_return'));
     expect(inventory.listLoans()[0]?.outstanding).toBe(1);
@@ -504,22 +637,45 @@ describe('inventory API permission and edge-case matrix', () => {
     inventory.archiveBorrower(inactive.id, true);
     await agent
       .post('/api/checkout')
-      .send({ itemId: item.id, borrowerId: inactive.id, quantity: 1 })
+      .send({ locationId: 1, itemId: item.id, borrowerId: inactive.id, quantity: 1 })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('inactive_borrower'));
     db.close();
   });
-
   it('restricts marking lost to admins and rejects restoration and excessive quantities', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'גנרטור', kind: 'non_consumable' });
-    inventory.addStock(item.id, 1);
+    const item = inventory.createItem({
+      name: 'גנרטור',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const borrower = inventory.createBorrower({
       playaName: 'power',
       fullName: 'חשמל',
       campDepartment: 'מחנה אחר',
     });
-    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent.post('/api/lost').send({ checkoutId, quantity: 1, lost: true }).expect(403);
     await role(agent, 'admin', 'admin-pass');
     await agent.post('/api/lost').send({ checkoutId, quantity: 2, lost: true }).expect(400);
@@ -530,23 +686,54 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 0, lost: 1 });
     db.close();
   });
-
   it('lets operators restore damaged stock but never write it off, including after admin expiry', async () => {
-    const clock = { now: 1_000 };
+    const clock = { now: 1000 };
     const { db, inventory, agent } = fixture(clock);
-    const item = inventory.createItem({ name: 'Damaged tool', kind: 'non_consumable' });
-    inventory.addStock(item.id, 3);
+    const item = inventory.createItem({
+      name: 'Damaged tool',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const borrower = inventory.createBorrower({
       playaName: 'damage-test',
       fullName: 'Borrower',
       campDepartment: '',
     });
-    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
-    inventory.returnCheckout(checkoutId, 0, 2);
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkoutId,
+      0,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const loans = inventory.listLoans();
     const before = inventory.listLedger();
-    const requestBody = { itemId: item.id, quantity: 1, note: 'checked' };
-
+    const requestBody = { itemId: item.id, quantity: 1, note: 'checked', locationId: 1 };
     await agent
       .post('/api/damage')
       .send({ ...requestBody, resolution: 'write_off' })
@@ -567,7 +754,6 @@ describe('inventory API permission and edge-case matrix', () => {
       note: 'checked',
     });
     expect(inventory.listLoans()).toEqual(loans);
-
     const afterRepair = inventory.listLedger();
     await agent
       .post('/api/damage')
@@ -582,7 +768,6 @@ describe('inventory API permission and edge-case matrix', () => {
       .send({ ...requestBody, note: 'x'.repeat(501), resolution: 'repair' })
       .expect(400);
     expect(inventory.listLedger()).toEqual(afterRepair);
-
     await role(agent, 'admin', 'admin-pass').expect(200);
     await agent
       .post('/api/damage')
@@ -591,10 +776,27 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'written_off', quantity: 1 });
     expect(inventory.listItems('', true)[0]).toMatchObject({ available: 2, damaged: 0 });
     expect(inventory.listLoans()).toEqual(loans);
-
-    inventory.returnCheckout(inventory.checkout(item.id, borrower.id, 1), 0, 1);
+    inventory.returnCheckout(
+      inventory.checkout(
+        item.id,
+        borrower.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+      0,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const beforeExpiry = inventory.listLedger();
-    clock.now += 600_000;
+    clock.now += 600000;
     await agent
       .post('/api/damage')
       .send({ ...requestBody, resolution: 'write_off' })
@@ -610,56 +812,83 @@ describe('inventory API permission and edge-case matrix', () => {
     expect(inventory.listLoans()).toEqual(loans);
     db.close();
   });
-
   it('expires idle privilege server-side and returns a stale mutation as forbidden', async () => {
-    const clock = { now: 1_000 };
+    const clock = { now: 1000 };
     const { db, inventory, agent } = fixture(clock);
-    const item = inventory.createItem({ name: 'כבל', kind: 'consumable' });
+    const item = inventory.createItem({
+      name: 'כבל',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     await role(agent, 'admin', 'admin-pass')
       .expect(200)
-      .expect(({ body }) => expect(body.deadline).toBe(601_000));
-    clock.now = 601_001;
-    await agent.post('/api/stock/add').send({ itemId: item.id, quantity: 1 }).expect(403);
+      .expect(({ body }) => expect(body.deadline).toBe(601000));
+    clock.now = 601001;
+    await agent
+      .post('/api/stock/add')
+      .send({ locationId: 1, itemId: item.id, quantity: 1 })
+      .expect(403);
     await agent
       .get('/api/session')
       .expect(200)
       .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
     db.close();
   });
-
   it('extends the admin deadline only through explicit user activity', async () => {
     const { db, agent, clock } = fixture();
     await role(agent, 'admin', 'admin-pass')
       .expect(200)
-      .expect(({ body }) => expect(body.deadline).toBe(601_000));
-    clock.now = 100_000;
+      .expect(({ body }) => expect(body.deadline).toBe(601000));
+    clock.now = 100000;
     await agent.get('/api/items').expect(200);
     await agent
       .get('/api/session')
       .expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 601_000 }));
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 601000 }));
     await agent
       .post('/api/session/activity')
       .expect(200)
-      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 700_000 }));
+      .expect(({ body }) => expect(body).toMatchObject({ role: 'admin', deadline: 700000 }));
     db.close();
   });
-
   it('keeps non-admin access active without an inactivity deadline', async () => {
-    const clock = { now: 1_000 };
+    const clock = { now: 1000 };
     const { db, inventory, agent } = fixture(clock);
-    const item = inventory.createItem({ name: 'חבל', kind: 'consumable' });
-    inventory.addStock(item.id, 2);
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
-    clock.now = 86_400_001_000;
-    await agent.post('/api/issue').send({ itemId: item.id, quantity: 1 }).expect(201);
+    const item = inventory.createItem({
+      name: 'חבל',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    await agent
+      .post('/api/issue')
+      .send({ locationId: 1, itemId: item.id, quantity: 1 })
+      .expect(201);
+    clock.now = 86400001000;
+    await agent
+      .post('/api/issue')
+      .send({ locationId: 1, itemId: item.id, quantity: 1 })
+      .expect(201);
     await agent
       .get('/api/session')
       .expect(200)
       .expect(({ body }) => expect(body).toMatchObject({ role: 'operator', deadline: null }));
     db.close();
   });
-
   it('revokes admin sessions after an admin password change and accepts the new password', async () => {
     const { db, agent } = fixture();
     await role(agent, 'admin', 'admin-pass').expect(200);
@@ -672,7 +901,6 @@ describe('inventory API permission and edge-case matrix', () => {
     await role(agent, 'admin', 'x').expect(200);
     db.close();
   });
-
   it('persists changed password hashes and ignores later bootstrap values on reopen', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-credentials-'));
     cleanup.push(directory);
@@ -687,7 +915,6 @@ describe('inventory API permission and edge-case matrix', () => {
     await role(firstAgent, 'admin', 'first-admin').expect(200);
     await firstAgent.post('/api/password').send({ password: 'persisted-admin' }).expect(204);
     db.close();
-
     db = openDatabase(filename);
     const app = createApp({
       database: db,
@@ -700,7 +927,6 @@ describe('inventory API permission and edge-case matrix', () => {
     await role(agent, 'admin', 'persisted-admin').expect(200);
     db.close();
   });
-
   it('requires explicit bootstrap passwords only for missing credentials', () => {
     const db = openDatabase(':memory:');
     expect(() => createApp({ database: db, serveWeb: false })).toThrow(/ADMIN_PASSWORD/);
@@ -711,7 +937,6 @@ describe('inventory API permission and edge-case matrix', () => {
     ).toThrow();
     db.close();
   });
-
   it('returns structured errors for malformed or oversized JSON and unknown API routes', async () => {
     const { db, agent } = fixture();
     await agent
@@ -723,7 +948,7 @@ describe('inventory API permission and edge-case matrix', () => {
     await agent
       .post('/api/session/role')
       .set('content-type', 'application/json')
-      .send(JSON.stringify({ role: 'operator', padding: 'x'.repeat(33_000) }))
+      .send(JSON.stringify({ role: 'operator', padding: 'x'.repeat(33000) }))
       .expect(400)
       .expect(({ body }) => expect(body).toMatchObject({ error: 'invalid_json' }));
     await agent
@@ -733,17 +958,17 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(({ body }) => expect(body).toMatchObject({ error: 'not_found' }));
     db.close();
   });
-
   it('enforces alias bounds at the API boundary', async () => {
     const { db, agent } = fixture();
     await role(agent, 'admin', 'admin-pass');
     await agent
       .post('/api/items')
-      .send({ name: 'פריט', kind: 'consumable', aliases: [' '] })
+      .send({ locationId: 1, name: 'פריט', kind: 'consumable', aliases: [' '] })
       .expect(400);
     await agent
       .post('/api/items')
       .send({
+        locationId: 1,
         name: 'פריט',
         kind: 'consumable',
         aliases: Array.from({ length: 21 }, (_, index) => `alias-${index}`),
@@ -751,22 +976,34 @@ describe('inventory API permission and edge-case matrix', () => {
       .expect(400);
     db.close();
   });
-
   it('returns a specific conflict for duplicate item creation and rename', async () => {
     const { db, inventory, agent } = fixture();
-    const original = inventory.createItem({ name: 'Tent', kind: 'non_consumable' });
+    const original = inventory.createItem({
+      name: 'Tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     inventory.archiveItem(original.id, true);
-    const other = inventory.createItem({ name: 'Lantern', kind: 'non_consumable' });
+    const other = inventory.createItem({
+      name: 'Lantern',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const identityHighWaterBeforeConflict = db
       .prepare(
         "SELECT result_json FROM inventory_command_receipts WHERE key='system:identity-high-water'",
       )
       .get();
     await role(agent, 'admin', 'admin-pass');
-
     await agent
       .post('/api/items')
-      .send({ name: '  tEnT  ', kind: 'consumable' })
+      .send({ locationId: 1, name: '  tEnT  ', kind: 'consumable' })
       .expect(409)
       .expect(({ body }) =>
         expect(body).toEqual({
@@ -781,7 +1018,6 @@ describe('inventory API permission and edge-case matrix', () => {
         )
         .get(),
     ).toEqual(identityHighWaterBeforeConflict);
-
     await agent
       .put(`/api/items/${other.id}`)
       .send({ name: 'TENT' })
@@ -792,24 +1028,56 @@ describe('inventory API permission and edge-case matrix', () => {
     );
     db.close();
   });
-
   it('preserves history while hiding archived records and rejects archive with outstanding equipment', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' });
-    inventory.addStock(item.id, 1);
+    const item = inventory.createItem({
+      name: 'מקדחה',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const borrower = inventory.createBorrower({
       playaName: 'drill-user',
       fullName: 'קודח',
       campDepartment: '',
     });
-    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await role(agent, 'admin', 'admin-pass');
     await agent
       .post(`/api/items/${item.id}/archive`)
       .send({ archived: true })
       .expect(409)
       .expect(({ body }) => expect(body.error).toBe('nonzero_balances'));
-    inventory.returnCheckout(checkoutId, 1, 0);
+    inventory.returnCheckout(
+      checkoutId,
+      1,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent.post(`/api/items/${item.id}/archive`).send({ archived: true }).expect(204);
     await agent
       .get('/api/items')
@@ -823,19 +1091,32 @@ describe('inventory API permission and edge-case matrix', () => {
     db.close();
   });
 });
-
 describe('inventory management API', () => {
   it('authorizes keyed item deletion, replays it safely after name reuse, and reports commit-time blockers', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'Disposable item', kind: 'consumable' });
-    inventory.addStock(item.id, 2);
+    const item = inventory.createItem({
+      name: 'Disposable item',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const preview = inventory.listItems('Disposable item')[0]!;
     const command = {
       key: 'api-delete-item-0001',
       ledgerEpoch: inventory.inventoryEpoch(),
       expectedStockRevision: preview.stockRevision,
       expectedName: preview.name,
-      expectedLocationId: preview.locationId,
     };
     await agent.post(`/api/inventory/items/${item.id}/delete`).send(command).expect(403);
     await role(agent, 'admin', 'admin-pass');
@@ -851,23 +1132,53 @@ describe('inventory management API', () => {
       .post(`/api/inventory/items/${item.id}/delete`)
       .send(command)
       .expect(200, deleted.body);
-    const replacement = inventory.createItem({ name: 'Disposable item', kind: 'consumable' });
+    const replacement = inventory.createItem({
+      name: 'Disposable item',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     expect(replacement.id).toBeGreaterThan(item.id);
     await agent
       .post(`/api/inventory/items/${item.id}/delete`)
       .send(command)
       .expect(200, deleted.body);
     expect(inventory.listItems('Disposable item')[0]?.id).toBe(replacement.id);
-
-    const borrowedItem = inventory.createItem({ name: 'Checked out item', kind: 'non_consumable' });
+    const borrowedItem = inventory.createItem({
+      name: 'Checked out item',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'delete-race',
       fullName: 'Race',
       campDepartment: '',
     });
-    inventory.addStock(borrowedItem.id, 1);
+    inventory.addStock(
+      borrowedItem.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const stalePreview = inventory.listItems('Checked out item')[0]!;
-    inventory.checkout(borrowedItem.id, borrower.id, 1);
+    inventory.checkout(
+      borrowedItem.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent
       .post(`/api/inventory/items/${borrowedItem.id}/delete`)
       .send({
@@ -875,25 +1186,56 @@ describe('inventory management API', () => {
         ledgerEpoch: inventory.inventoryEpoch(),
         expectedStockRevision: stalePreview.stockRevision,
         expectedName: stalePreview.name,
-        expectedLocationId: stalePreview.locationId,
       })
       .expect(409)
       .expect(({ body }) => expect(body).toMatchObject({ error: 'deletion_ineligible' }));
     expect(inventory.listItems('Checked out item')[0]).toMatchObject({ borrowed: 1 });
     db.close();
   });
-
   it('deletes settled borrowers through an admin-only preview and preserves exact retries after playaName reuse', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'Borrower deletion item', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Borrower deletion item',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'reuse-user',
       fullName: 'Old user',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 2);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
-    inventory.returnCheckout(checkoutId, 1, 0);
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkoutId,
+      1,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent.get(`/api/borrowers/${borrower.id}/deletion-status`).expect(403);
     await role(agent, 'admin', 'admin-pass');
     const status = await agent.get(`/api/borrowers/${borrower.id}/deletion-status`).expect(200);
@@ -935,7 +1277,6 @@ describe('inventory management API', () => {
     });
     db.close();
   });
-
   it('retires occupied locations atomically after naming a different active destination', async () => {
     const { db, inventory, agent } = fixture();
     const source = inventory.createLocation('SOURCE', 'Source');
@@ -950,7 +1291,7 @@ describe('inventory management API', () => {
       kind: 'consumable',
       locationId: source.id,
     });
-    inventory.addStock(active.id, 3);
+    inventory.addStock(active.id, 3, '', source.id);
     inventory.archiveItem(archived.id, true);
     await role(agent, 'admin', 'admin-pass');
     const base = {
@@ -958,6 +1299,15 @@ describe('inventory management API', () => {
       ledgerEpoch: inventory.inventoryEpoch(),
       action: 'delete',
       expectedItemIds: [active.id, archived.id].sort((left, right) => left - right),
+      expectedBalances: inventory
+        .listItems('', true)
+        .filter((item) => item.balances.some((p) => p.locationId === source.id))
+        .map((item) => ({
+          itemId: item.id,
+          available: item.balances.find((p) => p.locationId === source.id)!.available,
+          damaged: item.balances.find((p) => p.locationId === source.id)!.damaged,
+          stockRevision: item.stockRevision,
+        })),
       expectedCode: source.code,
       expectedName: source.name,
     };
@@ -977,16 +1327,23 @@ describe('inventory management API', () => {
       .expect(200, retired.body);
     expect(inventory.listItems('', true)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: active.id, locationId: destination.id, available: 3 }),
-        expect.objectContaining({ id: archived.id, locationId: destination.id, archived: true }),
+        expect.objectContaining({
+          id: active.id,
+          balances: [{ locationId: destination.id, available: 3, damaged: 0 }],
+          available: 3,
+        }),
+        expect.objectContaining({
+          id: archived.id,
+          balances: [{ locationId: destination.id, available: 0, damaged: 0 }],
+          archived: true,
+        }),
       ]),
     );
     expect(inventory.listLocations(true).some((entry) => entry.id === source.id)).toBe(false);
     db.close();
   });
-
   it('replays keyed location creation and blocks the same request after admin expiry', async () => {
-    const clock = { now: 1_000 };
+    const clock = { now: 1000 };
     const { db, inventory, agent } = fixture(clock);
     const command = {
       key: 'api-location-0001',
@@ -1003,7 +1360,7 @@ describe('inventory management API', () => {
       .expect(201)
       .expect(({ body }) => expect(body.id).toBe(created.body.id));
     expect(inventory.listLocations(true).filter((entry) => entry.code === 'A-2')).toHaveLength(1);
-    clock.now += 600_001;
+    clock.now += 600001;
     await agent
       .put(`/api/inventory/locations/${created.body.id}`)
       .send({ ...command, key: 'api-location-0002', name: 'Changed' })
@@ -1013,7 +1370,6 @@ describe('inventory management API', () => {
     );
     db.close();
   });
-
   it('replays keyed location archive and reports its active item blockers', async () => {
     const { db, inventory, agent } = fixture();
     const location = inventory.createLocation('A-3', 'Third storage');
@@ -1029,6 +1385,7 @@ describe('inventory management API', () => {
       code: 'A-3',
       name: 'Third storage',
       archived: true,
+      isDefault: false,
     };
     await agent
       .put(`/api/inventory/locations/${location.id}`)
@@ -1050,6 +1407,15 @@ describe('inventory management API', () => {
         action: 'archive',
         replacementLocationId: destination.id,
         expectedItemIds: [item.id],
+        expectedBalances: inventory
+          .listItems('', true)
+          .filter((item) => item.balances.some((p) => p.locationId === location.id))
+          .map((item) => ({
+            itemId: item.id,
+            available: item.balances.find((p) => p.locationId === location.id)!.available,
+            damaged: item.balances.find((p) => p.locationId === location.id)!.damaged,
+            stockRevision: item.stockRevision,
+          })),
         expectedCode: location.code,
         expectedName: location.name,
       })
@@ -1061,6 +1427,7 @@ describe('inventory management API', () => {
       code: 'A-3',
       name: 'Third storage',
       archived: false,
+      isDefault: false,
     });
     await agent.put(`/api/inventory/locations/${location.id}`).send(command).expect(200);
     await agent.put(`/api/inventory/locations/${location.id}`).send(command).expect(200);
@@ -1069,7 +1436,6 @@ describe('inventory management API', () => {
     );
     db.close();
   });
-
   it('guards location archive against active item references and rejects operator catalog writes', async () => {
     const { db, inventory, agent } = fixture();
     const location = inventory.createLocation('workshop', 'Workshop');
@@ -1079,11 +1445,14 @@ describe('inventory management API', () => {
       locationId: Number(location.id),
     });
     const path = `/api/locations/${location.id}`;
-    await agent.put(path).send({ code: 'workshop', name: 'Workshop', archived: true }).expect(403);
+    await agent
+      .put(path)
+      .send({ code: 'workshop', name: 'Workshop', archived: true, isDefault: false })
+      .expect(403);
     await role(agent, 'admin', 'admin-pass');
     await agent
       .put(path)
-      .send({ code: 'workshop', name: 'Workshop', archived: true })
+      .send({ code: 'workshop', name: 'Workshop', archived: true, isDefault: false })
       .expect(409)
       .expect(({ body }) => expect(body.error).toBe('location_in_use'));
     expect(inventory.listLocations(true).find((entry) => entry.id === location.id)?.archived).toBe(
@@ -1092,7 +1461,7 @@ describe('inventory management API', () => {
     inventory.archiveItem(item.id, true);
     await agent
       .put(path)
-      .send({ code: 'workshop', name: 'Workshop', archived: true })
+      .send({ code: 'workshop', name: 'Workshop', archived: true, isDefault: false })
       .expect(409)
       .expect(({ body }) => expect(body.error).toBe('location_in_use'));
     const destination = inventory.createLocation('repair-bay', 'Repair bay');
@@ -1104,6 +1473,15 @@ describe('inventory management API', () => {
         action: 'archive',
         replacementLocationId: destination.id,
         expectedItemIds: [item.id],
+        expectedBalances: inventory
+          .listItems('', true)
+          .filter((item) => item.balances.some((p) => p.locationId === location.id))
+          .map((item) => ({
+            itemId: item.id,
+            available: item.balances.find((p) => p.locationId === location.id)!.available,
+            damaged: item.balances.find((p) => p.locationId === location.id)!.damaged,
+            stockRevision: item.stockRevision,
+          })),
         expectedCode: location.code,
         expectedName: location.name,
       })
@@ -1127,7 +1505,9 @@ describe('inventory management API', () => {
         locationId: destination.id,
       })
       .expect(200);
-    expect(inventory.listItems('Location blocker')[0]?.locationId).toBe(destination.id);
+    expect(inventory.listItems('Location blocker')[0]?.balances[0]!.locationId).toBe(
+      destination.id,
+    );
     db.close();
   });
   it('enforces role, stale counts, and idempotent create/count commands', async () => {
@@ -1139,7 +1519,7 @@ describe('inventory management API', () => {
       kind: 'camp_equipment',
       aliases: [],
       lotSize: null,
-      locationId: null,
+      locationId: 1,
       targetAvailable: 20,
     };
     await agent.post('/api/inventory/items').send(creation).expect(403);
@@ -1158,11 +1538,19 @@ describe('inventory management API', () => {
       name: 'Workbench edited',
       aliases: [],
       lotSize: null,
-      locationId: null,
+      locationId: 1,
       targetAvailable: 17,
       stockRevision: created.body.stockRevision,
     };
-    inventory.addStock(itemId, 1);
+    inventory.addStock(
+      itemId,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent
       .put(`/api/inventory/items/${itemId}`)
       .send(count)
@@ -1188,23 +1576,57 @@ describe('inventory management API', () => {
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_removed', quantity: 4 });
     db.close();
   });
-
   it('forbids operator write-off after admin expiry while allowing explicit repair', async () => {
-    const clock = { now: 1_000 };
+    const clock = { now: 1000 };
     const { db, inventory, agent } = fixture(clock);
-    const item = inventory.createItem({ name: 'Damaged saw', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Damaged saw',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'api-saw',
       fullName: 'Saw user',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 2);
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
-    inventory.returnCheckout(checkout, 0, 2);
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkout,
+      0,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await role(agent, 'admin', 'admin-pass');
-    clock.now += 600_001;
+    clock.now += 600001;
     const base = {
       key: 'api-damage-0001',
+      locationId: 1,
+      stockRevision: inventory.listItems('Damaged saw')[0]!.stockRevision,
       ledgerEpoch: inventory.inventoryEpoch(),
       itemId: item.id,
       quantity: 1,
@@ -1227,4 +1649,64 @@ describe('inventory management API', () => {
     expect(inventory.listLedger().filter((event) => event.kind === 'repaired')).toHaveLength(1);
     db.close();
   });
+});
+
+it('exports reset allocation once through the query to a nondefault destination without changing recovery balances', async () => {
+  const { db, inventory, agent } = fixture();
+  const source = inventory.listLocations().find((location) => location.code === 'monster')!;
+  const destination = inventory.createLocation('allocation-destination', 'Allocation destination');
+  inventory.saveInventoryLocation({
+    key: 'allocation-default',
+    ledgerEpoch: 1,
+    locationId: source.id,
+    name: source.name,
+    code: source.code,
+    isDefault: true,
+  });
+  const item = inventory.createItem({
+    name: 'Allocation equipment',
+    kind: 'non_consumable',
+    locationId: source.id,
+  });
+  inventory.addStock(item.id, 10, '', source.id);
+  inventory.addStock(item.id, 3, '', destination.id);
+  const borrower = inventory.createBorrower({
+    fullName: 'Allocation borrower',
+    playaName: 'allocation',
+    campDepartment: '',
+  });
+  const loan = inventory.checkout(item.id, borrower.id, 5, '', source.id);
+  inventory.markLost(loan, 2, true);
+  const before = new InventoryTransferService(db).snapshot();
+  await role(agent, 'admin', 'admin-pass');
+  const response = await agent
+    .get('/api/workbook')
+    .query({ resetAllocationLocation: destination.name })
+    .buffer(true)
+    .parse((res, callback) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => callback(null, Buffer.concat(chunks)));
+    })
+    .expect(200);
+  const bytes = response.body as Buffer;
+  const reset = await parseResetWorkbook(bytes);
+  expect(
+    reset.items.filter((row) => row.name === item.name).map((row) => [row.location, row.total]),
+  ).toEqual([
+    [source.name, 5],
+    [destination.name, 8],
+  ]);
+  const recovery = await parseRecoveryWorkbook(bytes);
+  expect(
+    recovery.items
+      .filter((row) => row.id === item.id)
+      .map((row) => [row.location, row.available, row.damaged, row.borrowed, row.lost]),
+  ).toEqual([
+    [source.name, 5, 0, 3, 2],
+    [destination.name, 3, 0, 3, 2],
+  ]);
+  expect(recovery.locations.find((location) => location.isDefault)?.name).toBe(source.name);
+  expect(new InventoryTransferService(db).snapshot()).toEqual(before);
+  db.close();
 });

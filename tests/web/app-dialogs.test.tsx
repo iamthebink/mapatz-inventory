@@ -7,13 +7,12 @@ import { DialogStackProvider } from '../../src/web/Dialog';
 import type { Item } from '../../src/web/InventoryDialogs';
 import type { Borrower } from '../../src/domain/types.js';
 import { installWindowStorage } from '../helpers/window-storage.js';
-
 const hammer: Item = {
   id: 11,
   name: 'פטיש',
   kind: 'non_consumable',
   lotSize: null,
-  locationId: 31,
+  balances: [{ locationId: 31, available: 3, damaged: 1 }],
   aliases: ['מקבת'],
   available: 3,
   borrowed: 2,
@@ -22,7 +21,7 @@ const hammer: Item = {
   stockRevision: 6,
   archived: false,
 };
-const location = { id: 31, code: 'A-1', name: 'מחסן ראשי', archived: false };
+const location = { id: 31, code: 'A-1', name: 'מחסן ראשי', archived: false, isDefault: true };
 const response = (body: unknown, status = 200) =>
   new Response(status === 204 ? null : JSON.stringify(body), {
     status,
@@ -36,11 +35,15 @@ function setup(
   storageUnavailable = false,
   createBorrower?: (body: Record<string, unknown>) => Promise<Response>,
   failBorrowerRefresh = false,
+  ledgerEntries: unknown[] = [],
 ) {
   let currentRole = role;
   let items: Item[] = initialItems;
   let borrowers = initialBorrowers;
-  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const requests: Array<{
+    path: string;
+    body: Record<string, unknown>;
+  }> = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
     const method = init?.method ?? 'GET';
@@ -52,12 +55,12 @@ function setup(
     if (path === '/api/session')
       return response({
         role: currentRole,
-        deadline: currentRole === 'admin' ? Date.now() + 600_000 : null,
+        deadline: currentRole === 'admin' ? Date.now() + 600000 : null,
       });
     if (path === '/api/session/activity')
       return response({
         role: currentRole,
-        deadline: currentRole === 'admin' ? Date.now() + 600_000 : null,
+        deadline: currentRole === 'admin' ? Date.now() + 600000 : null,
       });
     if (path === '/api/items' || path === '/api/items?all=1') return response(items);
     if (path === '/api/borrowers?all=1') {
@@ -104,7 +107,7 @@ function setup(
       });
     if (path === '/api/borrowers/search?q=')
       return response({ ledgerEpoch: 1, active: [], archivedMatches: [] });
-    if (path === '/api/ledger') return response([]);
+    if (path === '/api/ledger') return response(ledgerEntries);
     if (path === '/api/inventory/items' && method === 'POST') {
       if (currentRole !== 'admin')
         return response({ error: 'forbidden', message: 'אין הרשאה' }, 403);
@@ -115,7 +118,13 @@ function setup(
         kind: body.kind as Item['kind'],
         aliases: body.aliases as string[],
         lotSize: body.lotSize as number | null,
-        locationId: body.locationId as number | null,
+        balances: [
+          {
+            locationId: Number(body.locationId),
+            available: Number(body.targetAvailable ?? 0),
+            damaged: 0,
+          },
+        ],
         available: Number(body.targetAvailable ?? 0),
         borrowed: 0,
         lost: 0,
@@ -160,7 +169,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 describe('inventory management in App', () => {
   it.each([false, true])(
     'respects dialog focus restoration over the desk (disabled: %s)',
@@ -180,7 +188,6 @@ describe('inventory management in App', () => {
       expect(document.activeElement).toBe(disabled ? search : admin);
     },
   );
-
   it('creates a borrower from a dialog and refreshes the catalog', async () => {
     const { user, requests } = setup();
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
@@ -207,7 +214,6 @@ describe('inventory management in App', () => {
     expect(screen.getByText('הפעולה הושלמה בהצלחה')).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
-
   it('preserves creation fields after rejection and blocks dismissal while pending', async () => {
     let rejectCreation!: (result: Response) => void;
     const { user, requests } = setup(
@@ -254,7 +260,6 @@ describe('inventory management in App', () => {
     await user.click(trigger);
     expect(screen.getByRole('textbox', { name: 'שם מלא' })).toHaveProperty('value', '');
   });
-
   it('closes after committed creation even when catalog refresh fails', async () => {
     const { user, requests } = setup('admin', '/management', [hammer], [], false, undefined, true);
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
@@ -267,7 +272,6 @@ describe('inventory management in App', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(requests.filter((request) => request.path === '/api/borrowers')).toHaveLength(1);
   });
-
   it('closes an idle creation dialog when browser navigation leaves management', async () => {
     const { user } = setup();
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
@@ -277,7 +281,6 @@ describe('inventory management in App', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(window.location.pathname).toBe('/summary');
   });
-
   it('keeps a borrower draft during navigation and follows the destination after discard', async () => {
     const { user } = setup('operator', '/');
     await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
@@ -296,7 +299,6 @@ describe('inventory management in App', () => {
     );
     await waitFor(() => expect(window.location.pathname).toBe('/summary'));
   });
-
   it('keeps borrower deletion unavailable when the browser storage getter throws', async () => {
     const borrower: Borrower = {
       id: 43,
@@ -316,11 +318,9 @@ describe('inventory management in App', () => {
     );
     await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Storage User?' });
     await user.click(screen.getByRole('button', { name: 'מחק את השואל וההיסטוריה לצמיתות' }));
-
     expect(requests.some((request) => request.path === '/api/borrowers/43/delete')).toBe(false);
     expect(await screen.findByText(/אחסון השחזור בדפדפן אינו זמין/)).toBeTruthy();
   });
-
   it('guards a dirty desk batch across navigation and popstate until explicit discard', async () => {
     const tape: Item = {
       ...hammer,
@@ -399,7 +399,7 @@ describe('inventory management in App', () => {
     const saved = JSON.stringify({
       key: '00000000-0000-4000-8000-000000000921',
       ledgerEpoch: 1,
-      items: [{ itemId: 20, quantity: 1, note: '' }],
+      items: [{ itemId: 20, quantity: 1, note: '', locationId: 1 }],
     });
     vi.stubGlobal('localStorage', {
       getItem: (key: string) => (key === 'mapatz-consumable-batch-attempt' ? saved : null),
@@ -436,7 +436,6 @@ describe('inventory management in App', () => {
       (screen.getByRole('spinbutton', { name: 'מספר מכשירי קשר' }) as HTMLInputElement).disabled,
     ).toBe(true);
   });
-
   it('shows one management section and the four item balances without a separate inventory tab', async () => {
     setup();
     const navigation = screen.getByRole('navigation', { name: 'ניווט ראשי' });
@@ -448,7 +447,6 @@ describe('inventory management in App', () => {
       expect(screen.getByRole('columnheader', { name })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'פטיש' })).toBeTruthy();
   });
-
   it('preserves search after item inspection and opens locations for operators', async () => {
     const { user } = setup('operator');
     await screen.findByRole('button', { name: 'פטיש' });
@@ -482,11 +480,11 @@ describe('inventory management in App', () => {
       true,
     );
   });
-
   it('creates an item with an initial available target through the unified dialog', async () => {
     const { user, requests } = setup();
     await screen.findByRole('button', { name: 'פטיש' });
     await user.click(screen.getByRole('button', { name: 'הוספת פריט חדש' }));
+    await user.selectOptions(within(screen.getByRole('dialog')).getByLabelText('מיקום'), '31');
     await user.type(screen.getByRole('textbox', { name: 'שם פריט' }), 'שולחן');
     await user.clear(screen.getByRole('textbox', { name: 'זמין' }));
     await user.type(screen.getByRole('textbox', { name: 'זמין' }), '5');
@@ -498,7 +496,6 @@ describe('inventory management in App', () => {
     expect(save.body).toMatchObject({ name: 'שולחן', targetAvailable: 5 });
     await waitFor(() => expect(screen.getByRole('button', { name: 'שולחן' })).toBeTruthy());
   });
-
   it('confirms borrower deletion explicitly and lets an archived borrower deletion be cancelled', async () => {
     const activeBorrower: Borrower = {
       id: 41,
@@ -523,7 +520,6 @@ describe('inventory management in App', () => {
     );
     await user.click(await screen.findByRole('link', { name: 'ניהול' }));
     await user.click(await screen.findByRole('tab', { name: /שואלים/ }));
-
     const activeRow = screen.getByRole('row', { name: /Active User/ });
     const deleteTrigger = within(activeRow).getByRole('button', { name: 'מחיקה' });
     expect(deleteTrigger.classList.contains('small-button')).toBe(true);
@@ -538,7 +534,6 @@ describe('inventory management in App', () => {
     expect(screen.getByRole('alertdialog').textContent).toContain('Camp North');
     await user.click(screen.getByRole('button', { name: 'ביטול' }));
     expect(requests.some((request) => request.path.endsWith('/delete'))).toBe(false);
-
     await user.click(
       within(screen.getByRole('row', { name: /Active User/ })).getByRole('button', {
         name: 'מחיקה',
@@ -558,7 +553,6 @@ describe('inventory management in App', () => {
       expectedPhoneNumber: activeBorrower.phoneNumber,
       expectedCampDepartment: activeBorrower.campDepartment,
     });
-
     await user.click(
       within(screen.getByRole('row', { name: /Archived User/ })).getByRole('button', {
         name: 'מחיקה',
@@ -570,7 +564,6 @@ describe('inventory management in App', () => {
     await user.click(screen.getByRole('button', { name: 'ביטול' }));
     expect(requests.some((request) => request.path === '/api/borrowers/42/delete')).toBe(false);
   });
-
   it('guards in-app navigation from a dirty item editor', async () => {
     const { user } = setup();
     await user.click(await screen.findByRole('button', { name: 'פטיש' }));
@@ -599,7 +592,6 @@ describe('inventory management in App', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/summary'));
   });
 });
-
 it.each(['immediate', 'blur'])(
   'warns on creation and deduplicates equivalent evidence (%s)',
   async (mode) => {
@@ -642,7 +634,6 @@ it.each(['immediate', 'blur'])(
     expect(screen.getByText('נמצאו שואלים עם פרטים דומים')).toBeTruthy();
   },
 );
-
 it('preserves partial-match guidance in final successful fast-creation feedback', async () => {
   const { user } = setup(
     'admin',
@@ -670,4 +661,47 @@ it('preserves partial-match guidance in final successful fast-creation feedback'
   expect(toast.textContent).toContain('נמצאו שואלים עם פרטים דומים');
   expect(toast.textContent).toContain('050');
   expect(toast.textContent).toContain('North');
+});
+
+it('ledger shows and searches retained location attribution and names all transfer conditions', async () => {
+  const kinds = [
+    'transferred_out',
+    'transferred_in',
+    'damaged_transferred_out',
+    'damaged_transferred_in',
+  ];
+  const labels = [
+    'העברת מלאי תקין — יציאה',
+    'העברת מלאי תקין — קבלה',
+    'העברת מלאי פגום — יציאה',
+    'העברת מלאי פגום — קבלה',
+  ];
+  setup(
+    'admin',
+    '/ledger',
+    [hammer],
+    [],
+    false,
+    undefined,
+    false,
+    kinds.map((kind, index) => ({
+      id: index + 1,
+      kind,
+      created_at: '2026-01-01 12:00:00',
+      itemName: 'Transferred item',
+      quantity: 1,
+      note: '',
+      location_name: 'Deleted source',
+      location_code: 'historic-code',
+    })),
+  );
+  for (const label of labels) expect(await screen.findByText(label)).toBeTruthy();
+  expect(screen.getAllByText('Deleted source · historic-code')).toHaveLength(4);
+  const user = userEvent.setup();
+  const search = screen.getByRole('textbox', { name: 'סינון הטבלה' });
+  await user.type(search, 'historic-code');
+  expect(screen.getAllByText('Deleted source · historic-code')).toHaveLength(4);
+  await user.clear(search);
+  await user.type(search, 'Deleted source');
+  expect(screen.getAllByText('Deleted source · historic-code')).toHaveLength(4);
 });

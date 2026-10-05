@@ -11,14 +11,24 @@ export type EventKind =
   | 'found_returned'
   | 'found_returned_damaged'
   | 'repaired'
-  | 'written_off';
+  | 'written_off'
+  | 'transferred_out'
+  | 'transferred_in'
+  | 'damaged_transferred_out'
+  | 'damaged_transferred_in';
+
+export interface LocationBalance {
+  locationId: number;
+  available: number;
+  damaged: number;
+}
 
 export interface Item {
   id: number;
   name: string;
   kind: ItemKind;
   lotSize: number | null;
-  locationId: number | null;
+  balances: LocationBalance[];
   archived: boolean;
   aliases: string[];
   available: number;

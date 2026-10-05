@@ -7,11 +7,9 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { launchElectron, finishApplication, saveDiagnostics } from './electron-helpers';
-
 const exec = promisify(execFile);
 const baselineVersion = '0.1.0';
 const password = 'upgrade-rehearsal-password';
-
 async function post(page: Page, path: string, body: unknown, key?: string) {
   return page.evaluate(
     async ({ path, body, key }) => {
@@ -29,7 +27,6 @@ async function post(page: Page, path: string, body: unknown, key?: string) {
     { path, body, key },
   );
 }
-
 async function authenticate(page: Page) {
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   // Initial parallel API requests establish cookies. Let that bootstrap finish
@@ -41,7 +38,6 @@ async function authenticate(page: Page) {
   await dialog.getByRole('button', { name: 'הפעל מצב מנהל', exact: true }).click();
   await expect(page.getByRole('button', { name: 'סיום מצב מנהל', exact: true })).toBeVisible();
 }
-
 async function snapshot(page: Page) {
   return page.evaluate(async () => {
     const get = async (path: string) => {
@@ -56,7 +52,6 @@ async function snapshot(page: Page) {
     };
   });
 }
-
 async function install(installer: string, phase: string) {
   // Wait for the complete installer process tree, not just the bootstrapper.
   const result = await exec(
@@ -67,11 +62,10 @@ async function install(installer: string, phase: string) {
       '-Command',
       '$p = Start-Process -FilePath $env:MAPATZ_INSTALLER -ArgumentList "--silent" -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "Installer exited $($p.ExitCode)" }',
     ],
-    { env: { ...process.env, MAPATZ_INSTALLER: installer }, timeout: 90_000 },
+    { env: { ...process.env, MAPATZ_INSTALLER: installer }, timeout: 90000 },
   );
   await writeFile(test.info().outputPath(`${phase}-installer.log`), result.stdout + result.stderr);
 }
-
 test('published Windows installation upgrades in place without losing field state', async () => {
   // This test uses the real default profile and installers. Never run against an operator's PC.
   expect(process.platform).toBe('win32');
@@ -156,7 +150,9 @@ test('published Windows installation upgrades in place without losing field stat
     const borrowBody = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      items: [{ itemId: item.id, borrow: [{ quantity: 2, note: 'before upgrade' }] }],
+      items: [
+        { itemId: item.id, borrow: [{ quantity: 2, note: 'before upgrade', locationId: 1 }] },
+      ],
     };
     const borrowReceipt = await post(
       page,
@@ -172,9 +168,7 @@ test('published Windows installation upgrades in place without losing field stat
     const profileBefore = await readFile(join(profile, 'profile.json'), 'utf8');
     await finishApplication(application, true);
     application = undefined;
-
     await checkpoint('baseline-seeded-and-closed', { profile, origin, before });
-
     // No uninstall, profile copy, or data restoration between the two real Setup packages.
     await install(candidateInstaller!, 'candidate');
     await checkpoint('candidate-installed');
@@ -188,7 +182,11 @@ test('published Windows installation upgrades in place without losing field stat
         app.getPath('desktop'),
         path.join(app.getPath('appData'), 'Microsoft/Windows/Start Menu/Programs'),
       ];
-      const found: { shortcut: string; target: string; args: string }[] = [];
+      const found: {
+        shortcut: string;
+        target: string;
+        args: string;
+      }[] = [];
       for (const folder of folders) {
         for (const name of fs.readdirSync(folder, { recursive: true })) {
           if (typeof name !== 'string' || !name.endsWith('.lnk') || !/mapatz/i.test(name)) continue;
@@ -233,7 +231,12 @@ test('published Windows installation upgrades in place without losing field stat
       {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: item.id, return: [{ usable: 1, damaged: 0, note: 'after upgrade' }] }],
+        items: [
+          {
+            itemId: item.id,
+            return: [{ usable: 1, damaged: 0, note: 'after upgrade', locationId: 1 }],
+          },
+        ],
       },
       crypto.randomUUID(),
     );
@@ -286,7 +289,7 @@ try {
           MAPATZ_EXPECTED_EXE: join(installRoot, `app-${candidateVersion}`, 'mapatz-inventory.exe'),
           MAPATZ_INSTALL_ROOT: installRoot,
         },
-        timeout: 75_000,
+        timeout: 75000,
       },
     );
     await checkpoint('complete', { shortcutExecutable: shortcutResult.stdout.trim() });
@@ -317,12 +320,12 @@ try {
       await Promise.race([
         closing,
         new Promise<void>((done) => {
-          timer = setTimeout(done, 10_000);
+          timer = setTimeout(done, 10000);
         }),
       ]);
       clearTimeout(timer);
       if (child && child.exitCode === null && child.signalCode === null)
-        await exec('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 10_000 }).catch(
+        await exec('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 10000 }).catch(
           () => {},
         );
     }

@@ -18,6 +18,15 @@ test('admin replaces borrowers only after confirming equipment returns', async (
   await authentication.locator('input[name="password"]').fill('e2e-admin-password');
   await authentication.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
   await expect(page.getByRole('button', { name: 'סיום מצב מנהל' })).toBeVisible();
+  const createdDestination = await page.request.post('/api/locations', {
+    data: { name: 'Import return destination', code: 'import-return-destination' },
+  });
+  expect(createdDestination.ok()).toBeTruthy();
+  const destination = (await createdDestination.json()) as {
+    id: number;
+    name: string;
+    code: string;
+  };
   await page
     .getByRole('navigation', { name: 'ניווט ראשי' })
     .getByRole('link', { name: 'ניהול' })
@@ -51,10 +60,33 @@ test('admin replaces borrowers only after confirming equipment returns', async (
   expect(returned()).toBe(0);
   await dialog.getByRole('button', { name: 'ייבוא', exact: true }).click();
   await expect(confirmation).toBeVisible();
+  await confirmation.getByLabel('מיקום קבלת הציוד').selectOption(String(destination.id));
+  await expect(confirmation.getByRole('button', { name: 'אישור החזרה וייבוא' })).toBeEnabled();
   await confirmation.getByRole('button', { name: 'אישור החזרה וייבוא' }).click();
   await expect(confirmation).toBeHidden();
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(0);
   expect(returned()).toBe(2);
+  expect(
+    ledger
+      .prepare(
+        'SELECT available,damaged FROM item_location_balances WHERE item_id=? AND location_id=1',
+      )
+      .get(seed.item.id),
+  ).toEqual({ available: 4, damaged: 0 });
+  expect(
+    ledger
+      .prepare(
+        'SELECT available,damaged FROM item_location_balances WHERE item_id=? AND location_id=?',
+      )
+      .get(seed.item.id, destination.id),
+  ).toEqual({ available: 2, damaged: 0 });
+  expect(
+    ledger
+      .prepare(
+        "SELECT location_name,location_code FROM inventory_events WHERE related_event_id=? AND kind='returned_usable'",
+      )
+      .all(seed.checkoutId),
+  ).toEqual([{ location_name: destination.name, location_code: destination.code }]);
   expect(
     ledger.prepare('SELECT archived FROM borrowers WHERE id=?').get(seed.borrower.id)?.archived,
   ).toBe(1);

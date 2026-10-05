@@ -4,6 +4,8 @@ export type BorrowerImportMode = 'merge' | 'replace';
 export type BorrowerImportRow = BorrowerProfile;
 export interface BorrowerImportPreview {
   confirmationToken: string;
+  returnLocationId: number | null;
+  locations: Array<{ id: number; name: string }>;
   added: number;
   updated: number;
   archived: number;

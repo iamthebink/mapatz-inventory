@@ -15,12 +15,11 @@ import {
   sendConsumableBatchCommand,
   sendClassifiedCommand,
 } from '../../src/web/api.js';
-
 const key = '00000000-0000-4000-8000-000000000001';
 const operationRequest: BorrowerOperationRequest = {
   contractVersion: 1,
   ledgerEpoch: 3,
-  items: [{ itemId: 11, borrow: [{ quantity: 1, note: '' }] }],
+  items: [{ itemId: 11, borrow: [{ quantity: 1, note: '', locationId: 1 }] }],
 };
 const operationContext = {
   idempotencyKey: key,
@@ -28,7 +27,6 @@ const operationContext = {
   request: operationRequest,
   stateRevision: 3,
 };
-
 const createRequest: BorrowerCreateRequest = {
   contractVersion: 1,
   ledgerEpoch: 3,
@@ -37,7 +35,6 @@ const createRequest: BorrowerCreateRequest = {
   phoneNumber: '',
   campDepartment: '',
 };
-
 function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
   return {
     borrower: {
@@ -54,7 +51,7 @@ function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
         name: 'Tent',
         kind: 'non_consumable',
         lotSize: null,
-        locationId: null,
+        balances: [{ locationId: 1, available: 4, damaged: 0 }],
         archived: false,
         aliases: [],
         available: 4,
@@ -65,14 +62,21 @@ function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
     holdings: [{ itemId: 11, returnable: 1, lost: 0 }],
     stateRevision: 4,
     ledgerEpoch: 3,
+    locations: [
+      {
+        id: 1,
+        name: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+        code: 'monster',
+        archived: false,
+        isDefault: true,
+      },
+    ],
+    defaultLocationId: 1,
   };
 }
-
 const json = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-
 afterEach(() => vi.unstubAllGlobals());
-
 describe('command response classification', () => {
   it('classifies network, 5xx, unparseable, and invalid bodies as ambiguous', async () => {
     expect(
@@ -109,7 +113,6 @@ describe('command response classification', () => {
       ),
     ).toEqual({ kind: 'ambiguous', reason: 'network' });
   });
-
   it('accepts coherent committed and typed protocol responses', async () => {
     expect(
       await classifyBorrowerOperationResponse(
@@ -154,7 +157,6 @@ describe('command response classification', () => {
       }),
     ).toEqual({ kind: 'authorization', status: 401 });
   });
-
   it('rejects cross-borrower, duplicate, cross-request, and contradictory operation results', async () => {
     const base = {
       error: 'borrower_operation_conflict',
@@ -165,7 +167,13 @@ describe('command response classification', () => {
       conflicts: [],
       snapshot: {
         ...snapshot(),
-        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        inventory: [
+          {
+            ...snapshot().inventory[0]!,
+            available: 0,
+            balances: [{ locationId: 1, available: 0, damaged: 0 }],
+          },
+        ],
       },
     };
     for (const body of [
@@ -193,10 +201,10 @@ describe('command response classification', () => {
       ),
     ).toMatchObject({ kind: 'ambiguous' });
   });
-
   it('accepts attributable operation rejections and rejects unrelated or loose payloads', async () => {
     const conflict = {
       scope: 'borrow' as const,
+      locationId: 1,
       code: 'insufficient_stock' as const,
       itemId: 11,
       requested: 1,
@@ -211,7 +219,13 @@ describe('command response classification', () => {
       conflicts: [conflict],
       snapshot: {
         ...snapshot(),
-        inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+        inventory: [
+          {
+            ...snapshot().inventory[0]!,
+            available: 0,
+            balances: [{ locationId: 1, available: 0, damaged: 0 }],
+          },
+        ],
       },
     };
     expect(
@@ -242,7 +256,6 @@ describe('command response classification', () => {
         stateRevision: 3,
       }),
     ).toMatchObject({ kind: 'ambiguous' });
-
     const replay = {
       error: 'borrower_operation_attempt_rejected',
       message: 'now valid',
@@ -266,7 +279,6 @@ describe('command response classification', () => {
       }),
     ).toMatchObject({ kind: 'ambiguous' });
   });
-
   it('requires the complete deterministic operation conflict sequence', async () => {
     const request: BorrowerOperationRequest = {
       contractVersion: 1,
@@ -274,17 +286,26 @@ describe('command response classification', () => {
       items: [
         {
           itemId: 11,
-          borrow: [{ quantity: 5, note: '' }],
-          return: [{ usable: 2, damaged: 0, note: '' }],
+          borrow: [{ quantity: 5, note: '', locationId: 1 }],
+          return: [{ usable: 2, damaged: 0, note: '', locationId: 1 }],
         },
-        { itemId: 12, borrow: [{ quantity: 2, note: '' }] },
+        { itemId: 12, borrow: [{ quantity: 2, note: '', locationId: 1 }] },
       ],
     };
     const conflictSnapshot = {
       ...snapshot(),
       inventory: [
-        { ...snapshot().inventory[0]!, available: 0 },
-        { ...snapshot().inventory[0]!, id: 12, available: 0 },
+        {
+          ...snapshot().inventory[0]!,
+          available: 0,
+          balances: [{ locationId: 1, available: 0, damaged: 0 }],
+        },
+        {
+          ...snapshot().inventory[0]!,
+          id: 12,
+          available: 0,
+          balances: [{ locationId: 1, available: 0, damaged: 0 }],
+        },
       ],
     };
     const base = {
@@ -304,6 +325,7 @@ describe('command response classification', () => {
     };
     const secondBorrowConflict = {
       scope: 'borrow',
+      locationId: 1,
       code: 'insufficient_stock',
       itemId: 12,
       requested: 2,
@@ -322,6 +344,7 @@ describe('command response classification', () => {
         returnConflict,
         {
           scope: 'borrow',
+          locationId: 1,
           code: 'insufficient_stock',
           itemId: 11,
           requested: 5,
@@ -335,7 +358,6 @@ describe('command response classification', () => {
         await classifyBorrowerOperationResponse(json(409, { ...base, conflicts }), context),
       ).toMatchObject({ kind: 'ambiguous' });
   });
-
   it('binds creation commits to the normalized frozen body', async () => {
     const borrower = {
       id: 22,
@@ -375,7 +397,6 @@ describe('command response classification', () => {
       ).toMatchObject({ kind: 'ambiguous' });
     }
   });
-
   it('rejects creation match status contradictory to archival state', async () => {
     const borrower = {
       id: 22,
@@ -412,7 +433,6 @@ describe('command response classification', () => {
       }),
     ).toMatchObject({ kind: 'ambiguous', reason: 'invalid-body' });
   });
-
   it('accepts truthful creation conflicts and rejects false match discriminators', async () => {
     const borrower = {
       id: 22,
@@ -461,11 +481,16 @@ describe('command response classification', () => {
       ),
     ).toMatchObject({ kind: 'ambiguous' });
   });
-
   it('enforces exact status/body mapping, semantic conflicts, and HeadersInit preservation', async () => {
     const snapshotWithNoStock = {
       ...snapshot(),
-      inventory: [{ ...snapshot().inventory[0]!, available: 0 }],
+      inventory: [
+        {
+          ...snapshot().inventory[0]!,
+          available: 0,
+          balances: [{ locationId: 1, available: 0, damaged: 0 }],
+        },
+      ],
     };
     const rejection = {
       error: 'borrower_operation_conflict',
@@ -476,6 +501,7 @@ describe('command response classification', () => {
       conflicts: [
         {
           scope: 'borrow',
+          locationId: 1,
           code: 'insufficient_stock',
           itemId: 11,
           requested: 1,
@@ -509,7 +535,6 @@ describe('command response classification', () => {
         operationContext,
       ),
     ).toMatchObject({ kind: 'ambiguous' });
-
     const fetchMock = vi.fn().mockResolvedValue(json(201, {}));
     vi.stubGlobal('fetch', fetchMock);
     const headers = new Headers([['x-attempt', key]]);
@@ -522,7 +547,6 @@ describe('command response classification', () => {
     expect(sentHeaders.get('content-type')).toBe('application/json');
   });
 });
-
 describe('generic api compatibility', () => {
   it('preserves successful generic JSON behavior and ApiError behavior', async () => {
     vi.stubGlobal(
@@ -532,16 +556,22 @@ describe('generic api compatibility', () => {
         .mockResolvedValueOnce(json(200, { ok: true }))
         .mockResolvedValueOnce(json(400, { error: 'bad', message: 'Bad request' })),
     );
-    expect(await api<{ ok: boolean }>('/ok')).toEqual({ ok: true });
+    expect(
+      await api<{
+        ok: boolean;
+      }>('/ok'),
+    ).toEqual({ ok: true });
     const error = await api('/bad').catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 400, code: 'bad' });
   });
 });
-
 describe('borrower workflow transport', () => {
   it('classifies definitive batch transport rejections without freezing retry', async () => {
-    const request = { ledgerEpoch: 3, items: [{ itemId: 11, quantity: 1, note: '' }] };
+    const request = {
+      ledgerEpoch: 3,
+      items: [{ itemId: 11, quantity: 1, note: '', locationId: 1 }],
+    };
     vi.stubGlobal(
       'fetch',
       vi
@@ -579,7 +609,6 @@ describe('borrower workflow transport', () => {
       code: 'invalid_server_truth',
     });
   });
-
   it('signals classified authorization staleness while preserving the typed outcome', async () => {
     vi.stubGlobal('window', new EventTarget());
     const stale = vi.fn();
@@ -592,7 +621,6 @@ describe('borrower workflow transport', () => {
     expect(stale).toHaveBeenCalledTimes(1);
   });
 });
-
 it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
   'rejects malformed %s in search evidence',
   async (field) => {

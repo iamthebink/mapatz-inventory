@@ -19,6 +19,7 @@ const conflictLabels: Record<string, string> = {
   insufficient_stock: 'אין די מלאי זמין',
   returnable_balance_changed: 'יתרת ההחזרה השתנתה',
   held_balance_changed: 'יתרת הציוד אצל השואל השתנתה',
+  invalid_location: 'המיקום אינו פעיל עוד',
   lost_balance_changed: 'יתרת הציוד האבוד השתנתה',
 };
 
@@ -64,6 +65,8 @@ export function BorrowerOperationalTables({
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const inventory = new Map(state.snapshot.inventory.map((item) => [item.id, item]));
+  const attribution = (part: { locationId: number; note: string }, quantity: number) =>
+    `${state.snapshot.locations.find((l) => l.id === part.locationId)?.name ?? 'מיקום לא זמין'} · ${quantity}${part.note ? ` · ${part.note}` : ''}`;
   const projections = state.unverifiedProjection ?? projectedItems(state);
   const held = projections.filter((projection) => projection.projectedHeld > 0);
   const lost = projections.filter((projection) => projection.lostNow > 0);
@@ -133,14 +136,14 @@ export function BorrowerOperationalTables({
                   direction: 'borrow',
                   quantity: projection?.stagedBorrow ?? 0,
                   label: 'השאלה',
-                  notes: group.borrow.map((part) => part.note),
+                  notes: group.borrow.map((part) => attribution(part, part.quantity)),
                 });
               if ((group.issue ?? []).length)
                 rows.push({
                   direction: 'issue',
                   quantity: (group.issue ?? []).reduce((sum, part) => sum + part.quantity, 0),
                   label: 'ניפוק · מתכלה',
-                  notes: (group.issue ?? []).map((part) => part.note),
+                  notes: (group.issue ?? []).map((part) => attribution(part, part.quantity)),
                 });
               const usable = group.return.reduce((total, part) => total + part.usable, 0);
               if (usable > 0)
@@ -148,7 +151,9 @@ export function BorrowerOperationalTables({
                   direction: 'usable',
                   quantity: usable,
                   label: actions.usable.label,
-                  notes: group.return.filter((part) => part.usable > 0).map((part) => part.note),
+                  notes: group.return
+                    .filter((part) => part.usable > 0)
+                    .map((part) => attribution(part, part.usable)),
                 });
               const damaged = group.return.reduce((total, part) => total + part.damaged, 0);
               if (damaged > 0)
@@ -156,7 +161,9 @@ export function BorrowerOperationalTables({
                   direction: 'damaged',
                   quantity: damaged,
                   label: 'החזרת ציוד · פגום',
-                  notes: group.return.filter((part) => part.damaged > 0).map((part) => part.note),
+                  notes: group.return
+                    .filter((part) => part.damaged > 0)
+                    .map((part) => attribution(part, part.damaged)),
                 });
               if ((group.lost ?? []).length)
                 rows.push({
@@ -175,7 +182,7 @@ export function BorrowerOperationalTables({
                     condition,
                     quantity: parts.reduce((sum, part) => sum + part.quantity, 0),
                     label: condition === 'damaged' ? 'נמצא והוחזר · פגום' : actions.found.label,
-                    notes: parts.map((part) => part.note),
+                    notes: parts.map((part) => attribution(part, part.quantity)),
                   });
               }
               return rows.map((row) => (

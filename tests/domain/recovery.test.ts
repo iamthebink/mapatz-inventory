@@ -16,25 +16,22 @@ import {
 } from '../../src/io/workbook.js';
 import { createApp } from '../../src/server/index.js';
 import { recordHistoricalStockRemoval } from '../helpers/historical-events.js';
-
 const cleanup: string[] = [];
 afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
-
 function database(name: string) {
   const directory = mkdtempSync(join(tmpdir(), `mapatz-${name}-`));
   cleanup.push(directory);
   return openDatabase(join(directory, 'inventory.sqlite'));
 }
-
 function sourceFixture() {
   const db = database('recovery-source');
   const transfers = new InventoryTransferService(db);
   transfers.replaceWithReset({
     locations: [
-      { name: 'Main', archived: false },
-      { name: 'Historic', archived: true },
+      { name: 'Main', archived: false, isDefault: false },
+      { name: 'Historic', archived: true, isDefault: false },
     ],
     items: [
       {
@@ -58,7 +55,7 @@ function sourceFixture() {
       {
         name: 'Old stock',
         kind: 'consumable',
-        location: null,
+        location: 'Main',
         aliases: [],
         lotSize: null,
         archived: true,
@@ -69,8 +66,24 @@ function sourceFixture() {
   const inventory = new InventoryService(db);
   const water = inventory.listItems('Water', true)[0]!;
   const tent = inventory.listItems('Tent', true)[0]!;
-  inventory.addStock(water.id, 20, 'received');
-  inventory.issue(water.id, 30, 'used');
+  inventory.addStock(
+    water.id,
+    20,
+    'received',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
+  inventory.issue(
+    water.id,
+    30,
+    'used',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   recordHistoricalStockRemoval(db, water.id, 5, 'historical count correction');
   const borrower = inventory.createBorrower({
     playaName: 'camp-a',
@@ -84,12 +97,29 @@ function sourceFixture() {
     campDepartment: 'מחנה אחר',
   });
   inventory.archiveBorrower(oldBorrower.id, true);
-  const checkout = inventory.checkout(tent.id, borrower.id, 4, 'field loan');
+  const checkout = inventory.checkout(
+    tent.id,
+    borrower.id,
+    4,
+    'field loan',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   inventory.markLost(checkout, 1, true, 'missing');
-  inventory.returnCheckout(checkout, 0, 1, 'damaged return');
+  inventory.returnCheckout(
+    checkout,
+    0,
+    1,
+    'damaged return',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   return { db, transfers, inventory, waterId: water.id, tentId: tent.id };
 }
-
 async function workbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const result = new ExcelJS.Workbook();
   await result.xlsx.load(
@@ -97,11 +127,9 @@ async function workbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
   );
   return result;
 }
-
 async function save(workbook: ExcelJS.Workbook): Promise<Buffer> {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
-
 function expectRecoveredState(
   actual: ReturnType<InventoryTransferService['snapshot']>,
   expected: ReturnType<InventoryTransferService['snapshot']>,
@@ -112,16 +140,18 @@ function expectRecoveredState(
   for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
-
 describe('complete inventory recovery', () => {
   it('rejects missing, invalid, duplicate, and dangling workbook item identities atomically', async () => {
     const source = sourceFixture();
-    const valid = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
+    const valid = await parseRecoveryWorkbook(
+      await exportWorkbook(source.transfers.snapshot(), 'Main'),
+    );
     const destination = database('invalid-identity-destination');
     const transfers = new InventoryTransferService(destination);
     new InventoryService(destination).createItem({
       name: 'Destination survives',
       kind: 'consumable',
+      locationId: Number(new InventoryService(destination).listLocations()[0]!.id),
     });
     const before = transfers.snapshot();
     const epochBefore = new InventoryService(destination).inventoryEpoch();
@@ -157,22 +187,41 @@ describe('complete inventory recovery', () => {
     source.db.close();
     destination.close();
   });
-
   it('preserves deleted report anchors and identity high-water marks in a new recovery workbook', async () => {
     const source = openDatabase(':memory:');
     const sourceInventory = new InventoryService(source);
     const sourceTransfers = new InventoryTransferService(source);
-    const removed = sourceInventory.createItem({ name: 'Deleted name', kind: 'consumable' });
-    sourceInventory.addStock(removed.id, 1);
-    const survivor = sourceInventory.createItem({ name: 'Surviving loan', kind: 'non_consumable' });
+    const removed = sourceInventory.createItem({
+      name: 'Deleted name',
+      kind: 'consumable',
+      locationId: Number(sourceInventory.listLocations()[0]!.id),
+    });
+    sourceInventory.addStock(removed.id, 1, '', Number(sourceInventory.listLocations()[0]!.id));
+    const survivor = sourceInventory.createItem({
+      name: 'Surviving loan',
+      kind: 'non_consumable',
+      locationId: Number(sourceInventory.listLocations()[0]!.id),
+    });
     const borrower = sourceInventory.createBorrower({
       playaName: 'removed-borrower',
       fullName: 'Removed Borrower',
       campDepartment: '',
     });
-    sourceInventory.addStock(survivor.id, 4);
-    const checkoutId = sourceInventory.checkout(survivor.id, borrower.id, 1);
-    sourceInventory.returnCheckout(checkoutId, 1, 0);
+    sourceInventory.addStock(survivor.id, 4, '', Number(sourceInventory.listLocations()[0]!.id));
+    const checkoutId = sourceInventory.checkout(
+      survivor.id,
+      borrower.id,
+      1,
+      '',
+      Number(sourceInventory.listLocations()[0]!.id),
+    );
+    sourceInventory.returnCheckout(
+      checkoutId,
+      1,
+      0,
+      '',
+      Number(sourceInventory.listLocations()[0]!.id),
+    );
     source
       .prepare('UPDATE inventory_baselines SET quantity=4,through_event_id=? WHERE item_id=?')
       .run(checkoutId, survivor.id);
@@ -195,17 +244,14 @@ describe('complete inventory recovery', () => {
       itemId: removed.id,
       expectedStockRevision: sourceInventory.listItems('Deleted name', true)[0]!.stockRevision,
       expectedName: removed.name,
-      expectedLocationId: removed.locationId,
     });
-
     const snapshot = sourceTransfers.snapshot();
     const survivorSnapshot = snapshot.items.find((item) => item.id === survivor.id)!;
     expect(survivorSnapshot.baselineThroughEventId).toBe(checkoutId);
     expect(snapshot.events.some((event) => event.id === checkoutId)).toBe(false);
     expect(snapshot.borrowers.some((entry) => entry.playaName === 'removed-borrower')).toBe(false);
     expect(snapshot.items.some((item) => item.id === removed.id)).toBe(false);
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(snapshot));
-
+    const payload = await parseRecoveryWorkbook(await exportWorkbook(snapshot, 'Main'));
     const destination = openDatabase(':memory:');
     const destinationTransfers = new InventoryTransferService(destination);
     destinationTransfers.replaceWithRecovery(payload);
@@ -216,10 +262,18 @@ describe('complete inventory recovery', () => {
       baselineThroughEventId: checkoutId,
       available: 4,
     });
-
     const recoveredInventory = new InventoryService(destination);
-    const nextItem = recoveredInventory.createItem({ name: 'After recovery', kind: 'consumable' });
-    recoveredInventory.addStock(nextItem.id, 1);
+    const nextItem = recoveredInventory.createItem({
+      name: 'After recovery',
+      kind: 'consumable',
+      locationId: Number(recoveredInventory.listLocations()[0]!.id),
+    });
+    recoveredInventory.addStock(
+      nextItem.id,
+      1,
+      '',
+      Number(recoveredInventory.listLocations()[0]!.id),
+    );
     const newEvent = recoveredInventory.listLedger()[0]!;
     expect(nextItem.id).toBeGreaterThan(removed.id);
     expect(newEvent.id).toBeGreaterThanOrEqual(snapshot.identityHighWater.nextEventId);
@@ -227,13 +281,11 @@ describe('complete inventory recovery', () => {
     source.close();
     destination.close();
   });
-
   it('round-trips business state into a clean destination and remains operable', async () => {
     const source = sourceFixture();
     const expected = source.transfers.snapshot();
-    const exported = await exportWorkbook(expected);
+    const exported = await exportWorkbook(expected, 'Main');
     const payload = await parseRecoveryWorkbook(exported);
-
     const destination = database('recovery-destination');
     createApp({
       database: destination,
@@ -245,8 +297,14 @@ describe('complete inventory recovery', () => {
     const disposable = destinationInventory.createItem({
       name: 'Destination old data',
       kind: 'consumable',
+      locationId: Number(destinationInventory.listLocations()[0]!.id),
     });
-    destinationInventory.addStock(disposable.id, 99);
+    destinationInventory.addStock(
+      disposable.id,
+      99,
+      '',
+      Number(destinationInventory.listLocations()[0]!.id),
+    );
     const credentialsBefore = destination
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
@@ -266,7 +324,6 @@ describe('complete inventory recovery', () => {
     const epochBefore = destination
       .prepare('SELECT ledger_epoch FROM inventory_replacement_guard')
       .get();
-
     destinationTransfers.replaceWithRecovery(payload);
     expectRecoveredState(destinationTransfers.snapshot(), expected);
     expect(destinationTransfers.snapshot().items.find((item) => item.name === 'Tent')!.id).not.toBe(
@@ -275,7 +332,12 @@ describe('complete inventory recovery', () => {
     expect(
       destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
     ).toEqual({
-      ledger_epoch: (epochBefore as { ledger_epoch: number }).ledger_epoch + 1,
+      ledger_epoch:
+        (
+          epochBefore as {
+            ledger_epoch: number;
+          }
+        ).ledger_epoch + 1,
     });
     expect(destination.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
       count: 0,
@@ -308,27 +370,41 @@ describe('complete inventory recovery', () => {
     expect(destination.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
       count: 0,
     });
-
     const water = destinationInventory.listItems('Water', true)[0]!;
-    destinationInventory.issue(water.id, 1, 'future issue');
+    destinationInventory.issue(
+      water.id,
+      1,
+      'future issue',
+      Number(destinationInventory.listLocations()[0]!.id),
+    );
     const loan = destinationInventory.listLoans().find((entry) => entry.itemName === 'Tent')!;
     foundReturned(destinationInventory, loan.checkoutId, 1);
     const restoredLoan = destinationInventory
       .listLoans()
       .find((entry) => entry.checkoutId === loan.checkoutId)!;
-    destinationInventory.returnCheckout(restoredLoan.checkoutId, restoredLoan.outstanding, 0);
+    destinationInventory.returnCheckout(
+      restoredLoan.checkoutId,
+      restoredLoan.outstanding,
+      0,
+      '',
+      Number(destinationInventory.listLocations()[0]!.id),
+    );
     const tent = destinationInventory.listItems('Tent', true)[0]!;
-    destinationInventory.resolveDamage(tent.id, 1, true, 'repaired after recovery');
+    destinationInventory.resolveDamage(
+      tent.id,
+      1,
+      true,
+      'repaired after recovery',
+      Number(destinationInventory.listLocations()[0]!.id),
+    );
     expect(destinationInventory.listLoans()).toEqual([]);
     expect(destinationInventory.listItems('Water', true)[0]!.available).toBe(89);
     source.db.close();
     destination.close();
   });
-
   it('ignores reset edits and rejects incomplete or inconsistent recovery payloads', async () => {
     const source = sourceFixture();
-    const original = await exportWorkbook(source.transfers.snapshot());
-
+    const original = await exportWorkbook(source.transfers.snapshot(), 'Main');
     const resetEdited = await workbook(original);
     const resetItems = resetEdited.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
     const headers = resetItems.getRow(1).values as string[];
@@ -337,12 +413,11 @@ describe('complete inventory recovery', () => {
     const waterRow = resetItems
       .getRows(2, resetItems.rowCount - 1)!
       .find((row) => row.getCell(nameColumn).value === 'Water')!;
-    waterRow.getCell(totalColumn).value = 999_999;
+    waterRow.getCell(totalColumn).value = 999999;
     const editedBytes = await save(resetEdited);
     const resetPayload = await parseResetWorkbook(editedBytes);
-    expect(resetPayload.items.find((item) => item.name === 'Water')!.total).toBe(999_999);
+    expect(resetPayload.items.find((item) => item.name === 'Water')!.total).toBe(999999);
     expect(await parseRecoveryWorkbook(editedBytes)).toEqual(await parseRecoveryWorkbook(original));
-
     const missingSheet = await workbook(original);
     missingSheet.removeWorksheet(
       missingSheet.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!.id,
@@ -350,14 +425,12 @@ describe('complete inventory recovery', () => {
     await expect(parseRecoveryWorkbook(await save(missingSheet))).rejects.toThrow(
       /Missing required sheet/,
     );
-
     const missingCode = await workbook(original);
     missingCode
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
       .getRow(2)
       .getCell(1).value = null;
     await expect(parseRecoveryWorkbook(await save(missingCode))).rejects.toThrow(/Item ID/);
-
     const brokenBaseline = await workbook(original);
     brokenBaseline
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!
@@ -365,17 +438,15 @@ describe('complete inventory recovery', () => {
       .getCell(9).value = 101;
     const independentBaseline = await parseRecoveryWorkbook(await save(brokenBaseline));
     expect(independentBaseline.items[0]).toMatchObject({ startingStock: 101 });
-
     const brokenReference = await workbook(original);
     const eventSheet = brokenReference.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
     const checkoutRow = eventSheet
       .getRows(2, eventSheet.rowCount - 1)!
       .find((row) => row.getCell(2).value === 'returned_damaged')!;
-    checkoutRow.getCell(6).value = 999_999;
+    checkoutRow.getCell(6).value = 999999;
     await expect(parseRecoveryWorkbook(await save(brokenReference))).rejects.toThrow(
       /missing or mismatched checkout/,
     );
-
     const brokenChronology = await workbook(original);
     brokenChronology
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!
@@ -386,10 +457,9 @@ describe('complete inventory recovery', () => {
     );
     source.db.close();
   });
-
   it('rejects missing and inconsistent authoritative state without changing the destination', async () => {
     const source = sourceFixture();
-    const original = await exportWorkbook(source.transfers.snapshot());
+    const original = await exportWorkbook(source.transfers.snapshot(), 'Main');
     const destination = database('invalid-stored-state');
     const transfers = new InventoryTransferService(destination);
     const before = transfers.snapshot();
@@ -433,16 +503,15 @@ describe('complete inventory recovery', () => {
     source.db.close();
     destination.close();
   });
-
   it('rejects active or archived recovered items at archived locations before replacing inventory', async () => {
     const source = sourceFixture();
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
-
+    const payload = await parseRecoveryWorkbook(
+      await exportWorkbook(source.transfers.snapshot(), 'Main'),
+    );
     const destination = database('active-item-archived-location');
     const transfers = new InventoryTransferService(destination);
     const before = transfers.snapshot();
     const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
-
     for (const archived of [false, true]) {
       const invalid = structuredClone(payload);
       const item = invalid.items.find((entry) => entry.name === 'Old stock')!;
@@ -459,20 +528,17 @@ describe('complete inventory recovery', () => {
     source.db.close();
     destination.close();
   });
-
   it('rejects an unsafe combined recovery reset total before replacing inventory', async () => {
     const source = sourceFixture();
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
+    const payload = await parseRecoveryWorkbook(
+      await exportWorkbook(source.transfers.snapshot(), 'Main'),
+    );
     payload.items.find((item) => item.id === source.tentId)!.available = Number.MAX_SAFE_INTEGER;
-
     const destination = database('unsafe-recovery-reset-total');
     const transfers = new InventoryTransferService(destination);
     const before = transfers.snapshot();
     const epoch = destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get();
-
-    expect(() => transfers.replaceWithRecovery(payload)).toThrow(
-      /reset total exceeds safe integer/,
-    );
+    expect(() => transfers.replaceWithRecovery(payload)).toThrow(/total exceeds safe integer/);
     expect(transfers.snapshot()).toEqual(before);
     expect(
       destination.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get(),
@@ -480,15 +546,31 @@ describe('complete inventory recovery', () => {
     source.db.close();
     destination.close();
   });
-
   it('rolls back the destination when recovery commit fails', async () => {
     const source = sourceFixture();
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(source.transfers.snapshot()));
+    const payload = await parseRecoveryWorkbook(
+      await exportWorkbook(source.transfers.snapshot(), 'Main'),
+    );
     const destination = database('recovery-rollback');
     const inventory = new InventoryService(destination);
     const transfers = new InventoryTransferService(destination);
-    const old = inventory.createItem({ name: 'Keep me', kind: 'consumable' });
-    inventory.addStock(old.id, 3);
+    const old = inventory.createItem({
+      name: 'Keep me',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      old.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     destination
       .prepare(
         `INSERT INTO idempotency_receipts(
@@ -505,7 +587,6 @@ describe('complete inventory recovery', () => {
     };
     destination.exec(`CREATE TRIGGER reject_recovered_event BEFORE INSERT ON inventory_events
       BEGIN SELECT RAISE(ABORT, 'forced recovery failure'); END;`);
-
     expect(() => transfers.replaceWithRecovery(payload)).toThrow(/forced recovery failure/);
     expect(transfers.snapshot()).toEqual(before);
     expect({
@@ -518,14 +599,19 @@ describe('complete inventory recovery', () => {
     destination.close();
   });
 });
-
 it('round-trips mixed ordinary and found returns and rejects malformed recoveries atomically', async () => {
   const source = sourceFixture();
   const loan = source.inventory.listLoans()[0]!;
-  source.inventory.returnCheckout(loan.checkoutId, 1, 0, 'ordinary');
+  source.inventory.returnCheckout(
+    loan.checkoutId,
+    1,
+    0,
+    'ordinary',
+    Number(source.inventory.listLocations()[0]!.id),
+  );
   foundReturned(source.inventory, loan.checkoutId, 1, 'found separately');
   const snapshot = source.transfers.snapshot();
-  const bytes = await exportWorkbook(snapshot);
+  const bytes = await exportWorkbook(snapshot, 'Main');
   const payload = await parseRecoveryWorkbook(bytes);
   const destination = database('mixed-found-returned');
   const transfers = new InventoryTransferService(destination);
@@ -575,7 +661,6 @@ it('round-trips mixed ordinary and found returns and rejects malformed recoverie
   source.db.close();
   destination.close();
 });
-
 it('round-trips damaged lost recovery and rejects an over-recovery workbook', async () => {
   const source = sourceFixture();
   const loan = source.inventory.listLoans()[0]!;
@@ -589,14 +674,23 @@ it('round-trips damaged lost recovery and rejects an over-recovery workbook', as
         items: [
           {
             itemId: loan.itemId,
-            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken' }],
+            lostCredit: [
+              {
+                quantity: 1,
+                condition: 'damaged',
+                note: 'found broken',
+                locationId: source.inventory
+                  .listItems('', true)
+                  .find((item) => item.id === loan.itemId)!.balances[0]!.locationId,
+              },
+            ],
           },
         ],
       },
     ),
   ).toMatchObject({ outcome: 'committed' });
   const snapshot = source.transfers.snapshot();
-  const bytes = await exportWorkbook(snapshot);
+  const bytes = await exportWorkbook(snapshot, 'Main');
   const payload = await parseRecoveryWorkbook(bytes);
   const destination = database('damaged-found-returned');
   const transfers = new InventoryTransferService(destination);
@@ -606,7 +700,6 @@ it('round-trips damaged lost recovery and rejects an over-recovery workbook', as
     outstanding: 2,
     lost: 0,
   });
-
   const independentlyEditedAudit = structuredClone(payload);
   independentlyEditedAudit.events.find(
     (event) => event.kind === 'found_returned_damaged',
@@ -618,7 +711,6 @@ it('round-trips damaged lost recovery and rejects an over-recovery workbook', as
   expect(transferBusinessState(transfers.snapshot()).loans).toEqual(
     transferBusinessState(snapshot).loans,
   );
-
   const editedWorkbook = await workbook(bytes);
   const events = editedWorkbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
   events.eachRow((row) => {

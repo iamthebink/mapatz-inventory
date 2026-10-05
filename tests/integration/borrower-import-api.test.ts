@@ -21,6 +21,15 @@ function fixture() {
   const db = openDatabase(':memory:');
   databases.push(db);
   const service = new InventoryService(db);
+  const location = service.listLocations().find((l) => l.code === 'monster')!;
+  service.saveInventoryLocation({
+    key: 'fixture-default',
+    ledgerEpoch: 1,
+    locationId: location.id,
+    code: location.code,
+    name: location.name,
+    isDefault: true,
+  });
   let now = Date.now();
   const agent = request.agent(
     createApp({
@@ -40,7 +49,6 @@ function fixture() {
     },
   };
 }
-
 describe('admin borrower workbook transport', () => {
   it('denies operators and expired admins before preview or commit', async () => {
     const { agent, service, expire } = fixture();
@@ -68,9 +76,33 @@ describe('admin borrower workbook transport', () => {
       fullName: 'Removed',
       campDepartment: '',
     });
-    const item = service.createItem({ name: 'Tent', kind: 'non_consumable' });
-    service.addStock(item.id, 5);
-    service.checkout(item.id, borrower.id, 2);
+    const item = service.createItem({
+      name: 'Tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    });
+    service.addStock(
+      item.id,
+      5,
+      '',
+      Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    );
+    service.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    );
     await agent.post('/api/session/role').send({ role: 'admin', password: 'secret' });
     const bytes = await workbook();
     const post = (operation: string, data = bytes, mode = 'replace') =>
@@ -88,7 +120,16 @@ describe('admin borrower workbook transport', () => {
       .set('x-borrower-import-confirmation', 'a'.repeat(64))
       .expect(200)
       .expect(({ body }) => expect(body.outcome).toBe('confirmation_required'));
-    service.checkout(item.id, borrower.id, 1);
+    service.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    );
     const stale = (
       await post('commit')
         .set('x-borrower-import-confirmation', preview.confirmationToken)

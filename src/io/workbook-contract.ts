@@ -1,11 +1,11 @@
 export const WORKBOOK_CONTRACT = {
-  version: 7,
+  version: 8,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   filename: 'mapatz-inventory.xlsx',
   sheets: {
     resetLocations: {
       name: 'Reset Locations',
-      columns: ['Name', 'Archived'],
+      columns: ['Name', 'Archived', 'Default'],
     },
     resetItems: {
       name: 'Reset Items',
@@ -13,7 +13,7 @@ export const WORKBOOK_CONTRACT = {
     },
     recoveryLocations: {
       name: 'Recovery Locations',
-      columns: ['Name', 'Archived'],
+      columns: ['Name', 'Archived', 'Default'],
     },
     recoveryItems: {
       name: 'Recovery Items',
@@ -80,6 +80,8 @@ export const WORKBOOK_CONTRACT = {
         'Related Event ID',
         'Note',
         'Created At',
+        'Location Name',
+        'Location Code',
       ],
     },
     recoveryRadioFleet: {

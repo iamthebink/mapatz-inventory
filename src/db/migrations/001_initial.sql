@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS items (
   name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
   kind TEXT NOT NULL CHECK (kind IN ('consumable','non_consumable')),
   lot_size INTEGER CHECK (lot_size IS NULL OR lot_size > 0),
-  location_id INTEGER REFERENCES locations(id),
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

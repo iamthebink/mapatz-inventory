@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 import { openDatabase, transaction, type InventoryDatabase } from '../../src/db/database.js';
 import { InventoryTransferService } from '../../src/domain/import-export.js';
 import { InventoryService } from '../../src/domain/inventory.js';
-
 function receipt(db: InventoryDatabase, key: string): void {
   db.prepare(
     `INSERT INTO idempotency_receipts(
@@ -15,7 +14,6 @@ function receipt(db: InventoryDatabase, key: string): void {
     ) VALUES (?,?,?,?,?,?,?,?)`,
   ).run(key, 'borrower_operation', 1, 1, 'hash', 'committed', 1, '{}');
 }
-
 function interleaveAfterRead(
   db: InventoryDatabase,
   matches: (sql: string) => boolean,
@@ -52,7 +50,6 @@ function interleaveAfterRead(
     },
   }) as InventoryDatabase;
 }
-
 describe('borrower workflow persistence foundation', () => {
   it('normalizes search centrally and separates deterministic exact archived matches', () => {
     const db = openDatabase(':memory:');
@@ -110,7 +107,6 @@ describe('borrower workflow persistence foundation', () => {
       archivedSubstring,
     ])
       inventory.archiveBorrower(borrower.id, true);
-
     expect(normalizeBorrowerText('  ＡLICE\t Able  ')).toBe('alice able');
     expect(inventory.searchBorrowers('order').active).toEqual([
       activePlayaNameFirst,
@@ -135,7 +131,6 @@ describe('borrower workflow persistence foundation', () => {
     expect(db.isTransaction).toBe(false);
     db.close();
   });
-
   it('keeps search epoch and borrower rows on one generation when a writer commits between reads', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-search-snapshot-'));
     const filename = join(directory, 'inventory.sqlite');
@@ -162,9 +157,7 @@ describe('borrower workflow persistence foundation', () => {
             .run('new-match', 'New Match', 'individual');
         }),
     );
-
     const snapshot = new InventoryService(interleaved).searchBorrowers('match');
-
     expect(snapshot).toEqual({ ledgerEpoch: 1, active: [original], archivedMatches: [] });
     expect(writer.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get()).toEqual({
       ledger_epoch: 2,
@@ -177,7 +170,6 @@ describe('borrower workflow persistence foundation', () => {
     writer.close();
     rmSync(directory, { recursive: true, force: true });
   });
-
   it('keeps desk identity, balances, watermark, and epoch on one generation across replacement', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-desk-snapshot-'));
     const filename = join(directory, 'inventory.sqlite');
@@ -189,20 +181,24 @@ describe('borrower workflow persistence foundation', () => {
       fullName: 'Old Borrower',
       campDepartment: '',
     });
-    const item = setup.createItem({ name: 'Old Item', kind: 'non_consumable' });
-    setup.addStock(item.id, 2);
-    setup.checkout(item.id, borrower.id, 1);
+    const item = setup.createItem({
+      name: 'Old Item',
+      kind: 'non_consumable',
+      locationId: Number(setup.listLocations()[0]!.id),
+    });
+    setup.addStock(item.id, 2, '', Number(setup.listLocations()[0]!.id));
+    setup.checkout(item.id, borrower.id, 1, '', Number(setup.listLocations()[0]!.id));
     const interleaved = interleaveAfterRead(
       reader,
       (sql) => sql.includes('SELECT * FROM borrowers WHERE id=?'),
       () =>
         new InventoryTransferService(writer).replaceWithReset({
-          locations: [],
+          locations: [{ name: 'Main', archived: false, isDefault: false }],
           items: [
             {
               name: 'Replacement Item',
               kind: 'non_consumable',
-              location: null,
+              location: 'Main',
               aliases: [],
               lotSize: null,
               archived: false,
@@ -211,15 +207,17 @@ describe('borrower workflow persistence foundation', () => {
           ],
         }),
     );
-
     const snapshot = new InventoryService(interleaved).getBorrowerDeskSnapshot(borrower.id);
-
     expect(snapshot).toMatchObject({
       borrower,
       inventory: [expect.objectContaining({ id: item.id, available: 1 })],
       holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
       stateRevision: 2,
       ledgerEpoch: 1,
+      locations: expect.arrayContaining([
+        expect.objectContaining({ id: 1, code: 'monster', isDefault: false }),
+      ]),
+      defaultLocationId: null,
     });
     expect(writer.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get()).toEqual({
       ledger_epoch: 2,
@@ -232,7 +230,6 @@ describe('borrower workflow persistence foundation', () => {
     writer.close();
     rmSync(directory, { recursive: true, force: true });
   });
-
   it('assembles one name-ordered desk snapshot with returnable, lost-only, and archived truth', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
@@ -246,35 +243,165 @@ describe('borrower workflow persistence foundation', () => {
       fullName: 'Other',
       campDepartment: 'מחנה אחר',
     });
-    const first = inventory.createItem({ name: 'First', kind: 'non_consumable' });
-    const lostOnly = inventory.createItem({ name: 'Lost only', kind: 'non_consumable' });
-    const returned = inventory.createItem({ name: 'Returned', kind: 'non_consumable' });
-    const consumable = inventory.createItem({ name: 'Consumable', kind: 'consumable' });
-    inventory.createItem({ name: 'Excluded camp item', kind: 'camp_equipment' });
-    for (const item of [first, lostOnly, returned]) inventory.addStock(item.id, 10);
-
-    const firstCheckout = inventory.checkout(first.id, borrower.id, 5);
-    inventory.returnCheckout(firstCheckout, 1, 1);
+    const first = inventory.createItem({
+      name: 'First',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    const lostOnly = inventory.createItem({
+      name: 'Lost only',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    const returned = inventory.createItem({
+      name: 'Returned',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    const consumable = inventory.createItem({
+      name: 'Consumable',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    const camp = inventory.createItem({
+      name: 'Excluded camp item',
+      kind: 'camp_equipment',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    for (const item of [first, lostOnly, returned])
+      inventory.addStock(
+        item.id,
+        10,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+    const firstCheckout = inventory.checkout(
+      first.id,
+      borrower.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      firstCheckout,
+      1,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(firstCheckout, 2, true);
     foundReturned(inventory, firstCheckout, 1);
-    const secondFirstCheckout = inventory.checkout(first.id, borrower.id, 3);
-    inventory.returnCheckout(secondFirstCheckout, 1, 0);
+    const secondFirstCheckout = inventory.checkout(
+      first.id,
+      borrower.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      secondFirstCheckout,
+      1,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(secondFirstCheckout, 1, true);
-    const lostCheckout = inventory.checkout(lostOnly.id, borrower.id, 2);
+    const lostCheckout = inventory.checkout(
+      lostOnly.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(lostCheckout, 2, true);
-    const returnedCheckout = inventory.checkout(returned.id, borrower.id, 1);
-    inventory.returnCheckout(returnedCheckout, 1, 0);
-    inventory.checkout(first.id, other.id, 1);
+    const returnedCheckout = inventory.checkout(
+      returned.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      returnedCheckout,
+      1,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.checkout(
+      first.id,
+      other.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     db.prepare('UPDATE items SET archived=1 WHERE id=?').run(lostOnly.id);
-    const unrelated = inventory.createItem({ name: 'Watermark', kind: 'consumable' });
-    const watermark = inventory.addStock(unrelated.id, 1);
-
+    const unrelated = inventory.createItem({
+      name: 'Watermark',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    const watermark = inventory.addStock(
+      unrelated.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const snapshot = inventory.getBorrowerDeskSnapshot(borrower.id);
     expect(snapshot.borrower).toEqual(borrower);
     expect(
       snapshot.inventory.map(({ id, kind, selectable }) => ({ id, kind, selectable })),
     ).toEqual([
       { id: consumable.id, kind: 'consumable', selectable: true },
+      { id: camp.id, kind: 'camp_equipment', selectable: false },
       { id: first.id, kind: 'non_consumable', selectable: true },
       { id: lostOnly.id, kind: 'non_consumable', selectable: false },
       { id: returned.id, kind: 'non_consumable', selectable: true },
@@ -288,7 +415,7 @@ describe('borrower workflow persistence foundation', () => {
     expect(snapshot.stateRevision).toBe(watermark);
     expect(snapshot.ledgerEpoch).toBe(1);
     expect(db.isTransaction).toBe(false);
-    expect(() => inventory.getBorrowerDeskSnapshot(999_999)).toThrow(
+    expect(() => inventory.getBorrowerDeskSnapshot(999999)).toThrow(
       expect.objectContaining({ code: 'not_found' }),
     );
     inventory.archiveBorrower(borrower.id, false);
@@ -299,7 +426,6 @@ describe('borrower workflow persistence foundation', () => {
     expect(db.isTransaction).toBe(false);
     db.close();
   });
-
   it('enforces receipt command and outcome checks', () => {
     const db = openDatabase(':memory:');
     receipt(db, 'valid');
@@ -323,16 +449,32 @@ describe('borrower workflow persistence foundation', () => {
     ).toThrow();
     db.close();
   });
-
   it('refuses replacement when the ledger-epoch singleton is missing', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Preserved', kind: 'consumable' });
-    inventory.addStock(item.id, 2);
+    const item = inventory.createItem({
+      name: 'Preserved',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     db.prepare('DELETE FROM inventory_replacement_guard').run();
-
     expect(() =>
-      new InventoryTransferService(db).replaceWithReset({ locations: [], items: [] }),
+      new InventoryTransferService(db).replaceWithReset({
+        locations: [{ name: 'Main', archived: false, isDefault: false }],
+        items: [],
+      }),
     ).toThrow(expect.objectContaining({ code: 'internal_error' }));
     expect(inventory.listItems('', true)).toEqual([expect.objectContaining({ available: 2 })]);
     expect(db.isTransaction).toBe(false);

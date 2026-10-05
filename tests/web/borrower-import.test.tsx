@@ -28,6 +28,8 @@ const preview = {
       loans: [{ checkoutId: 1, itemId: 1, itemName: 'אוהל', quantity: 3 }],
     },
   ],
+  returnLocationId: 1,
+  locations: [{ id: 1, name: '\u05DE\u05E4\u05DC\u05E6\u05EA' }],
 };
 function setup() {
   const onClose = vi.fn();
@@ -77,6 +79,8 @@ describe('borrower import dialog', () => {
       affected: [
         { ...preview.affected[0]!, loans: [{ ...preview.affected[0]!.loans[0]!, quantity: 4 }] },
       ],
+      returnLocationId: 1,
+      locations: [{ id: 1, name: '\u05DE\u05E4\u05DC\u05E6\u05EA' }],
     };
     vi.mocked(commitBorrowerImport)
       .mockResolvedValueOnce({ outcome: 'confirmation_required', preview: changed })

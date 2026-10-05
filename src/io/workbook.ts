@@ -1,6 +1,5 @@
 import type { BorrowerImportRow } from '../contracts/borrower-import.js';
 import { borrowerIdentity, trimBorrowerProfile } from '../domain/borrower-profile.js';
-import { normalizeItemName } from '../domain/item-name.js';
 import ExcelJS, { type CellValue, type Worksheet } from 'exceljs';
 import {
   consumablesUsageReport,
@@ -11,6 +10,7 @@ import {
   type TransferLocation,
   unresolvedDamageReport,
   validateRecoveryPayload,
+  validateResetPayload,
 } from '../domain/import-export.js';
 import { DomainError, type EventKind, type ItemKind } from '../domain/types.js';
 import { RADIO_TEXT_MAX_LENGTH } from '../domain/radios.js';
@@ -34,19 +34,45 @@ function addSheet(workbook: ExcelJS.Workbook, key: WorkbookSheetKey, rows: Primi
   });
 }
 
-export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promise<Buffer> {
+export async function exportWorkbook(
+  snapshot: InventoryTransferSnapshot,
+  resetAllocationLocation?: string,
+): Promise<Buffer> {
+  const needsAllocation = snapshot.items.some((i) => i.borrowed > 0 || i.lost > 0);
+  if (
+    needsAllocation &&
+    !snapshot.locations.some((l) => l.name === resetAllocationLocation && !l.archived)
+  )
+    importError('Choose an active next-cycle reset allocation destination for borrowed/lost units');
+  const resetRows = snapshot.items.map((item) => ({
+    ...item,
+    resetTotal: item.available + item.damaged,
+  }));
+  for (const item of new Map(snapshot.items.map((item) => [item.id, item])).values()) {
+    if (!item.borrowed && !item.lost) continue;
+    const placement = resetRows.find(
+      (row) => row.id === item.id && row.location === resetAllocationLocation,
+    );
+    if (placement) placement.resetTotal += item.borrowed + item.lost;
+    else
+      resetRows.push({
+        ...item,
+        location: resetAllocationLocation!,
+        resetTotal: item.borrowed + item.lost,
+      });
+  }
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Mapatz Inventory';
   workbook.company = 'Mapatz';
   addSheet(
     workbook,
     'resetLocations',
-    snapshot.locations.map((location) => [location.name, location.archived]),
+    snapshot.locations.map((location) => [location.name, location.archived, location.isDefault]),
   );
   addSheet(
     workbook,
     'resetItems',
-    snapshot.items.map((item) => [
+    resetRows.map((item) => [
       item.name,
       item.kind,
       item.location,
@@ -59,7 +85,7 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
   addSheet(
     workbook,
     'recoveryLocations',
-    snapshot.locations.map((location) => [location.name, location.archived]),
+    snapshot.locations.map((location) => [location.name, location.archived, location.isDefault]),
   );
   addSheet(
     workbook,
@@ -129,6 +155,8 @@ export async function exportWorkbook(snapshot: InventoryTransferSnapshot): Promi
       event.relatedEventId,
       event.note,
       event.createdAt,
+      event.locationName,
+      event.locationCode,
     ]),
   );
   addSheet(workbook, 'recoveryRadioFleet', [[snapshot.radioCount]]);
@@ -313,9 +341,10 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
   }
   const locationSheet = requiredSheet(workbook, 'resetLocations');
   const itemSheet = requiredSheet(workbook, 'resetItems');
-  const locations: TransferLocation[] = dataRows(locationSheet, 2).map((row, index) => ({
+  const locations: TransferLocation[] = dataRows(locationSheet, 3).map((row, index) => ({
     name: requiredText(row[0], `Reset Locations row ${index + 2} Name`),
     archived: optionalBoolean(row[1], `Reset Locations row ${index + 2} Archived`),
+    isDefault: optionalBoolean(row[2], `Reset Locations row ${index + 2} Default`),
   }));
   const locationNames = new Map<string, TransferLocation>();
   for (const location of locations) {
@@ -325,7 +354,6 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
     locationNames.set(key, location);
   }
   const rawItems = dataRows(itemSheet, 7);
-  const usedNames = new Set<string>();
   const items: ResetItem[] = [];
   rawItems.forEach((row, index) => {
     const rowNumber = index + 2;
@@ -349,9 +377,6 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
     if (kind !== 'consumable' && lotSize != null)
       return importError(`Reset Items row ${rowNumber} Lot Size is only valid for consumables`);
     const name = requiredText(row[0], `Reset Items row ${rowNumber} Name`);
-    const nameKey = normalizeItemName(name);
-    if (usedNames.has(nameKey)) return importError(`Reset Items contains duplicate Name "${name}"`);
-    usedNames.add(nameKey);
     items.push({
       name,
       kind,
@@ -362,7 +387,7 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
       total: integer(row[6], `Reset Items row ${rowNumber} Total`, 0),
     });
   });
-  return { locations, items };
+  return validateResetPayload({ locations, items });
 }
 
 const eventKinds = new Set<EventKind>([
@@ -377,6 +402,10 @@ const eventKinds = new Set<EventKind>([
   'found_returned_damaged',
   'repaired',
   'written_off',
+  'transferred_out',
+  'transferred_in',
+  'damaged_transferred_out',
+  'damaged_transferred_in',
 ]);
 
 export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPayload> {
@@ -412,9 +441,10 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     lost: requiredBoolean(row[3], `Recovery Radios row ${index + 2} Lost`),
   }));
 
-  const locations = dataRows(locationSheet, 2).map((row, index) => ({
+  const locations = dataRows(locationSheet, 3).map((row, index) => ({
     name: requiredText(row[0], `Recovery Locations row ${index + 2} Name`),
     archived: requiredBoolean(row[1], `Recovery Locations row ${index + 2} Archived`),
+    isDefault: requiredBoolean(row[2], `Recovery Locations row ${index + 2} Default`),
   }));
   const revisionRows = dataRows(stateSheet, 5);
   if (revisionRows.length !== 1)
@@ -473,7 +503,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
       createdAt: timestamp(row[6], `Recovery Borrowers row ${rowNumber} Created At`),
     };
   });
-  const events = dataRows(eventSheet, 8).map((row, index) => {
+  const events = dataRows(eventSheet, 10).map((row, index) => {
     const rowNumber = index + 2;
     const kind = requiredText(row[1], `Recovery Events row ${rowNumber} Kind`) as EventKind;
     if (!eventKinds.has(kind))
@@ -492,6 +522,8 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
       ),
       note: plainText(row[6], `Recovery Events row ${rowNumber} Note`, 500),
       createdAt: timestamp(row[7], `Recovery Events row ${rowNumber} Created At`),
+      locationName: optionalText(row[8], `Recovery Events row ${rowNumber} Location Name`),
+      locationCode: optionalText(row[9], `Recovery Events row ${rowNumber} Location Code`),
     };
   });
   const loans = dataRows(loanSheet, 7).map((row, index) => {

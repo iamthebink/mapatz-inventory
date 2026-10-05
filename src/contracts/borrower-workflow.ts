@@ -3,17 +3,20 @@ import type { Borrower, Item } from '../domain/types.js';
 export const BORROWER_WORKFLOW_CONTRACT_VERSION = 1 as const;
 
 export type BorrowPart = {
+  locationId: number;
   quantity: number;
   note: string;
 };
 
 export type ReturnPart = {
+  locationId: number;
   usable: number;
   damaged: number;
   note: string;
 };
 
 export type LostCreditPart = {
+  locationId: number;
   quantity: number;
   condition: 'usable' | 'damaged';
   note: string;
@@ -59,6 +62,14 @@ export type BorrowerSearchSnapshot = {
 
 export type BorrowerDeskSnapshot = {
   borrower: Borrower;
+  locations: Array<{
+    id: number;
+    code: string;
+    name: string;
+    archived: boolean;
+    isDefault: boolean;
+  }>;
+  defaultLocationId: number | null;
   inventory: Array<Omit<Item, 'borrowed' | 'lost' | 'stockRevision'> & { selectable: boolean }>;
   holdings: Array<{
     itemId: number;
@@ -70,6 +81,7 @@ export type BorrowerDeskSnapshot = {
 };
 
 export type BorrowerOperationConflict =
+  | { scope: 'location'; code: 'invalid_location'; itemId: number; locationId: number }
   | { scope: 'borrower'; code: 'borrower_inactive'; borrowerId: number }
   | {
       scope: 'item';
@@ -78,6 +90,7 @@ export type BorrowerOperationConflict =
     }
   | {
       scope: 'borrow';
+      locationId: number;
       code: 'insufficient_stock';
       itemId: number;
       requested: number;
@@ -85,6 +98,7 @@ export type BorrowerOperationConflict =
     }
   | {
       scope: 'issue';
+      locationId: number;
       code: 'insufficient_stock';
       itemId: number;
       requested: number;

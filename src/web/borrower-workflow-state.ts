@@ -1,3 +1,7 @@
+import {
+  borrowerOperationConflicts,
+  sameConflictEvidence,
+} from '../contracts/borrower-operation-validation.js';
 import { isValidBorrowerProfile } from '../domain/borrower-profile.js';
 import {
   BORROWER_WORKFLOW_CONTRACT_VERSION,
@@ -154,7 +158,15 @@ export function isBorrowerDeskSnapshot(
 ): value is BorrowerDeskSnapshot {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['borrower', 'inventory', 'holdings', 'stateRevision', 'ledgerEpoch']) ||
+    !hasExactKeys(value, [
+      'borrower',
+      'inventory',
+      'holdings',
+      'stateRevision',
+      'ledgerEpoch',
+      'locations',
+      'defaultLocationId',
+    ]) ||
     !isBorrower(value.borrower)
   )
     return false;
@@ -162,6 +174,33 @@ export function isBorrowerDeskSnapshot(
   if (!isSafeNonNegative(value.stateRevision) || !isSafePositive(value.ledgerEpoch)) return false;
   if (!Array.isArray(value.inventory) || !Array.isArray(value.holdings)) return false;
 
+  if (
+    !Array.isArray(value.locations) ||
+    !value.locations.every(
+      (l) =>
+        isRecord(l) &&
+        hasExactKeys(l, ['id', 'name', 'code', 'archived', 'isDefault']) &&
+        isSafePositive(l.id) &&
+        typeof l.name === 'string' &&
+        typeof l.code === 'string' &&
+        l.archived === false &&
+        typeof l.isDefault === 'boolean',
+    )
+  )
+    return false;
+  if (!(
+    value.defaultLocationId === null ||
+    (isSafePositive(value.defaultLocationId) &&
+      value.locations.some((l) => l.id === value.defaultLocationId && l.isDefault))
+  ))
+    return false;
+  const locationIds = new Set(value.locations.map((location) => location.id));
+  if (
+    locationIds.size !== value.locations.length ||
+    value.locations.filter((location) => location.isDefault).length !==
+      (value.defaultLocationId === null ? 0 : 1)
+  )
+    return false;
   const itemIds = new Set<number>();
   const itemKinds = new Map<number, string>();
   for (const item of value.inventory) {
@@ -172,7 +211,7 @@ export function isBorrowerDeskSnapshot(
         'name',
         'kind',
         'lotSize',
-        'locationId',
+        'balances',
         'archived',
         'aliases',
         'available',
@@ -181,17 +220,34 @@ export function isBorrowerDeskSnapshot(
       ]) ||
       !isSafePositive(item.id) ||
       typeof item.name !== 'string' ||
-      !['non_consumable', 'consumable'].includes(String(item.kind)) ||
+      !['non_consumable', 'consumable', 'camp_equipment'].includes(String(item.kind)) ||
       !(item.lotSize === null || isSafePositive(item.lotSize)) ||
-      !(item.locationId === null || isSafePositive(item.locationId)) ||
+      !Array.isArray(item.balances) ||
+      !item.balances.every(
+        (p) =>
+          isRecord(p) &&
+          hasExactKeys(p, ['locationId', 'available', 'damaged']) &&
+          isSafePositive(p.locationId) &&
+          isSafeNonNegative(p.available) &&
+          isSafeNonNegative(p.damaged),
+      ) ||
       typeof item.archived !== 'boolean' ||
       !Array.isArray(item.aliases) ||
       !item.aliases.every((alias) => typeof alias === 'string') ||
       !isSafeNonNegative(item.available) ||
       !isSafeNonNegative(item.damaged) ||
       typeof item.selectable !== 'boolean' ||
-      item.selectable === item.archived ||
+      item.selectable !== (!item.archived && item.kind !== 'camp_equipment') ||
       itemIds.has(Number(item.id))
+    )
+      return false;
+    const balanceIds = new Set(item.balances.map((balance) => balance.locationId));
+    if (
+      item.balances.length === 0 ||
+      balanceIds.size !== item.balances.length ||
+      item.balances.some((balance) => !locationIds.has(balance.locationId)) ||
+      safeSum(item.balances.map((balance) => balance.available)) !== item.available ||
+      safeSum(item.balances.map((balance) => balance.damaged)) !== item.damaged
     )
       return false;
     itemIds.add(Number(item.id));
@@ -224,7 +280,13 @@ function cloneBorrower(borrower: Borrower): Borrower {
 function cloneSnapshot(snapshot: BorrowerDeskSnapshot): BorrowerDeskSnapshot {
   return {
     borrower: cloneBorrower(snapshot.borrower),
-    inventory: snapshot.inventory.map((item) => ({ ...item, aliases: [...item.aliases] })),
+    locations: snapshot.locations.map((l) => ({ ...l })),
+    defaultLocationId: snapshot.defaultLocationId,
+    inventory: snapshot.inventory.map((item) => ({
+      ...item,
+      aliases: [...item.aliases],
+      balances: item.balances.map((p) => ({ ...p })),
+    })),
     holdings: snapshot.holdings.map((holding) => ({ ...holding })),
     stateRevision: snapshot.stateRevision,
     ledgerEpoch: snapshot.ledgerEpoch,
@@ -282,11 +344,17 @@ function safeArithmetic(...values: number[]): number | null {
 }
 
 function validBorrow(part: BorrowPart): boolean {
-  return isSafePositive(part.quantity) && typeof part.note === 'string' && part.note.length <= 500;
+  return (
+    isSafePositive(part.locationId) &&
+    isSafePositive(part.quantity) &&
+    typeof part.note === 'string' &&
+    part.note.length <= 500
+  );
 }
 
 function validReturn(part: ReturnPart): boolean {
   return (
+    isSafePositive(part.locationId) &&
     isSafeNonNegative(part.usable) &&
     isSafeNonNegative(part.damaged) &&
     part.usable + part.damaged > 0 &&
@@ -298,6 +366,7 @@ function validReturn(part: ReturnPart): boolean {
 
 function validLostCredit(part: LostCreditPart): boolean {
   return (
+    isSafePositive(part.locationId) &&
     isSafePositive(part.quantity) &&
     (part.condition === 'usable' || part.condition === 'damaged') &&
     typeof part.note === 'string' &&
@@ -419,6 +488,31 @@ export function projectedItems(state: OperationState): ItemProjection[] {
     .filter((projection): projection is ItemProjection => projection !== null);
 }
 
+export function projectedLocationAvailability(
+  state: OperationState,
+  itemId: number,
+  locationId: number,
+): number {
+  const item = state.snapshot.inventory.find((i) => i.id === itemId);
+  const group = state.staged.find((g) => g.itemId === itemId);
+  const base = item?.balances.find((p) => p.locationId === locationId)?.available ?? 0;
+  return (
+    base +
+    (group?.return ?? [])
+      .filter((p) => p.locationId === locationId)
+      .reduce((t, p) => t + p.usable, 0) +
+    (group?.lostCredit ?? [])
+      .filter((p) => p.locationId === locationId && p.condition === 'usable')
+      .reduce((t, p) => t + p.quantity, 0) -
+    (group?.borrow ?? [])
+      .filter((p) => p.locationId === locationId)
+      .reduce((t, p) => t + p.quantity, 0) -
+    (group?.issue ?? [])
+      .filter((p) => p.locationId === locationId)
+      .reduce((t, p) => t + p.quantity, 0)
+  );
+}
+
 export function projectItem(state: OperationState, itemId: number): ItemProjection | null {
   const item = state.snapshot.inventory.find((candidate) => candidate.id === itemId);
   const holding = state.snapshot.holdings.find((candidate) => candidate.itemId === itemId);
@@ -446,20 +540,10 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
       return returned !== null && markedLost !== null && returned + markedLost > baseReturnable;
     if (conflict.scope === 'lost-credit')
       return lostCredit !== null && markedLost !== null && lostCredit > lost + markedLost;
-    if (conflict.scope === 'borrow') {
-      if (!item || borrowed === null || usable === null) return true;
-      const usableCredit = returned !== null && returned <= baseReturnable ? usable : 0;
-      const recoveredCredit =
-        lostCredit !== null &&
-        usableLostCredit !== null &&
-        markedLost !== null &&
-        lostCredit <= lost + markedLost
-          ? usableLostCredit
-          : 0;
-      const available = safeArithmetic(item.available, usableCredit, recoveredCredit);
-      return available === null || borrowed > available;
-    }
-    if (conflict.scope === 'issue') return !item || issued === null || issued > item.available;
+    if (conflict.scope === 'location')
+      return !state.snapshot.locations.some((l) => l.id === conflict.locationId);
+    if (conflict.scope === 'borrow' || conflict.scope === 'issue')
+      return !item || projectedLocationAvailability(state, itemId, conflict.locationId) < 0;
     return true;
   });
   const projectedHeld =
@@ -553,6 +637,20 @@ export function projectItem(state: OperationState, itemId: number): ItemProjecti
     returnableNow >= 0 &&
     lostNow >= 0 &&
     projectedAvailability >= 0 &&
+    [
+      ...new Set(
+        [
+          ...(group?.borrow ?? []),
+          ...(group?.issue ?? []),
+          ...(group?.return ?? []),
+          ...(group?.lostCredit ?? []),
+        ].map((p) => p.locationId),
+      ),
+    ].every(
+      (id) =>
+        state.snapshot.locations.some((l) => l.id === id) &&
+        projectedLocationAvailability(state, itemId, id) >= 0,
+    ) &&
     (item.kind !== 'consumable' ||
       (group?.borrow.length === 0 &&
         (group?.return.length ?? 0) === 0 &&
@@ -717,100 +815,8 @@ function conflictsBelongToState(
   conflicts: BorrowerOperationConflict[],
   snapshot: BorrowerDeskSnapshot,
 ): boolean {
-  if (conflicts.length === 0) return false;
-  const request = operationRequest(state);
-  const seen = new Set<string>();
-  return conflicts.every((conflict) => {
-    const identity = JSON.stringify(conflict);
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    if (conflict.scope === 'borrower')
-      return conflict.borrowerId === state.borrowerId && snapshot.borrower.archived;
-    const group = request.items.find((item) => item.itemId === conflict.itemId);
-    if (!group) return false;
-    const item = snapshot.inventory.find((candidate) => candidate.id === conflict.itemId);
-    if (conflict.scope === 'item')
-      return conflict.code === 'item_archived'
-        ? item?.archived === true
-        : conflict.code === 'wrong_item_kind'
-          ? item !== undefined &&
-            (item.kind === 'consumable'
-              ? !group.issue ||
-                !!group.borrow ||
-                !!group.return ||
-                !!group.lost ||
-                !!group.lostCredit
-              : !!group.issue)
-          : item === undefined;
-    if (conflict.scope === 'return') {
-      const requested = totalReturn(group.return ?? []);
-      const returnable =
-        snapshot.holdings.find((holding) => holding.itemId === conflict.itemId)?.returnable ?? 0;
-      return (
-        requested === conflict.requested &&
-        conflict.returnable === returnable &&
-        requested > returnable
-      );
-    }
-    if (conflict.scope === 'held') {
-      const requestedReturn = totalReturn(group.return ?? []);
-      const requestedLost = totalLost(group.lost ?? []);
-      const returnable =
-        snapshot.holdings.find((holding) => holding.itemId === conflict.itemId)?.returnable ?? 0;
-      const requested =
-        requestedReturn === null || requestedLost === null
-          ? null
-          : safeArithmetic(requestedReturn, requestedLost);
-      return (
-        requested === conflict.requested &&
-        conflict.returnable === returnable &&
-        requested !== null &&
-        requested > returnable
-      );
-    }
-    if (conflict.scope === 'lost-credit') {
-      const requested = totalLostCredit(group.lostCredit ?? []);
-      const markedLost = totalLost(group.lost ?? []);
-      const lostBase =
-        snapshot.holdings.find((holding) => holding.itemId === conflict.itemId)?.lost ?? 0;
-      const lost = markedLost === null ? null : safeArithmetic(lostBase, markedLost);
-      return (
-        requested === conflict.requested &&
-        conflict.lost === lost &&
-        requested !== null &&
-        lost !== null &&
-        requested > lost
-      );
-    }
-    if (conflict.scope === 'issue') {
-      const requested = totalBorrow(group.issue ?? []);
-      return (
-        item?.kind === 'consumable' &&
-        requested === conflict.requested &&
-        item.available === conflict.available &&
-        requested !== null &&
-        requested > item.available
-      );
-    }
-    const requested = totalBorrow(group.borrow ?? []);
-    const usable = usableReturn(group.return ?? []);
-    const lostCredit = safeSum(
-      (group.lostCredit ?? [])
-        .filter((part) => part.condition === 'usable')
-        .map((part) => part.quantity),
-    );
-    const available =
-      item && usable !== null && lostCredit !== null
-        ? safeArithmetic(item.available, usable, lostCredit)
-        : null;
-    return (
-      requested === conflict.requested &&
-      available === conflict.availableAfterUsableReturns &&
-      requested !== null &&
-      available !== null &&
-      requested > available
-    );
-  });
+  const expected = borrowerOperationConflicts(snapshot, operationRequest(state));
+  return expected.length > 0 && sameConflictEvidence(conflicts, expected);
 }
 
 export function operationReducer(state: OperationState, action: OperationAction): OperationState {

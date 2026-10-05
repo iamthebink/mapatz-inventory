@@ -22,16 +22,53 @@ function fixture() {
   const db = openDatabase(':memory:');
   databases.push(db);
   const service = new InventoryService(db);
+  const defaultLocation = service.listLocations().find((location) => location.code === 'monster')!;
+  service.saveInventoryLocation({
+    key: 'fixture-default',
+    ledgerEpoch: service.inventoryEpoch(),
+    locationId: defaultLocation.id,
+    code: defaultLocation.code,
+    name: defaultLocation.name,
+    isDefault: true,
+  });
   const retained = service.createBorrower(row('retained'));
   const removed = service.createBorrower(row('removed'));
-  const item = service.createItem({ name: 'Tent', kind: 'non_consumable' });
-  service.addStock(item.id, 10);
-  const retainedLoan = service.checkout(item.id, retained.id, 2);
-  const removedLoan = service.checkout(item.id, removed.id, 5);
+  const item = service.createItem({
+    name: 'Tent',
+    kind: 'non_consumable',
+    locationId: Number(
+      (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!.id,
+    ),
+  });
+  service.addStock(
+    item.id,
+    10,
+    '',
+    Number(
+      (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!.id,
+    ),
+  );
+  const retainedLoan = service.checkout(
+    item.id,
+    retained.id,
+    2,
+    '',
+    Number(
+      (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!.id,
+    ),
+  );
+  const removedLoan = service.checkout(
+    item.id,
+    removed.id,
+    5,
+    '',
+    Number(
+      (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!.id,
+    ),
+  );
   service.markLost(removedLoan, 2, true);
   return { db, service, retained, removed, item, retainedLoan, removedLoan };
 }
-
 describe('atomic borrower imports', () => {
   it('merges normalized identities, preserves IDs/loans, and reactivates archives', () => {
     const { service, retained, removed, retainedLoan } = fixture();
@@ -102,7 +139,9 @@ describe('atomic borrower imports', () => {
     expect(service.listLedger()).toHaveLength(count);
     const transfers = new InventoryTransferService(db);
     expect(() => validateRecoveryPayload(transfers.snapshot())).not.toThrow();
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(transfers.snapshot()));
+    const payload = await parseRecoveryWorkbook(
+      await exportWorkbook(transfers.snapshot(), 'מפלצת'),
+    );
     transfers.replaceWithRecovery(payload);
     expect(service.listItems()[0]?.available).toBe(6);
     expect(service.listBorrowers('', true)).toEqual(
@@ -113,7 +152,16 @@ describe('atomic borrower imports', () => {
     const { db, service, removed, item } = fixture();
     const rows = [row('retained')];
     const first = service.previewBorrowerImport(rows, 'replace');
-    service.checkout(item.id, removed.id, 1);
+    service.checkout(
+      item.id,
+      removed.id,
+      1,
+      '',
+      Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    );
     const result = service.importBorrowers(rows, 'replace', first.confirmationToken);
     expect(result.outcome).toBe('confirmation_required');
     expect(service.listItems()[0]?.available).toBe(2);
@@ -182,10 +230,25 @@ describe('atomic borrower imports', () => {
   });
   it('keeps consent valid through unrelated stock additions', () => {
     const { service } = fixture();
-    const unrelated = service.createItem({ name: 'Unrelated', kind: 'consumable' });
+    const unrelated = service.createItem({
+      name: 'Unrelated',
+      kind: 'consumable',
+      locationId: Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    });
     const rows = [row('retained')];
     const preview = service.previewBorrowerImport(rows, 'replace');
-    service.addStock(unrelated.id, 7);
+    service.addStock(
+      unrelated.id,
+      7,
+      '',
+      Number(
+        (service.listLocations().find((l) => l.code === 'monster') ?? service.listLocations()[0])!
+          .id,
+      ),
+    );
     expect(service.importBorrowers(rows, 'replace', preview.confirmationToken)).toMatchObject({
       outcome: 'committed',
       returned: 3,
@@ -207,7 +270,9 @@ describe('atomic borrower imports', () => {
       ]),
     );
     const transfers = new InventoryTransferService(db);
-    const payload = await parseRecoveryWorkbook(await exportWorkbook(transfers.snapshot()));
+    const payload = await parseRecoveryWorkbook(
+      await exportWorkbook(transfers.snapshot(), 'מפלצת'),
+    );
     expect(() => transfers.replaceWithRecovery(payload)).not.toThrow();
   });
 });

@@ -1,3 +1,4 @@
+import { borrowerOperationConflicts } from '../contracts/borrower-operation-validation.js';
 import type {
   BorrowerImportMode,
   BorrowerImportRow,
@@ -41,7 +42,7 @@ import { DomainError, type Borrower, type EventKind, type Item, type ItemKind } 
 type Row = Record<string, any>;
 
 const maxAliases = 20;
-const itemStateColumns = `s.available,s.borrowed,s.damaged,s.lost,s.revision stockRevision`;
+const itemStateColumns = `(SELECT COALESCE(SUM(p.available),0) FROM item_location_balances p WHERE p.item_id=i.id) available,s.borrowed,(SELECT COALESCE(SUM(p.damaged),0) FROM item_location_balances p WHERE p.item_id=i.id) damaged,s.lost,s.revision stockRevision`;
 const staleIdentityReceipt = '{"staleIdentity":true}';
 
 type CommandKind = 'borrower_operation' | 'borrower_create';
@@ -90,21 +91,27 @@ export class InventoryService {
   previewBorrowerImport(
     rows: BorrowerImportRow[],
     mode: BorrowerImportMode,
+    returnLocationId?: number,
   ): BorrowerImportPreview {
-    return readTransaction(this.db, () => this.borrowerImportPlan(rows, mode).preview);
+    return readTransaction(
+      this.db,
+      () => this.borrowerImportPlan(rows, mode, returnLocationId).preview,
+    );
   }
 
   importBorrowers(
     rows: BorrowerImportRow[],
     mode: BorrowerImportMode,
     confirmationToken: string,
+    returnLocationId?: number,
   ): BorrowerImportResult {
     return transaction(this.db, () => {
-      const plan = this.borrowerImportPlan(rows, mode);
+      const plan = this.borrowerImportPlan(rows, mode, returnLocationId);
       const supplied = Buffer.from(confirmationToken, 'utf8');
       const expected = Buffer.from(plan.preview.confirmationToken, 'utf8');
       if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected))
         return { outcome: 'confirmation_required', preview: plan.preview };
+      if (plan.preview.affected.length) this.requireActiveLocation(plan.preview.returnLocationId);
       let returned = 0;
       for (const borrower of plan.preview.affected) {
         for (const loan of borrower.loans) {
@@ -115,6 +122,7 @@ export class InventoryService {
             borrower.id,
             loan.checkoutId,
             'Borrower spreadsheet replacement',
+            plan.preview.returnLocationId!,
           );
           returned += loan.quantity;
         }
@@ -138,7 +146,11 @@ export class InventoryService {
     });
   }
 
-  private borrowerImportPlan(rows: BorrowerImportRow[], mode: BorrowerImportMode) {
+  private borrowerImportPlan(
+    rows: BorrowerImportRow[],
+    mode: BorrowerImportMode,
+    returnLocationId?: number,
+  ) {
     if (mode !== 'merge' && mode !== 'replace')
       throw new DomainError('invalid_import', 'Invalid import mode');
     if (!rows.length) throw new DomainError('invalid_import', 'The import must contain borrowers');
@@ -192,11 +204,16 @@ export class InventoryService {
           })),
       }))
       .filter((borrower) => borrower.loans.length > 0);
+    const locations = this.listLocations();
+    const destination = returnLocationId ?? this.defaultLocationId();
+    if (destination !== null) this.requireActiveLocation(destination);
     const confirmationToken = createHmac('sha256', this.borrowerImportSecret)
       .update(
         stableJson({
           rows,
           mode,
+          destination,
+          locations,
           borrowers,
           affected,
           ledgerEpoch: this.ledgerEpochInTransaction(),
@@ -206,6 +223,8 @@ export class InventoryService {
     const added = rows.filter((row) => !identities.has(borrowerIdentity(row))).length;
     const preview: BorrowerImportPreview = {
       confirmationToken,
+      returnLocationId: destination,
+      locations: locations.map((l) => ({ id: Number(l.id), name: String(l.name) })),
       added,
       updated: rows.length - added,
       archived: absent.filter((borrower) => !borrower.archived).length,
@@ -232,10 +251,14 @@ export class InventoryService {
   listLocations(includeArchived = false): Row[] {
     return this.db
       .prepare(
-        `SELECT id, code, name, archived FROM locations ${includeArchived ? '' : 'WHERE archived = 0'} ORDER BY name`,
+        `SELECT id, code, name, archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) isDefault FROM locations ${includeArchived ? '' : 'WHERE archived = 0'} ORDER BY name`,
       )
       .all()
-      .map((row: any) => ({ ...row, archived: Boolean(row.archived) }));
+      .map((row: any) => ({
+        ...row,
+        archived: Boolean(row.archived),
+        isDefault: Boolean(row.isDefault),
+      }));
   }
 
   createLocation(code: string, name: string): Row {
@@ -245,17 +268,24 @@ export class InventoryService {
         .prepare('INSERT INTO locations(id,code,name) VALUES (?,?,?)')
         .run(id, code.trim(), name.trim());
       return this.db
-        .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
+        .prepare(
+          'SELECT id,code,name,archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) isDefault FROM locations WHERE id=?',
+        )
         .get(id) as Row;
     };
     return this.db.isTransaction ? create() : transaction(this.db, create);
   }
 
-  updateLocation(id: number, input: { code: string; name: string; archived?: boolean }): void {
+  updateLocation(
+    id: number,
+    input: { code: string; name: string; archived?: boolean; isDefault?: boolean },
+  ): void {
     transaction(this.db, () => {
       if (input.archived) {
         const blockers = this.db
-          .prepare('SELECT name FROM items WHERE location_id=? ORDER BY name COLLATE NOCASE')
+          .prepare(
+            'SELECT i.name FROM items i JOIN item_location_balances p ON p.item_id=i.id WHERE p.location_id=? ORDER BY i.name COLLATE NOCASE',
+          )
           .all(id) as Row[];
         if (blockers.length)
           throw new DomainError(
@@ -273,6 +303,7 @@ export class InventoryService {
           id,
         );
       if (result.changes === 0) throw new DomainError('not_found', 'Location not found', 404);
+      this.setDefaultLocation(id, input.archived ? false : input.isDefault);
     });
   }
 
@@ -283,6 +314,7 @@ export class InventoryService {
     code: string;
     name: string;
     archived?: boolean;
+    isDefault?: boolean;
   }): Row {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
@@ -312,7 +344,9 @@ export class InventoryService {
         if (!current) throw new DomainError('not_found', 'Location not found', 404);
         if (input.archived) {
           const blockers = this.db
-            .prepare('SELECT name FROM items WHERE location_id=? ORDER BY name COLLATE NOCASE')
+            .prepare(
+              'SELECT i.name FROM items i JOIN item_location_balances p ON p.item_id=i.id WHERE p.location_id=? ORDER BY i.name COLLATE NOCASE',
+            )
             .all(locationId) as Row[];
           if (blockers.length)
             throw new DomainError(
@@ -325,10 +359,18 @@ export class InventoryService {
           .prepare('UPDATE locations SET code=?,name=?,archived=COALESCE(?,archived) WHERE id=?')
           .run(code, name, input.archived == null ? null : Number(input.archived), locationId);
       }
+      if (input.archived) this.setDefaultLocation(locationId, false);
+      else this.setDefaultLocation(locationId, input.isDefault);
       const result = this.db
-        .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
+        .prepare(
+          'SELECT id,code,name,archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) isDefault FROM locations WHERE id=?',
+        )
         .get(locationId) as Row;
-      const response = { ...result, archived: Boolean(result.archived) };
+      const response = {
+        ...result,
+        archived: Boolean(result.archived),
+        isDefault: Boolean(result.isDefault),
+      };
       this.db
         .prepare(
           'INSERT INTO inventory_command_receipts(key,request_hash,result_json) VALUES (?,?,?)',
@@ -345,6 +387,12 @@ export class InventoryService {
     action: 'archive' | 'delete';
     replacementLocationId?: number;
     expectedItemIds: number[];
+    expectedBalances: Array<{
+      itemId: number;
+      available: number;
+      damaged: number;
+      stockRevision: number;
+    }>;
     expectedCode: string;
     expectedName: string;
   }): { action: 'archive' | 'delete'; locationId: number; movedItemIds: number[] } {
@@ -363,7 +411,9 @@ export class InventoryService {
       }
       this.requireInventoryEpoch(input.ledgerEpoch);
       const location = this.db
-        .prepare('SELECT id,code,name,archived FROM locations WHERE id=?')
+        .prepare(
+          'SELECT id,code,name,archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) isDefault FROM locations WHERE id=?',
+        )
         .get(input.locationId) as Row | undefined;
       if (!location) throw new DomainError('not_found', 'Location not found', 404);
       if (location.code !== input.expectedCode || location.name !== input.expectedName)
@@ -372,10 +422,20 @@ export class InventoryService {
         throw new DomainError('location_already_archived', 'המיקום כבר בארכיון', 409);
       const itemIds = (
         this.db
-          .prepare('SELECT id FROM items WHERE location_id=? ORDER BY id')
+          .prepare(
+            'SELECT item_id id FROM item_location_balances WHERE location_id=? ORDER BY item_id',
+          )
           .all(input.locationId) as Row[]
       ).map((row) => Number(row.id));
-      if (!sameNumberList(itemIds, input.expectedItemIds))
+      const contents = itemIds.map((itemId) => ({
+        itemId,
+        ...this.balance(itemId, input.locationId),
+        stockRevision: this.getItem(itemId).stockRevision,
+      }));
+      if (
+        stableJson(contents) !== stableJson(input.expectedBalances) ||
+        !sameNumberList(itemIds, input.expectedItemIds)
+      )
         throw new DomainError(
           'confirmation_changed',
           'תכולת המיקום השתנתה; יש לבדוק ולאשר שוב',
@@ -395,11 +455,39 @@ export class InventoryService {
       }
 
       this.persistCurrentIdentityHighWater();
-      const nextRevision = this.bumpStateRevision();
-      if (itemIds.length > 0)
-        this.db
-          .prepare('UPDATE items SET location_id=? WHERE location_id=?')
-          .run(input.replacementLocationId!, input.locationId);
+      this.bumpStateRevision();
+      for (const itemId of itemIds) {
+        const balance = this.balance(itemId, input.locationId);
+        this.ensureBalance(itemId, input.replacementLocationId!);
+        for (const [quantity, outKind, inKind] of [
+          [balance.available, 'transferred_out', 'transferred_in'],
+          [balance.damaged, 'damaged_transferred_out', 'damaged_transferred_in'],
+        ] as const)
+          if (quantity) {
+            this.move(
+              outKind,
+              itemId,
+              quantity,
+              null,
+              null,
+              'Location retirement',
+              input.locationId,
+            );
+            this.move(
+              inKind,
+              itemId,
+              quantity,
+              null,
+              null,
+              'Location retirement',
+              input.replacementLocationId!,
+            );
+          }
+      }
+      this.db
+        .prepare('DELETE FROM item_location_balances WHERE location_id=?')
+        .run(input.locationId);
+      this.setDefaultLocation(input.locationId, false);
       if (input.action === 'archive')
         this.db.prepare('UPDATE locations SET archived=1 WHERE id=?').run(input.locationId);
       else this.db.prepare('DELETE FROM locations WHERE id=?').run(input.locationId);
@@ -413,15 +501,68 @@ export class InventoryService {
           .prepare(
             `UPDATE item_state SET revision=? WHERE item_id IN (${placeholders(itemIdChunk.length)})`,
           )
-          .run(nextRevision, ...itemIdChunk);
+          .run(this.bumpStateRevision(), ...itemIdChunk);
       const result = { action: input.action, locationId: input.locationId, movedItemIds: itemIds };
       this.insertInventoryCommandReceipt(input.key, hash, result);
       return result;
     });
   }
 
+  transferStockCommand(input: {
+    key: string;
+    ledgerEpoch: number;
+    itemId: number;
+    sourceLocationId: number;
+    destinationLocationId: number;
+    quantity: number;
+    condition: 'usable' | 'damaged';
+    stockRevision: number;
+    note: string;
+  }): Item {
+    const hash = createHash('sha256').update(stableJson(input)).digest('hex');
+    return transaction(this.db, () => {
+      this.requireBusinessCommandKey(input.key);
+      const receipt = this.findInventoryCommandReceipt(input.key);
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new DomainError('idempotency_conflict', 'מפתח הפעולה כבר שימש לבקשה אחרת', 409);
+        return this.decodeCommandReceipt<Item>(receipt);
+      }
+      this.requireInventoryEpoch(input.ledgerEpoch);
+      const item = this.requireItem(input.itemId);
+      if (item.stockRevision !== input.stockRevision)
+        throw new DomainError('stale_stock', 'המלאי השתנה; יש לבדוק שוב', 409);
+      if (input.sourceLocationId === input.destinationLocationId)
+        throw new DomainError('invalid_destination', 'יש לבחור מיקום אחר');
+      this.requireActiveLocation(input.sourceLocationId);
+      this.requireActiveLocation(input.destinationLocationId);
+      this.move(
+        input.condition === 'usable' ? 'transferred_out' : 'damaged_transferred_out',
+        item.id,
+        input.quantity,
+        null,
+        null,
+        input.note,
+        input.sourceLocationId,
+      );
+      this.move(
+        input.condition === 'usable' ? 'transferred_in' : 'damaged_transferred_in',
+        item.id,
+        input.quantity,
+        null,
+        null,
+        input.note,
+        input.destinationLocationId,
+      );
+      const result = this.getItem(item.id);
+      this.insertInventoryCommandReceipt(input.key, hash, result);
+      return result;
+    });
+  }
+
   private requireActiveLocation(locationId: number | null): void {
-    if (locationId == null) return;
+    if (locationId == null || !Number.isSafeInteger(locationId))
+      throw new DomainError('invalid_location', 'יש לבחור מיקום פעיל', 409);
     const location = this.db
       .prepare('SELECT archived FROM locations WHERE id=?')
       .get(locationId) as Row | undefined;
@@ -445,8 +586,8 @@ export class InventoryService {
       this.requireUniqueItemName(name);
       const id = allocateIdentity(this.db, 'item');
       this.db
-        .prepare('INSERT INTO items(id,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
-        .run(id, name, input.kind, input.lotSize ?? null, input.locationId ?? null);
+        .prepare('INSERT INTO items(id,name,kind,lot_size) VALUES (?,?,?,?)')
+        .run(id, name, input.kind, input.lotSize ?? null);
       this.setAliases(id, input.aliases ?? []);
       this.db
         .prepare(
@@ -454,6 +595,7 @@ export class InventoryService {
         )
         .run(id);
       this.initializeItemState(id);
+      this.ensureBalance(id, input.locationId!);
       return this.getItem(id);
     });
   }
@@ -469,17 +611,18 @@ export class InventoryService {
   ): Item {
     const item = this.requireItem(id);
     const lotSize = input.lotSize === undefined ? item.lotSize : input.lotSize;
-    const locationId = input.locationId === undefined ? item.locationId : input.locationId;
+    const locationId = input.locationId;
     if (item.kind !== 'consumable' && lotSize != null)
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (lotSize != null) integer(lotSize, 'lotSize');
     return transaction(this.db, () => {
-      this.requireActiveLocation(locationId);
+      if (locationId !== undefined) {
+        this.requireActiveLocation(locationId);
+        this.ensureBalance(id, locationId!);
+      }
       const name = input.name.trim();
       this.requireUniqueItemName(name, id);
-      this.db
-        .prepare('UPDATE items SET name=?,lot_size=?,location_id=? WHERE id=?')
-        .run(name, lotSize, locationId, id);
+      this.db.prepare('UPDATE items SET name=?,lot_size=? WHERE id=?').run(name, lotSize, id);
       if (input.aliases !== undefined) this.setAliases(id, input.aliases);
       return this.getItem(id);
     });
@@ -529,8 +672,9 @@ export class InventoryService {
         if (input.lotSize != null) integer(input.lotSize, 'lotSize');
         this.requireUniqueItemName(input.name.trim(), input.itemId);
         this.db
-          .prepare('UPDATE items SET name=?,lot_size=?,location_id=? WHERE id=?')
-          .run(input.name.trim(), input.lotSize, input.locationId, input.itemId);
+          .prepare('UPDATE items SET name=?,lot_size=? WHERE id=?')
+          .run(input.name.trim(), input.lotSize, input.itemId);
+        this.ensureBalance(input.itemId, input.locationId!);
         this.setAliases(input.itemId, input.aliases);
       }
       const current = this.getItem(item.id);
@@ -541,7 +685,7 @@ export class InventoryService {
             'המלאי השתנה מאז פתיחת הפריט. יש לבדוק את היתרות ולשלוח שוב.',
             409,
           );
-        const delta = input.targetAvailable - current.available;
+        const delta = input.targetAvailable - this.balance(current.id, input.locationId!).available;
         if (delta !== 0)
           this.move(
             delta > 0 ? 'stock_added' : 'stock_removed',
@@ -550,6 +694,7 @@ export class InventoryService {
             null,
             null,
             input.note ?? '',
+            input.locationId!,
           );
       }
       const result = this.getItem(item.id);
@@ -576,13 +721,14 @@ export class InventoryService {
     this.requireUniqueItemName(input.name.trim());
     const id = allocateIdentity(this.db, 'item');
     this.db
-      .prepare('INSERT INTO items(id,name,kind,lot_size,location_id) VALUES (?,?,?,?,?)')
-      .run(id, input.name.trim(), input.kind, input.lotSize, input.locationId);
+      .prepare('INSERT INTO items(id,name,kind,lot_size) VALUES (?,?,?,?)')
+      .run(id, input.name.trim(), input.kind, input.lotSize);
     this.setAliases(id, input.aliases);
     this.db
       .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)')
       .run(id);
     this.initializeItemState(id);
+    this.ensureBalance(id, input.locationId!);
     return this.getItem(id);
   }
 
@@ -634,7 +780,6 @@ export class InventoryService {
     itemId: number;
     expectedStockRevision: number;
     expectedName: string;
-    expectedLocationId: number | null;
   }): { outcome: 'committed'; action: 'delete_item'; itemId: number } {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return transaction(this.db, () => {
@@ -651,7 +796,7 @@ export class InventoryService {
       }
       this.requireInventoryEpoch(input.ledgerEpoch);
       const item = this.getItem(input.itemId);
-      if (item.name !== input.expectedName || item.locationId !== input.expectedLocationId)
+      if (item.name !== input.expectedName)
         throw new DomainError('confirmation_changed', 'פרטי הפריט השתנו; יש לבדוק ולאשר שוב', 409);
       if (item.borrowed || item.damaged || item.lost)
         throw new DomainError(
@@ -809,14 +954,23 @@ export class InventoryService {
         `לא ניתן לארכב פריט עם יתרות: מושאל ${item.borrowed}, אבוד ${item.lost}, פגום ${item.damaged}`,
         409,
       );
-    const locationId =
-      replacementLocationId === undefined ? item.locationId : replacementLocationId;
-    if (!archived) this.requireActiveLocation(locationId);
-    if (archived && item.available > 0)
-      this.move('stock_removed', id, item.available, null, null, 'ארכוב פריט');
-    this.db
-      .prepare('UPDATE items SET archived=?,location_id=? WHERE id=?')
-      .run(Number(archived), locationId, id);
+    if (replacementLocationId != null) {
+      this.requireActiveLocation(replacementLocationId);
+      this.ensureBalance(id, replacementLocationId);
+    }
+    if (archived)
+      for (const balance of item.balances)
+        if (balance.available > 0)
+          this.move(
+            'stock_removed',
+            id,
+            balance.available,
+            null,
+            null,
+            'ארכוב פריט',
+            balance.locationId,
+          );
+    this.db.prepare('UPDATE items SET archived=? WHERE id=?').run(Number(archived), id);
   }
 
   createBorrower(
@@ -938,6 +1092,7 @@ export class InventoryService {
             'returned_usable',
             part.usable,
             part.note,
+            part.locationId,
           );
           this.allocateReturns(
             checkouts,
@@ -946,6 +1101,7 @@ export class InventoryService {
             'returned_damaged',
             part.damaged,
             part.note,
+            part.locationId,
           );
         }
         for (const part of group.lost ?? [])
@@ -959,14 +1115,23 @@ export class InventoryService {
             part.quantity,
             part.condition,
             part.note,
+            part.locationId,
           );
       }
       for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
         for (const part of group.borrow ?? [])
-          this.move('checked_out', group.itemId, part.quantity, borrowerId, null, part.note);
+          this.move(
+            'checked_out',
+            group.itemId,
+            part.quantity,
+            borrowerId,
+            null,
+            part.note,
+            part.locationId,
+          );
       for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId))
         for (const part of group.issue ?? [])
-          this.move('issued', group.itemId, part.quantity, null, null, part.note);
+          this.move('issued', group.itemId, part.quantity, null, null, part.note, part.locationId);
 
       const result: BorrowerOperationResult = {
         outcome: 'committed',
@@ -1179,34 +1344,40 @@ export class InventoryService {
     });
   }
 
-  addStock(itemId: number, quantity: number, note = ''): number {
+  addStock(itemId: number, quantity: number, note = '', locationId?: number): number {
     return transaction(this.db, () => {
       this.requireItem(itemId);
-      return this.move('stock_added', itemId, integer(quantity), null, null, note);
+      return this.move('stock_added', itemId, integer(quantity), null, null, note, locationId);
     });
   }
 
-  issue(itemId: number, quantity: number, note = ''): number {
+  issue(itemId: number, quantity: number, note = '', locationId?: number): number {
     return transaction(this.db, () => {
       const item = this.requireItem(itemId);
       if (item.kind !== 'consumable')
         throw new DomainError('wrong_item_kind', 'Only consumables can be issued');
-      this.requireAvailable(itemId, quantity);
-      return this.move('issued', itemId, quantity, null, null, note);
+      this.requireAvailable(itemId, quantity, locationId!);
+      return this.move('issued', itemId, quantity, null, null, note, locationId);
     });
   }
 
   issueBatch(input: {
     key: string;
     ledgerEpoch: number;
-    items: Array<{ itemId: number; quantity: number; note: string }>;
+    items: Array<{ itemId: number; locationId: number; quantity: number; note: string }>;
   }): {
     outcome: 'committed' | 'rejected';
     idempotencyKey: string;
     replayed: boolean;
     conflicts: Array<{
       itemId: number;
-      code: 'item_not_found' | 'item_archived' | 'wrong_item_kind' | 'insufficient_stock';
+      code:
+        | 'item_not_found'
+        | 'item_archived'
+        | 'wrong_item_kind'
+        | 'insufficient_stock'
+        | 'invalid_location';
+      locationId?: number;
       available?: number;
     }>;
   } {
@@ -1238,11 +1409,13 @@ export class InventoryService {
         };
       }
       this.requireInventoryEpoch(input.ledgerEpoch);
-      const totals = new Map<number, number>();
-      for (const part of input.items)
-        totals.set(part.itemId, (totals.get(part.itemId) ?? 0) + part.quantity);
+      const totals = new Map<string, { itemId: number; locationId: number; quantity: number }>();
+      for (const part of input.items) {
+        const key = `${part.itemId}:${part.locationId}`;
+        totals.set(key, { ...part, quantity: (totals.get(key)?.quantity ?? 0) + part.quantity });
+      }
       const conflicts: ReturnType<InventoryService['issueBatch']>['conflicts'] = [];
-      for (const [itemId, quantity] of totals) {
+      for (const { itemId, locationId, quantity } of totals.values()) {
         if (!Number.isSafeInteger(quantity))
           throw new DomainError('validation_error', 'Invalid quantity');
         let item: Item;
@@ -1257,12 +1430,21 @@ export class InventoryService {
         }
         if (item.archived) conflicts.push({ itemId, code: 'item_archived' });
         else if (item.kind !== 'consumable') conflicts.push({ itemId, code: 'wrong_item_kind' });
-        else if (quantity > item.available)
-          conflicts.push({ itemId, code: 'insufficient_stock', available: item.available });
+        else {
+          try {
+            const available = this.balance(itemId, locationId).available;
+            if (quantity > available)
+              conflicts.push({ itemId, locationId, code: 'insufficient_stock', available });
+          } catch (error) {
+            if (error instanceof DomainError && error.code === 'invalid_location')
+              conflicts.push({ itemId, locationId, code: 'invalid_location' });
+            else throw error;
+          }
+        }
       }
       if (conflicts.length === 0)
         for (const part of input.items)
-          this.move('issued', part.itemId, part.quantity, null, null, part.note);
+          this.move('issued', part.itemId, part.quantity, null, null, part.note, part.locationId);
       const result = {
         outcome: conflicts.length ? ('rejected' as const) : ('committed' as const),
         idempotencyKey: input.key,
@@ -1278,18 +1460,30 @@ export class InventoryService {
     });
   }
 
-  checkout(itemId: number, borrowerId: number, quantity: number, note = ''): number {
+  checkout(
+    itemId: number,
+    borrowerId: number,
+    quantity: number,
+    note = '',
+    locationId?: number,
+  ): number {
     return transaction(this.db, () => {
       const item = this.requireItem(itemId);
       if (item.kind !== 'non_consumable')
         throw new DomainError('wrong_item_kind', 'Only non-consumables can be checked out');
       this.requireBorrower(borrowerId);
-      this.requireAvailable(itemId, quantity);
-      return this.move('checked_out', itemId, quantity, borrowerId, null, note);
+      this.requireAvailable(itemId, quantity, locationId!);
+      return this.move('checked_out', itemId, quantity, borrowerId, null, note, locationId);
     });
   }
 
-  returnCheckout(checkoutId: number, usable: number, damaged: number, note = ''): number[] {
+  returnCheckout(
+    checkoutId: number,
+    usable: number,
+    damaged: number,
+    note = '',
+    locationId?: number,
+  ): number[] {
     if (
       !Number.isSafeInteger(usable) ||
       usable < 0 ||
@@ -1315,6 +1509,7 @@ export class InventoryService {
             checkout.borrower_id,
             checkoutId,
             note,
+            locationId,
           ),
         );
       if (damaged)
@@ -1326,6 +1521,7 @@ export class InventoryService {
             checkout.borrower_id,
             checkoutId,
             note,
+            locationId,
           ),
         );
       return ids;
@@ -1354,12 +1550,26 @@ export class InventoryService {
     });
   }
 
-  resolveDamage(itemId: number, quantity: number, repaired: boolean, note = ''): number {
+  resolveDamage(
+    itemId: number,
+    quantity: number,
+    repaired: boolean,
+    note = '',
+    locationId?: number,
+  ): number {
     return transaction(this.db, () => {
       integer(quantity);
-      if (quantity > this.getItem(itemId).damaged)
+      if (quantity > this.balance(itemId, locationId!).damaged)
         throw new DomainError('excessive_quantity', 'Quantity exceeds damaged stock');
-      return this.move(repaired ? 'repaired' : 'written_off', itemId, quantity, null, null, note);
+      return this.move(
+        repaired ? 'repaired' : 'written_off',
+        itemId,
+        quantity,
+        null,
+        null,
+        note,
+        locationId,
+      );
     });
   }
 
@@ -1367,8 +1577,10 @@ export class InventoryService {
     key: string;
     ledgerEpoch?: number;
     itemId: number;
+    locationId: number;
     quantity: number;
     repaired: boolean;
+    stockRevision: number;
     note: string;
   }): { eventId: number } {
     if (input.note.length > 500) throw new DomainError('invalid_note', 'הערה ארוכה מדי');
@@ -1385,8 +1597,10 @@ export class InventoryService {
         return this.decodeCommandReceipt<{ eventId: number }>(receipt);
       }
       const item = this.requireItem(input.itemId);
+      if (item.stockRevision !== input.stockRevision)
+        throw new DomainError('stale_stock', 'המלאי השתנה; יש לבדוק שוב', 409);
       integer(input.quantity);
-      if (input.quantity > item.damaged)
+      if (input.quantity > this.balance(item.id, input.locationId).damaged)
         throw new DomainError('excessive_quantity', 'Quantity exceeds damaged stock');
       const result = {
         eventId: this.move(
@@ -1396,6 +1610,7 @@ export class InventoryService {
           null,
           null,
           input.note,
+          input.locationId,
         ),
       };
       this.db
@@ -1574,116 +1789,7 @@ export class InventoryService {
     borrowerId: number,
     request: BorrowerOperationRequest,
   ): BorrowerOperationConflict[] {
-    const borrower = this.getBorrower(borrowerId);
-    if (borrower.archived) return [{ scope: 'borrower', code: 'borrower_inactive', borrowerId }];
-
-    const conflicts: BorrowerOperationConflict[] = [];
-    for (const group of [...request.items].sort((a, b) => a.itemId - b.itemId)) {
-      let item: Item;
-      try {
-        item = this.getItem(group.itemId);
-      } catch (error) {
-        if (error instanceof DomainError && error.code === 'not_found') {
-          conflicts.push({ scope: 'item', code: 'item_not_found', itemId: group.itemId });
-          continue;
-        }
-        throw error;
-      }
-      if (item.archived) {
-        conflicts.push({ scope: 'item', code: 'item_archived', itemId: group.itemId });
-        continue;
-      }
-      if (
-        item.kind === 'consumable' &&
-        group.issue?.length &&
-        !group.borrow &&
-        !group.return &&
-        !group.lost &&
-        !group.lostCredit
-      ) {
-        const requested = (group.issue ?? []).reduce((total, part) => total + part.quantity, 0);
-        if (requested > item.available)
-          conflicts.push({
-            scope: 'issue',
-            code: 'insufficient_stock',
-            itemId: group.itemId,
-            requested,
-            available: item.available,
-          });
-        continue;
-      }
-      if (item.kind !== 'non_consumable' || group.issue) {
-        conflicts.push({ scope: 'item', code: 'wrong_item_kind', itemId: group.itemId });
-        continue;
-      }
-
-      const requestedReturn = (group.return ?? []).reduce(
-        (total, part) => total + part.usable + part.damaged,
-        0,
-      );
-      const requestedLost = (group.lost ?? []).reduce((total, part) => total + part.quantity, 0);
-      const returnable = this.returnableCheckouts(borrowerId, group.itemId).reduce(
-        (total, checkout) => total + checkout.remaining,
-        0,
-      );
-      if (requestedReturn + requestedLost > returnable) {
-        conflicts.push(
-          requestedLost > 0
-            ? {
-                scope: 'held',
-                code: 'held_balance_changed',
-                itemId: group.itemId,
-                requested: requestedReturn + requestedLost,
-                returnable,
-              }
-            : {
-                scope: 'return',
-                code: 'returnable_balance_changed',
-                itemId: group.itemId,
-                requested: requestedReturn,
-                returnable,
-              },
-        );
-        continue;
-      }
-      const requestedLostCredit = (group.lostCredit ?? []).reduce(
-        (total, part) => total + part.quantity,
-        0,
-      );
-      const lost = this.lostCheckouts(borrowerId, group.itemId).reduce(
-        (total, checkout) => total + checkout.remaining,
-        0,
-      );
-      if (requestedLostCredit > lost + requestedLost) {
-        conflicts.push({
-          scope: 'lost-credit',
-          code: 'lost_balance_changed',
-          itemId: group.itemId,
-          requested: requestedLostCredit,
-          lost: lost + requestedLost,
-        });
-        continue;
-      }
-      const requestedBorrow = (group.borrow ?? []).reduce(
-        (total, part) => total + part.quantity,
-        0,
-      );
-      const usableReturns = (group.return ?? []).reduce((total, part) => total + part.usable, 0);
-      const usableLostCredit = (group.lostCredit ?? []).reduce(
-        (total, part) => total + (part.condition === 'usable' ? part.quantity : 0),
-        0,
-      );
-      const availableAfterUsableReturns = item.available + usableReturns + usableLostCredit;
-      if (requestedBorrow > availableAfterUsableReturns)
-        conflicts.push({
-          scope: 'borrow',
-          code: 'insufficient_stock',
-          itemId: group.itemId,
-          requested: requestedBorrow,
-          availableAfterUsableReturns,
-        });
-    }
-    return conflicts;
+    return borrowerOperationConflicts(this.borrowerDeskSnapshotInTransaction(borrowerId), request);
   }
 
   validateBorrowerCreation(request: BorrowerProfile): BorrowerCreateValidation {
@@ -1759,13 +1865,14 @@ export class InventoryService {
     kind: 'returned_usable' | 'returned_damaged',
     quantity: number,
     note: string,
+    locationId: number,
   ): void {
     let remaining = quantity;
     for (const checkout of checkouts) {
       if (remaining === 0) break;
       const allocated = Math.min(remaining, checkout.remaining);
       if (allocated === 0) continue;
-      this.move(kind, itemId, allocated, borrowerId, checkout.id, note);
+      this.move(kind, itemId, allocated, borrowerId, checkout.id, note, locationId);
       checkout.remaining -= allocated;
       remaining -= allocated;
     }
@@ -1779,6 +1886,7 @@ export class InventoryService {
     quantity: number,
     condition: 'usable' | 'damaged',
     note: string,
+    locationId: number,
   ): void {
     let remaining = quantity;
     for (const checkout of checkouts) {
@@ -1792,6 +1900,7 @@ export class InventoryService {
         borrowerId,
         checkout.id,
         note,
+        locationId,
       );
       checkout.remaining -= allocated;
       remaining -= allocated;
@@ -1830,6 +1939,55 @@ export class InventoryService {
     for (const alias of [...new Set(normalized)]) insert.run(itemId, alias);
   }
 
+  private balances(itemId: number): Item['balances'] {
+    return this.db
+      .prepare(
+        'SELECT location_id locationId,available,damaged FROM item_location_balances WHERE item_id=? ORDER BY location_id',
+      )
+      .all(itemId) as unknown as Item['balances'];
+  }
+
+  private ensureBalance(itemId: number, locationId: number): void {
+    this.requireActiveLocation(locationId);
+    this.db
+      .prepare('INSERT OR IGNORE INTO item_location_balances(item_id,location_id) VALUES (?,?)')
+      .run(itemId, locationId);
+  }
+
+  private balance(itemId: number, locationId: number): { available: number; damaged: number } {
+    this.requireActiveLocation(locationId);
+    const balance = this.db
+      .prepare(
+        'SELECT available,damaged FROM item_location_balances WHERE item_id=? AND location_id=?',
+      )
+      .get(itemId, locationId);
+    return balance
+      ? { available: Number(balance.available), damaged: Number(balance.damaged) }
+      : { available: 0, damaged: 0 };
+  }
+
+  defaultLocationId(): number | null {
+    const row = this.db
+      .prepare('SELECT default_location_id FROM inventory_settings WHERE singleton=1')
+      .get()!;
+    return row.default_location_id == null ? null : Number(row.default_location_id);
+  }
+
+  private setDefaultLocation(locationId: number, selected?: boolean): void {
+    if (selected === undefined) return;
+    if (selected) {
+      this.requireActiveLocation(locationId);
+      this.db
+        .prepare('UPDATE inventory_settings SET default_location_id=? WHERE singleton=1')
+        .run(locationId);
+    } else
+      this.db
+        .prepare(
+          'UPDATE inventory_settings SET default_location_id=NULL WHERE singleton=1 AND default_location_id=?',
+        )
+        .run(locationId);
+  }
+
   private initializeItemState(itemId: number): void {
     this.db.prepare('INSERT INTO item_state(item_id) VALUES (?)').run(itemId);
   }
@@ -1841,6 +1999,7 @@ export class InventoryService {
     borrowerId: number | null,
     relatedId: number | null,
     note: string,
+    locationId?: number,
   ): number {
     integer(quantity);
     const state = this.db
@@ -1850,9 +2009,9 @@ export class InventoryService {
       .get(itemId) as Row | undefined;
     if (!state) throw new DomainError('integrity_error', 'Item state is missing', 500);
     const next = {
-      available: Number(state.available),
+      available: kind === 'marked_lost' ? 0 : this.balance(itemId, locationId!).available,
       borrowed: Number(state.borrowed),
-      damaged: Number(state.damaged),
+      damaged: kind === 'marked_lost' ? 0 : this.balance(itemId, locationId!).damaged,
       lost: Number(state.lost),
     };
     const delta: Record<EventKind, Partial<typeof next>> = {
@@ -1867,6 +2026,10 @@ export class InventoryService {
       found_returned_damaged: { lost: -quantity, damaged: quantity },
       repaired: { damaged: -quantity, available: quantity },
       written_off: { damaged: -quantity },
+      transferred_out: { available: -quantity },
+      transferred_in: { available: quantity },
+      damaged_transferred_out: { damaged: -quantity },
+      damaged_transferred_in: { damaged: quantity },
     };
     for (const [field, change] of Object.entries(delta[kind]) as Array<
       [keyof typeof next, number]
@@ -1880,8 +2043,13 @@ export class InventoryService {
       next[field] = value;
     }
     if (
-      state.kind === 'non_consumable' &&
-      !Number.isSafeInteger(next.available + next.borrowed + next.damaged + next.lost)
+      !Number.isSafeInteger(
+        this.balances(itemId).reduce((total, p) => total + p.available + p.damaged, 0) +
+          next.borrowed +
+          next.lost +
+          (delta[kind].available ?? 0) +
+          (delta[kind].damaged ?? 0),
+      )
     )
       throw new DomainError(
         'excessive_quantity',
@@ -1902,7 +2070,7 @@ export class InventoryService {
       if (quantity > Number(loan[source]))
         throw new DomainError('excessive_quantity', 'Movement exceeds checkout balance');
     }
-    const eventId = this.append(kind, itemId, quantity, borrowerId, relatedId, note);
+    const eventId = this.append(kind, itemId, quantity, borrowerId, relatedId, note, locationId);
     if (kind === 'checked_out') {
       if (borrowerId === null || relatedId !== null)
         throw new DomainError('integrity_error', 'Invalid checkout identity', 500);
@@ -1936,10 +2104,16 @@ export class InventoryService {
     const revision = Number(clock.revision) + 1;
     this.db.prepare('UPDATE state_clock SET revision=? WHERE singleton=1').run(revision);
     this.db
-      .prepare(
-        `UPDATE item_state SET available=?,borrowed=?,damaged=?,lost=?,revision=? WHERE item_id=?`,
-      )
-      .run(next.available, next.borrowed, next.damaged, next.lost, revision, itemId);
+      .prepare(`UPDATE item_state SET borrowed=?,lost=?,revision=? WHERE item_id=?`)
+      .run(next.borrowed, next.lost, revision, itemId);
+    if (kind !== 'marked_lost') {
+      this.ensureBalance(itemId, locationId!);
+      this.db
+        .prepare(
+          'UPDATE item_location_balances SET available=?,damaged=? WHERE item_id=? AND location_id=?',
+        )
+        .run(next.available, next.damaged, itemId, locationId!);
+    }
     return eventId;
   }
 
@@ -1950,14 +2124,29 @@ export class InventoryService {
     borrowerId: number | null,
     relatedId: number | null,
     note: string,
+    locationId?: number,
   ): number {
+    const location =
+      locationId === undefined
+        ? null
+        : this.db.prepare('SELECT name,code FROM locations WHERE id=?').get(locationId);
     const id = allocateIdentity(this.db, 'event');
     this.db
       .prepare(
-        `INSERT INTO inventory_events(id,kind,item_id,borrower_id,quantity,related_event_id,note)
-      VALUES (?,?,?,?,?,?,?)`,
+        `INSERT INTO inventory_events(id,kind,item_id,borrower_id,quantity,related_event_id,note,location_name,location_code)
+      VALUES (?,?,?,?,?,?,?,?,?)`,
       )
-      .run(id, kind, itemId, borrowerId, integer(quantity), relatedId, note);
+      .run(
+        id,
+        kind,
+        itemId,
+        borrowerId,
+        integer(quantity),
+        relatedId,
+        note,
+        location?.name ?? null,
+        location?.code ?? null,
+      );
     return id;
   }
 
@@ -2106,10 +2295,10 @@ export class InventoryService {
     );
   }
 
-  private requireAvailable(itemId: number, quantity: number): void {
+  private requireAvailable(itemId: number, quantity: number, locationId: number): void {
     integer(quantity);
-    const item = this.requireItem(itemId);
-    if (quantity > item.available)
+    this.requireItem(itemId);
+    if (quantity > this.balance(itemId, locationId).available)
       throw new DomainError('insufficient_stock', 'Insufficient available stock');
   }
 
@@ -2152,7 +2341,7 @@ export class InventoryService {
         .prepare(
           `SELECT i.*,${itemStateColumns} FROM items i
           LEFT JOIN item_state s ON s.item_id=i.id
-          WHERE i.kind IN ('non_consumable','consumable') ORDER BY i.name COLLATE NOCASE`,
+          ORDER BY i.name COLLATE NOCASE`,
         )
         .all() as Row[]
     ).map((row) => {
@@ -2162,12 +2351,12 @@ export class InventoryService {
         name: item.name,
         kind: item.kind,
         lotSize: item.lotSize,
-        locationId: item.locationId,
+        balances: item.balances,
         archived: item.archived,
         aliases: item.aliases,
         available: item.available,
         damaged: item.damaged,
-        selectable: !item.archived,
+        selectable: !item.archived && item.kind !== 'camp_equipment',
       };
     });
     const holdings = (
@@ -2191,6 +2380,8 @@ export class InventoryService {
       .get() as Row;
     return {
       borrower,
+      locations: this.listLocations() as BorrowerDeskSnapshot['locations'],
+      defaultLocationId: this.defaultLocationId(),
       inventory,
       holdings,
       stateRevision: Number(watermark.value),
@@ -2236,7 +2427,7 @@ export class InventoryService {
     name: String(row.name),
     kind: row.kind,
     lotSize: row.lot_size == null ? null : Number(row.lot_size),
-    locationId: row.location_id == null ? null : Number(row.location_id),
+    balances: this.balances(Number(row.id)),
     archived: Boolean(row.archived),
     aliases: (
       this.db

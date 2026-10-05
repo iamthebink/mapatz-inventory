@@ -5,7 +5,6 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from '../../src/web/BorrowerWorkflow';
 import { DialogStackProvider } from '../../src/web/Dialog';
-
 const borrower = {
   id: 7,
   playaName: 'or',
@@ -25,7 +24,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 describe('summary card entry', () => {
   it('opens the existing card only after startup recovery and returns after clean close', async () => {
     vi.stubGlobal('localStorage', {
@@ -46,7 +44,23 @@ describe('summary card entry', () => {
         if (path.startsWith('/api/borrowers/search'))
           return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
         if (path === '/api/borrowers/7/desk-snapshot')
-          return json({ borrower, inventory: [], holdings: [], stateRevision: 1, ledgerEpoch: 3 });
+          return json({
+            borrower,
+            inventory: [],
+            holdings: [],
+            stateRevision: 1,
+            ledgerEpoch: 3,
+            locations: [
+              {
+                id: 1,
+                name: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+                code: 'monster',
+                archived: false,
+                isDefault: true,
+              },
+            ],
+            defaultLocationId: 1,
+          });
         throw new Error(path);
       }),
     );

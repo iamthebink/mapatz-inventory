@@ -91,3 +91,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-internal-item-identity.md`
   summary: Update README recovery event vocabulary and report prose for found_returned_damaged.
   evidence: The baseline README omits this accepted event kind and describes found-return selection as found_returned only; item-identity changes preserve these event semantics.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-multi-location-stock.md`
+  summary: Align Unicode location-name uniqueness between database saves and workbook validation.
+  evidence: SQLite NOCASE accepts Greek uppercase/lowercase variants that recovery Unicode lowercasing rejects as duplicates; both rules existed at the baseline.
+- source_spec: `_bmad-output/implementation-artifacts/spec-multi-location-stock.md`
+  summary: Preserve configured location codes across workbook recovery.
+  evidence: Recovery Locations exports names and regenerates recovered-location-N codes, so active codes change while event snapshots retain original codes; the baseline already behaved this way.

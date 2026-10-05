@@ -7,7 +7,6 @@ import { openDatabase } from '../../src/db/database.js';
 import { InventoryTransferService } from '../../src/domain/import-export.js';
 import { RadioService } from '../../src/domain/radios.js';
 import { exportWorkbook, parseRecoveryWorkbook } from '../../src/io/workbook.js';
-
 describe('radio fleet', () => {
   it('persists numbered custody and lost state across a database close and reopen', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-radios-'));
@@ -21,7 +20,6 @@ describe('radio fleet', () => {
       radios.custody(3, generation, 'MDA worker', 'Medics');
       const saved = radios.fleet();
       first.close();
-
       const reopened = openDatabase(filename);
       expect(new RadioService(reopened).fleet()).toEqual(saved);
       reopened.close();
@@ -29,7 +27,6 @@ describe('radio fleet', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
-
   it('rolls back count, every row, and generation when insertion fails partway through reset', () => {
     const db = openDatabase(':memory:');
     try {
@@ -47,7 +44,6 @@ describe('radio fleet', () => {
       db.close();
     }
   });
-
   it('resets only on changed count, preserves independent custody, and locks lost radios', () => {
     const db = openDatabase(':memory:');
     const radios = new RadioService(db);
@@ -89,7 +85,6 @@ describe('radio fleet', () => {
     expect(radios.setCount(0, reset.generation).radios).toEqual([]);
     db.close();
   });
-
   it('round trips recovery exactly, rejects invalid fleets atomically, and preserves radios on equipment reset', async () => {
     const db = openDatabase(':memory:');
     const radios = new RadioService(db);
@@ -129,7 +124,6 @@ describe('radio fleet', () => {
     expect(radios.fleet().radios).toEqual(saved.radios);
     db.close();
   });
-
   it('rolls back radio replacement and generation when a later recovery write fails', () => {
     const db = openDatabase(':memory:');
     try {
@@ -142,7 +136,7 @@ describe('radio fleet', () => {
       const beforeSnapshot = transfers.snapshot();
       const recovery = {
         ...beforeSnapshot,
-        locations: [{ name: 'Trigger failure', archived: false }],
+        locations: [{ name: 'Trigger failure', archived: false, isDefault: false }],
         radioCount: 1,
         radios: [{ number: 1, holder: 'Recovered holder', team: '', lost: false }],
       };
@@ -159,7 +153,6 @@ describe('radio fleet', () => {
       db.close();
     }
   });
-
   it('rejects full workbooks missing either required radio sheet', async () => {
     const db = openDatabase(':memory:');
     try {
@@ -188,7 +181,6 @@ describe('radio fleet', () => {
       db.close();
     }
   });
-
   it('round trips long holder and team text up to the Excel cell limit', async () => {
     const db = openDatabase(':memory:');
     try {

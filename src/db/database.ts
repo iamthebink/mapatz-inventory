@@ -61,9 +61,17 @@ export function migrate(db: InventoryDatabase): void {
         db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
       ).map((row) => row.name),
     );
-    if (['item_state', 'loan_state', 'state_clock'].some((name) => !existing.has(name)))
+    if (
+      [
+        'item_state',
+        'item_location_balances',
+        'inventory_settings',
+        'loan_state',
+        'state_clock',
+      ].some((name) => !existing.has(name))
+    )
       throw new Error(
-        'Database is missing authoritative inventory state; restore a supported backup.',
+        'Database uses an obsolete inventory placement schema. Preserve it and use a fresh database or a supported recovery workbook; no upgrade migration is provided.',
       );
   }
   if (
@@ -131,12 +139,41 @@ export function migrate(db: InventoryDatabase): void {
     )
       throw new Error('Database has incomplete authoritative inventory state.');
   }
+  const physicalStateInvalid = db
+    .prepare(
+      `SELECT 1 FROM item_location_balances p JOIN items i ON i.id=p.item_id JOIN locations l ON l.id=p.location_id
+    WHERE typeof(p.available)<>'integer' OR typeof(p.damaged)<>'integer' OR p.available<0 OR p.damaged<0 OR p.available>9007199254740991 OR p.damaged>9007199254740991
+      OR l.archived=1 OR (i.kind='consumable' AND p.damaged<>0) OR (i.archived=1 AND (p.available<>0 OR p.damaged<>0)) LIMIT 1`,
+    )
+    .get();
+  const missingPlacement = db
+    .prepare(
+      'SELECT 1 FROM items i WHERE NOT EXISTS (SELECT 1 FROM item_location_balances p WHERE p.item_id=i.id) LIMIT 1',
+    )
+    .get();
+  const unsafeTotal = db
+    .prepare(
+      `SELECT 1 FROM items i JOIN item_state s ON s.item_id=i.id
+    WHERE s.borrowed>9007199254740991 OR s.lost>9007199254740991 OR s.revision>9007199254740991 OR typeof(s.borrowed)<>'integer' OR typeof(s.lost)<>'integer' OR typeof(s.revision)<>'integer'
+      OR s.borrowed+s.lost+(SELECT COALESCE(SUM(p.available+p.damaged),0) FROM item_location_balances p WHERE p.item_id=i.id)>9007199254740991 LIMIT 1`,
+    )
+    .get();
+  const setting = db
+    .prepare('SELECT default_location_id FROM inventory_settings WHERE singleton=1')
+    .get();
+  const invalidDefault =
+    setting?.default_location_id != null &&
+    !db
+      .prepare('SELECT 1 FROM locations WHERE id=? AND archived=0')
+      .get(setting.default_location_id);
+  if (physicalStateInvalid || missingPlacement || unsafeTotal || !setting || invalidDefault)
+    throw new Error('Database has invalid authoritative local balances or default location.');
   const invalidState = db
     .prepare(
       `SELECT 1 FROM items i JOIN item_state s ON s.item_id=i.id
-    WHERE s.available < 0 OR s.borrowed < 0 OR s.damaged < 0 OR s.lost < 0
-      OR (i.kind='consumable' AND (s.borrowed<>0 OR s.damaged<>0 OR s.lost<>0))
-      OR (i.archived=1 AND (s.available<>0 OR s.borrowed<>0 OR s.damaged<>0 OR s.lost<>0))
+    WHERE s.borrowed < 0 OR s.lost < 0
+      OR (i.kind='consumable' AND (s.borrowed<>0 OR s.lost<>0 OR EXISTS (SELECT 1 FROM item_location_balances p WHERE p.item_id=i.id AND p.damaged<>0)))
+      OR (i.archived=1 AND (s.borrowed<>0 OR s.lost<>0 OR EXISTS (SELECT 1 FROM item_location_balances p WHERE p.item_id=i.id AND (p.available<>0 OR p.damaged<>0))))
       OR s.borrowed <> (SELECT COALESCE(SUM(l.outstanding),0) FROM loan_state l WHERE l.item_id=i.id)
       OR s.lost <> (SELECT COALESCE(SUM(l.lost),0) FROM loan_state l WHERE l.item_id=i.id)
     LIMIT 1`,
@@ -158,7 +195,7 @@ export function migrate(db: InventoryDatabase): void {
     .get();
   const itemAtArchivedLocation = db
     .prepare(
-      `SELECT 1 FROM items i JOIN locations l ON l.id=i.location_id
+      `SELECT 1 FROM item_location_balances p JOIN locations l ON l.id=p.location_id
       WHERE l.archived=1 LIMIT 1`,
     )
     .get();

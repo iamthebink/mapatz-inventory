@@ -23,7 +23,12 @@ export function BorrowerImportDialog({
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   async function commit(selected: File, current: BorrowerImportPreview) {
-    const result = await commitBorrowerImport(selected, mode, current.confirmationToken);
+    const result = await commitBorrowerImport(
+      selected,
+      mode,
+      current.confirmationToken,
+      current.returnLocationId ?? undefined,
+    );
     if (result.outcome === 'confirmation_required') {
       setPreview(result.preview.affected.length ? result.preview : null);
       // A prior response may have been lost after commit; reconcile without inferring success.
@@ -164,7 +169,7 @@ export function BorrowerImportDialog({
               <button
                 type="button"
                 className="danger-button"
-                disabled={pending}
+                disabled={pending || preview.returnLocationId === null}
                 onClick={() => void submit(preview)}
               >
                 אישור החזרה וייבוא
@@ -172,6 +177,36 @@ export function BorrowerImportDialog({
             </>
           }
         >
+          <label className="field-label">
+            מיקום קבלת הציוד
+            <select
+              className="input-field"
+              value={preview.returnLocationId?.toString() ?? ''}
+              disabled={pending}
+              onChange={(event) => {
+                const destination = Number(event.target.value);
+                if (!file || !destination) return;
+                setPending(true);
+                void previewBorrowerImport(file, mode, destination)
+                  .then(setPreview)
+                  .catch((error) =>
+                    showToast(
+                      'ייבוא שואלים',
+                      error instanceof Error ? error.message : 'הטעינה נכשלה',
+                      'error',
+                    ),
+                  )
+                  .finally(() => setPending(false));
+              }}
+            >
+              <option value="">בחרו מיקום</option>
+              {preview.locations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <ul className="space-y-3">
             {preview.affected.map((borrower) => (
               <li key={borrower.id}>

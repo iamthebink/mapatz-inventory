@@ -14,7 +14,6 @@ import {
   parseResetWorkbook,
 } from '../../src/io/workbook.js';
 import { recordHistoricalStockRemoval } from '../helpers/historical-events.js';
-
 async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(
@@ -22,20 +21,43 @@ async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   );
   return workbook;
 }
-
 describe('inventory workbook reports', () => {
   it('includes damaged lost recovery in unresolved damage without usable credit', async () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const transfers = new InventoryTransferService(db);
-    const item = inventory.createItem({ name: 'Recovered damaged', kind: 'non_consumable' });
-    inventory.addStock(item.id, 2);
+    const item = inventory.createItem({
+      name: 'Recovered damaged',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const borrower = inventory.createBorrower({
       playaName: 'damage-report',
       fullName: 'Damage Report',
       campDepartment: '',
     });
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkout, 2, true);
     inventory.commitBorrowerOperations(borrower.id, '00000000-0000-4000-8000-000000000025', {
       contractVersion: 1,
@@ -43,11 +65,10 @@ describe('inventory workbook reports', () => {
       items: [
         {
           itemId: item.id,
-          lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken' }],
+          lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken', locationId: 1 }],
         },
       ],
     });
-
     expect(inventory.listItems().find((entry) => entry.id === item.id)).toMatchObject({
       available: 0,
       damaged: 1,
@@ -57,23 +78,22 @@ describe('inventory workbook reports', () => {
     expect(unresolvedDamageReport(snapshot)).toEqual([
       {
         itemName: item.name,
-        location: null,
+        location: 'מפלצת',
         unresolvedDamagedQuantity: 1,
       },
     ]);
-    const workbook = await load(await exportWorkbook(snapshot));
+    const workbook = await load(await exportWorkbook(snapshot, 'מפלצת'));
     expect(
       workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.unresolvedDamage.name)!.getRow(2).getCell(3)
         .value,
     ).toBe(1);
     db.close();
   });
-
   it('exports only unresolved damage and reconciles it with recovery events', async () => {
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
     transfers.replaceWithReset({
-      locations: [{ name: 'Workshop', archived: false }],
+      locations: [{ name: 'Workshop', archived: false, isDefault: false }],
       items: [
         {
           name: 'Still damaged',
@@ -96,7 +116,7 @@ describe('inventory workbook reports', () => {
         {
           name: 'Written off',
           kind: 'non_consumable',
-          location: null,
+          location: 'Workshop',
           aliases: [],
           lotSize: null,
           archived: false,
@@ -112,13 +132,60 @@ describe('inventory workbook reports', () => {
     });
     const items = inventory.listItems('', true);
     for (const item of items) {
-      const checkout = inventory.checkout(item.id, borrower.id, 2);
-      inventory.returnCheckout(checkout, 0, 2);
-      if (item.name === 'Still damaged') inventory.resolveDamage(item.id, 1, true);
-      if (item.name === 'Repaired') inventory.resolveDamage(item.id, 2, true);
-      if (item.name === 'Written off') inventory.resolveDamage(item.id, 2, false);
+      const checkout = inventory.checkout(
+        item.id,
+        borrower.id,
+        2,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      inventory.returnCheckout(
+        checkout,
+        0,
+        2,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      if (item.name === 'Still damaged')
+        inventory.resolveDamage(
+          item.id,
+          1,
+          true,
+          '',
+          Number(
+            (inventory.listLocations().find((l) => l.code === 'monster') ??
+              inventory.listLocations()[0])!.id,
+          ),
+        );
+      if (item.name === 'Repaired')
+        inventory.resolveDamage(
+          item.id,
+          2,
+          true,
+          '',
+          Number(
+            (inventory.listLocations().find((l) => l.code === 'monster') ??
+              inventory.listLocations()[0])!.id,
+          ),
+        );
+      if (item.name === 'Written off')
+        inventory.resolveDamage(
+          item.id,
+          2,
+          false,
+          '',
+          Number(
+            (inventory.listLocations().find((l) => l.code === 'monster') ??
+              inventory.listLocations()[0])!.id,
+          ),
+        );
     }
-
     const snapshot = transfers.snapshot();
     expect(unresolvedDamageReport(snapshot)).toEqual([
       {
@@ -127,7 +194,7 @@ describe('inventory workbook reports', () => {
         unresolvedDamagedQuantity: 1,
       },
     ]);
-    const workbook = await load(await exportWorkbook(snapshot));
+    const workbook = await load(await exportWorkbook(snapshot, 'מפלצת'));
     const reportSheet = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.unresolvedDamage.name)!;
     expect((reportSheet.getRow(2).values as unknown[]).slice(1)).toEqual([
       'Still damaged',
@@ -135,7 +202,6 @@ describe('inventory workbook reports', () => {
       1,
     ]);
     expect(reportSheet.rowCount).toBe(2);
-
     const recoveryEvents = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!;
     const unresolvedFromRecovery = new Map<number, number>();
     for (const row of recoveryEvents.getRows(2, recoveryEvents.rowCount - 1) ?? []) {
@@ -152,12 +218,11 @@ describe('inventory workbook reports', () => {
     ]);
     db.close();
   });
-
   it('reports consumable usage and preserves or rebases the cycle by import mode', async () => {
     const source = openDatabase(':memory:');
     const sourceTransfers = new InventoryTransferService(source);
     sourceTransfers.replaceWithReset({
-      locations: [{ name: 'Stores', archived: false }],
+      locations: [{ name: 'Stores', archived: false, isDefault: false }],
       items: [
         {
           name: 'Correction example',
@@ -171,7 +236,7 @@ describe('inventory workbook reports', () => {
         {
           name: 'Planning example',
           kind: 'consumable',
-          location: null,
+          location: 'Stores',
           aliases: [],
           lotSize: null,
           archived: false,
@@ -191,11 +256,34 @@ describe('inventory workbook reports', () => {
     const inventory = new InventoryService(source);
     const correction = inventory.listItems('Correction example', true)[0]!;
     const planning = inventory.listItems('Planning example', true)[0]!;
-    inventory.addStock(correction.id, 20);
-    inventory.issue(correction.id, 30);
+    inventory.addStock(
+      correction.id,
+      20,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.issue(
+      correction.id,
+      30,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     recordHistoricalStockRemoval(source, correction.id, 5);
-    inventory.addStock(planning.id, 20);
-
+    inventory.addStock(
+      planning.id,
+      20,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const snapshot = sourceTransfers.snapshot();
     expect(consumablesUsageReport(snapshot)).toEqual([
       {
@@ -216,15 +304,14 @@ describe('inventory workbook reports', () => {
       },
       {
         itemName: 'Planning example',
-        location: null,
+        location: 'Stores',
         startOfCycleStock: 100,
         addedDuringCycle: 20,
         usage: 0,
         left: 120,
       },
     ]);
-
-    const exported = await exportWorkbook(snapshot);
+    const exported = await exportWorkbook(snapshot, 'מפלצת');
     const workbook = await load(exported);
     const reportSheet = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.consumablesUsage.name)!;
     expect((reportSheet.getRow(3).values as unknown[]).slice(1)).toEqual([
@@ -236,14 +323,12 @@ describe('inventory workbook reports', () => {
       90,
     ]);
     expect(reportSheet.rowCount).toBe(4);
-
     const recovered = openDatabase(':memory:');
     const recoveredTransfers = new InventoryTransferService(recovered);
     recoveredTransfers.replaceWithRecovery(await parseRecoveryWorkbook(exported));
     expect(consumablesUsageReport(recoveredTransfers.snapshot())).toEqual(
       consumablesUsageReport(snapshot),
     );
-
     const reset = openDatabase(':memory:');
     const resetTransfers = new InventoryTransferService(reset);
     resetTransfers.replaceWithReset(await parseResetWorkbook(exported));
@@ -266,7 +351,7 @@ describe('inventory workbook reports', () => {
       },
       {
         itemName: 'Planning example',
-        location: null,
+        location: 'Stores',
         startOfCycleStock: 120,
         addedDuringCycle: 0,
         usage: 0,

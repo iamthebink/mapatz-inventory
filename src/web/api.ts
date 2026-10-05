@@ -448,7 +448,7 @@ export function sendBorrowerCreateCommand(context: {
 
 export type ConsumableBatchRequest = {
   ledgerEpoch: number;
-  items: Array<{ itemId: number; quantity: number; note: string }>;
+  items: Array<{ itemId: number; locationId: number; quantity: number; note: string }>;
 };
 export type ConsumableBatchResult = {
   outcome: 'committed' | 'rejected';
@@ -456,7 +456,13 @@ export type ConsumableBatchResult = {
   replayed: boolean;
   conflicts: Array<{
     itemId: number;
-    code: 'item_not_found' | 'item_archived' | 'wrong_item_kind' | 'insufficient_stock';
+    code:
+      | 'item_not_found'
+      | 'item_archived'
+      | 'wrong_item_kind'
+      | 'insufficient_stock'
+      | 'invalid_location';
+    locationId?: number;
     available?: number;
   }>;
 };
@@ -531,13 +537,24 @@ export async function sendConsumableBatchCommand(context: {
           isObject(conflict) &&
           isSafePositive(conflict.itemId) &&
           context.request.items.some((item) => item.itemId === conflict.itemId) &&
-          ['item_not_found', 'item_archived', 'wrong_item_kind', 'insufficient_stock'].includes(
-            String(conflict.code),
-          ) &&
+          [
+            'item_not_found',
+            'item_archived',
+            'wrong_item_kind',
+            'insufficient_stock',
+            'invalid_location',
+          ].includes(String(conflict.code)) &&
           (conflict.code === 'insufficient_stock'
-            ? exactKeys(conflict, ['itemId', 'code', 'available']) &&
+            ? exactKeys(conflict, ['itemId', 'locationId', 'code', 'available']) &&
+              isSafePositive(conflict.locationId) &&
+              context.request.items.some(
+                (p) => p.itemId === conflict.itemId && p.locationId === conflict.locationId,
+              ) &&
               isSafeNonNegative(conflict.available)
-            : exactKeys(conflict, ['itemId', 'code'])),
+            : conflict.code === 'invalid_location'
+              ? exactKeys(conflict, ['itemId', 'locationId', 'code']) &&
+                isSafePositive(conflict.locationId)
+              : exactKeys(conflict, ['itemId', 'code'])),
       )
     )
       return { kind: 'ambiguous', reason: 'invalid-body', status: response.status };
@@ -604,8 +621,12 @@ async function requireSuccess(response: Response): Promise<void> {
   }
 }
 
-export async function downloadInventoryWorkbook(): Promise<void | 'cancelled'> {
-  const response = await fetch('/api/workbook');
+export async function downloadInventoryWorkbook(
+  resetAllocationLocation?: string,
+): Promise<void | 'cancelled'> {
+  const response = await fetch(
+    `/api/workbook${resetAllocationLocation ? `?resetAllocationLocation=${encodeURIComponent(resetAllocationLocation)}` : ''}`,
+  );
   await requireSuccess(response);
   if (desktop) {
     const result = await desktop.saveWorkbook(new Uint8Array(await response.arrayBuffer()));
@@ -648,26 +669,34 @@ export async function importRecoveryWorkbook(file: File): Promise<void> {
 export function previewBorrowerImport(
   file: File,
   mode: BorrowerImportMode,
+  returnLocationId?: number,
 ): Promise<BorrowerImportPreview> {
-  return api(`/borrowers/import/preview?mode=${mode}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  return api(
+    `/borrowers/import/preview?mode=${mode}${returnLocationId ? `&returnLocationId=${returnLocationId}` : ''}`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+      body: file,
     },
-    body: file,
-  });
+  );
 }
 export function commitBorrowerImport(
   file: File,
   mode: BorrowerImportMode,
   confirmationToken: string,
+  returnLocationId?: number,
 ): Promise<BorrowerImportResult> {
-  return api(`/borrowers/import/commit?mode=${mode}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'x-borrower-import-confirmation': confirmationToken,
+  return api(
+    `/borrowers/import/commit?mode=${mode}${returnLocationId ? `&returnLocationId=${returnLocationId}` : ''}`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'x-borrower-import-confirmation': confirmationToken,
+      },
+      body: file,
     },
-    body: file,
-  });
+  );
 }

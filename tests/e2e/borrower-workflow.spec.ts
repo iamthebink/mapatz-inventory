@@ -1,10 +1,8 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
-
 test('opens the borrower desk directly through the frontdesk alias', async ({ page }) => {
   await page.goto('/frontdesk');
-
   await expect(page).toHaveURL(/\/frontdesk$/);
   await expect(page.getByRole('heading', { name: 'דלפק השאלות' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'דלפק השאלות' })).toHaveAttribute(
@@ -12,7 +10,6 @@ test('opens the borrower desk directly through the frontdesk alias', async ({ pa
     'page',
   );
 });
-
 async function openSeededCard(page: Page, playaName: string) {
   await page.goto('/management');
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
@@ -30,7 +27,6 @@ async function openSeededCard(page: Page, playaName: string) {
   await expect(page.getByRole('listbox')).toHaveCount(0);
   return search;
 }
-
 async function expectQuantityDialogItem(dialog: Locator, itemName: string) {
   await expect(dialog).toHaveAccessibleDescription(`פריט: ${itemName}`);
   const callout = dialog.locator('.quantity-dialog-item');
@@ -38,7 +34,6 @@ async function expectQuantityDialogItem(dialog: Locator, itemName: string) {
   await expect(callout).toBeVisible();
   await expect(name).toHaveText(itemName);
 }
-
 async function expectEmphasizedQuantityDialogItem(dialog: Locator, itemName: string) {
   await expectQuantityDialogItem(dialog, itemName);
   const callout = dialog.locator('.quantity-dialog-item');
@@ -57,7 +52,6 @@ async function expectEmphasizedQuantityDialogItem(dialog: Locator, itemName: str
   expect(presentation.borderWidth).toBeGreaterThanOrEqual(1);
   expect(presentation.padding).toBeGreaterThanOrEqual(12);
 }
-
 async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await itemSearch.fill(itemName);
@@ -72,7 +66,6 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(1);
 }
-
 async function stageReturn(page: Page, itemName: string, usable = '1', damaged = '0') {
   const holdings = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
   const itemRow = holdings.getByRole('rowheader', { name: itemName, exact: true }).locator('..');
@@ -93,14 +86,12 @@ async function stageReturn(page: Page, itemName: string, usable = '1', damaged =
     await expect(dialog).toBeHidden();
   }
 }
-
 async function confirmSave(page: Page) {
   await page.getByRole('button', { name: 'אישור פעולות' }).click();
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
   await expect(review).toBeVisible();
   await review.getByRole('button', { name: 'אישור ושמירה' }).click();
 }
-
 test('protects staged borrower-card work when switching to consumables', async ({ page, seed }) => {
   await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name);
@@ -116,7 +107,6 @@ test('protects staged borrower-card work when switching to consumables', async (
   await discard.getByRole('button', { name: 'מחיקת הפעולות וסגירה' }).click();
   await expect(switchToConsumables).toHaveAttribute('aria-pressed', 'true');
 });
-
 function rows<T extends Record<string, unknown>>(
   database: DatabaseSync,
   sql: string,
@@ -124,7 +114,6 @@ function rows<T extends Record<string, unknown>>(
 ) {
   return database.prepare(sql).all(...args) as T[];
 }
-
 test('browses, filters, and opens the responsive borrower directory without dialog navigation', async ({
   page,
   seed,
@@ -143,12 +132,10 @@ test('browses, filters, and opens the responsive borrower directory without dial
   await expect(page.getByRole('listbox')).toHaveCount(0);
   await expect(header.getByRole('button', { name: 'יצירת שואל חדש' })).toBeVisible();
   await expect(page.locator('.borrower-search-row').getByRole('button')).toHaveCount(0);
-
   await search.fill(seed.archivedBorrower.playaName);
   const archivedNotice = page.getByRole('complementary', { name: 'התאמות בארכיון' });
   await expect(archivedNotice).toContainText(seed.archivedBorrower.fullName);
   await expect(archivedNotice.getByRole('button')).toHaveCount(0);
-
   await search.fill(seed.borrower.playaName);
   const activeRow = page
     .locator('.borrower-directory-row')
@@ -161,7 +148,6 @@ test('browses, filters, and opens the responsive borrower directory without dial
   ]);
   expect(createBox!.y).toBeGreaterThan(headingBox!.y);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-
   await activeRow.getByRole('button', { name: /פתיחת כרטיס שואל/ }).press('Space');
   const card = page.getByRole('dialog', { name: /כרטיס שואל/ });
   await expect(card).toBeVisible();
@@ -181,7 +167,6 @@ test('browses, filters, and opens the responsive borrower directory without dial
   const createDialog = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   await expect(createDialog.getByText('מעבר למסך אחר')).toHaveCount(0);
 });
-
 test('keeps an emphasized maximum-length item identity legible at minimum width', async ({
   page,
   request,
@@ -196,22 +181,22 @@ test('keeps an emphasized maximum-length item identity legible at minimum width'
     data: { role: 'admin', password: 'e2e-admin-password' },
   });
   const created = await request.post('/api/items', {
-    data: { name: longItemName, kind: 'non_consumable' },
+    data: { name: longItemName, kind: 'non_consumable', locationId: 1 },
   });
   expect(created.ok()).toBe(true);
-  const createdItem = (await created.json()) as { id: number };
+  const createdItem = (await created.json()) as {
+    id: number;
+  };
   const stocked = await request.post('/api/stock/add', {
-    data: { itemId: createdItem.id, quantity: 1, note: '' },
+    data: { itemId: createdItem.id, quantity: 1, note: '', locationId: 1 },
   });
   expect(stocked.ok()).toBe(true);
-
   await page.setViewportSize({ width: 320, height: 720 });
   await openSeededCard(page, seed.borrower.playaName);
   const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
   await itemSearch.fill(longItemName);
   await itemSearch.press('ArrowDown');
   await itemSearch.press('Enter');
-
   const dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
   await expectEmphasizedQuantityDialogItem(dialog, longItemName);
   await expect(dialog.getByRole('button', { name: 'אישור' })).toBeVisible();
@@ -223,7 +208,6 @@ test('keeps an emphasized maximum-length item identity legible at minimum width'
   ]);
   expect(calloutBox!.width / dialogBox!.width).toBeGreaterThan(0.8);
 });
-
 test('commits a mixed reviewed save exactly once with deterministic ledger order', async ({
   page,
   seed,
@@ -232,7 +216,6 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
   const borrowerSearch = await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await stageReturn(page, seed.item.name, '1', '1');
-
   const staged = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   await expect(staged.getByText('השאלה')).toBeVisible();
   await expect(staged.getByText(/החזרת ציוד · 1/)).toBeVisible();
@@ -243,9 +226,12 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
   await expect(borrowerSearch).toHaveValue('');
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast[role="status"]')).toContainText('השמירה הושלמה');
-
   const database = openLedger();
-  const events = rows<{ kind: string; quantity: number; related_event_id: number | null }>(
+  const events = rows<{
+    kind: string;
+    quantity: number;
+    related_event_id: number | null;
+  }>(
     database,
     'SELECT kind,quantity,related_event_id FROM inventory_events WHERE borrower_id=? ORDER BY id',
     seed.borrower.id,
@@ -260,14 +246,15 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
     true,
   );
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM idempotency_receipts WHERE command_kind='borrower_operation' AND subject_id=?",
       seed.borrower.id,
     )[0]?.count,
   ).toBe(1);
 });
-
 test('issues consumables anonymously from a mixed borrower handover and a desk batch', async ({
   page,
   seed,
@@ -290,7 +277,6 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
   await expect(page.getByText('ניפוק · מתכלה · 2')).toBeVisible();
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-
   await expect(page.getByRole('link', { name: 'ציוד מתכלה' })).toHaveCount(0);
   await page.setViewportSize({ width: 320, height: 720 });
   await page.getByRole('button', { name: 'ציוד מתכלה' }).click();
@@ -333,7 +319,6 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
   await desk.getByRole('button', { name: 'בדיקה ואישור הניפוק' }).click();
   await page.getByRole('button', { name: 'אישור ניפוק' }).click();
   await expect(desk.locator('.consumables-draft-item')).toHaveCount(0);
-
   const database = openLedger();
   const issued = rows<{
     item_id: number;
@@ -371,7 +356,9 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
     },
   ]);
   expect(
-    rows<{ item_id: number }>(
+    rows<{
+      item_id: number;
+    }>(
       database,
       "SELECT item_id FROM inventory_events WHERE kind='checked_out' AND borrower_id=? AND item_id=?",
       seed.borrower.id,
@@ -379,7 +366,9 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
     ),
   ).toHaveLength(1);
   expect(
-    rows<{ item_id: number }>(
+    rows<{
+      item_id: number;
+    }>(
       database,
       "SELECT item_id FROM inventory_events WHERE kind='checked_out' AND item_id IN (?,?)",
       seed.consumable.id,
@@ -387,7 +376,6 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
     ),
   ).toHaveLength(0);
 });
-
 test('stages loss and dependent found return from the borrower card with keyboard review', async ({
   page,
   seed,
@@ -430,7 +418,6 @@ test('stages loss and dependent found return from the borrower card with keyboar
       return transform === 'none' ? 0 : Math.round(new DOMMatrixReadOnly(transform).b);
     });
   expect(await markerDirection()).toBe(0);
-
   await lostSummary.click();
   await expect.poll(markerDirection).toBe(-1);
   const lostTable = page.locator('.lost-equipment-section').getByRole('table');
@@ -445,23 +432,23 @@ test('stages loss and dependent found return from the borrower card with keyboar
   await expect(foundDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
   await foundDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
   await foundDialog.getByRole('button', { name: 'אישור' }).click();
-
   const pending = page.locator('.staged-section');
   const lossRow = pending.locator('.borrower-pending-row').filter({ hasText: 'סמן כאבוד' });
   await lossRow.getByRole('button', { name: 'ביטול פעולה' }).click();
   await expect(page.locator('.toast')).toContainText('יש לבטל תחילה');
   await expect(lossRow).toBeVisible();
-
   await page.getByRole('button', { name: 'אישור פעולות' }).press('Enter');
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
   await expect(review.getByText(/סמן כאבוד · 2/)).toBeVisible();
   await expect(review.getByText(/נמצא והוחזר · 2/)).toBeVisible();
   await review.getByRole('button', { name: 'אישור ושמירה' }).press('Enter');
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-
   const database = openLedger();
   expect(
-    rows<{ kind: string; quantity: number }>(
+    rows<{
+      kind: string;
+      quantity: number;
+    }>(
       database,
       "SELECT kind,quantity FROM inventory_events WHERE borrower_id=? AND item_id=? AND kind IN ('marked_lost','found_returned') ORDER BY id DESC LIMIT 2",
       seed.borrower.id,
@@ -472,7 +459,6 @@ test('stages loss and dependent found return from the borrower card with keyboar
     { kind: 'found_returned', quantity: 2 },
   ]);
 });
-
 test('uses resettable damaged condition for held and lost returns at 320px', async ({
   page,
   seed,
@@ -506,7 +492,6 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   await page.getByRole('heading', { name: 'פעולות ממתינות' }).click();
   await expect(page.getByRole('menu')).toHaveCount(0);
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
-
   const returnButton = page.getByRole('button', { name: 'החזרת ציוד' });
   await returnButton.click();
   const heldDialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
@@ -528,7 +513,6 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   await expect(heldCheckbox).not.toBeChecked();
   await heldDialog.getByRole('button', { name: 'ביטול' }).click();
   await expect(returnButton).toBeFocused();
-
   await more.press('ArrowDown');
   await menuItem.press('Enter');
   const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
@@ -559,17 +543,18 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   await foundDialog.getByRole('button', { name: 'אישור' }).click();
   await expect(page.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-
   await page.getByRole('button', { name: 'אישור פעולות' }).press('Enter');
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
   await expect(review.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
   await expect(review.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await review.getByRole('button', { name: 'אישור ושמירה' }).press('Enter');
-
   const database = openLedger();
   expect(
-    rows<{ kind: string; quantity: number }>(
+    rows<{
+      kind: string;
+      quantity: number;
+    }>(
       database,
       'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
       seed.checkoutId,
@@ -580,7 +565,10 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
     { kind: 'found_returned_damaged', quantity: 1 },
   ]);
   expect(
-    rows<{ available: number; damaged: number }>(
+    rows<{
+      available: number;
+      damaged: number;
+    }>(
       database,
       `SELECT SUM(CASE kind WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity
         WHEN 'found_returned' THEN quantity WHEN 'checked_out' THEN -quantity ELSE 0 END) available,
@@ -591,7 +579,6 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
     )[0],
   ).toEqual({ available: 4, damaged: 2 });
 });
-
 test('reopens the card for another operation after a reviewed save', async ({
   page,
   seed,
@@ -605,17 +592,17 @@ test('reopens the card for another operation after a reviewed save', async ({
   await stageReturn(page, seed.item.name);
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-
   const database = openLedger();
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM idempotency_receipts WHERE command_kind='borrower_operation' AND subject_id=?",
       seed.borrower.id,
     )[0]?.count,
   ).toBe(2);
 });
-
 test('keeps search blocked after a stale committed-save snapshot until truth refresh succeeds', async ({
   page,
   seed,
@@ -636,17 +623,14 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
     if (route.request().method() === 'POST') operationPosts += 1;
     await route.continue();
   });
-
   await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
-
   const retry = page.getByRole('button', { name: 'אימות נתוני האמת לפני המשך' });
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   await expect(retry).toBeFocused();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
   expect(operationPosts).toBe(1);
-
   await retry.click();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeFocused();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveValue('');
@@ -654,17 +638,17 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
   expect(snapshotRequests).toBe(3);
   await page.getByRole('button', { name: 'סגירת הודעה' }).click();
   await expect(page.locator('.toast')).toBeHidden();
-
   const database = openLedger();
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM idempotency_receipts WHERE command_kind='borrower_operation' AND subject_id=?",
       seed.borrower.id,
     )[0]?.count,
   ).toBe(1);
 });
-
 test('keeps a confirmed close in recovery until a newer ledger epoch is loaded', async ({
   page,
   seed,
@@ -682,11 +666,9 @@ test('keeps a confirmed close in recovery until a newer ledger epoch is loaded',
           : snapshot,
     });
   });
-
   await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
-
   const retry = page.getByRole('button', { name: 'טעינת אמת עדכנית' });
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   await expect(retry).toBeFocused();
@@ -699,7 +681,6 @@ test('keeps a confirmed close in recovery until a newer ledger epoch is loaded',
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   expect(snapshots).toBe(4);
 });
-
 test('resolves an ambiguous committed response after reload without duplicating the command', async ({
   page,
   seed,
@@ -717,7 +698,6 @@ test('resolves an ambiguous committed response after reload without duplicating 
     Object.entries(localStorage).find(([key]) => key.startsWith('mapatz:frozen-attempt:v1:')),
   );
   expect(envelope).toBeTruthy();
-
   await page.unrouteAll({ behavior: 'wait' });
   await page.reload();
   await page.getByRole('link', { name: 'דלפק השאלות' }).click();
@@ -727,24 +707,26 @@ test('resolves an ambiguous committed response after reload without duplicating 
       Object.keys(localStorage).filter((key) => key.startsWith('mapatz:frozen-attempt:v1:')),
     ),
   ).toEqual([]);
-
   const database = openLedger();
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM inventory_events WHERE borrower_id=? AND kind='checked_out'",
       seed.borrower.id,
     )[0]?.count,
   ).toBe(2);
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       'SELECT COUNT(*) count FROM idempotency_receipts WHERE subject_id=?',
       seed.borrower.id,
     )[0]?.count,
   ).toBe(1);
 });
-
 test('restores focus to the return trigger after dismissing its quantity modal', async ({
   page,
   seed,
@@ -762,7 +744,6 @@ test('restores focus to the return trigger after dismissing its quantity modal',
   await returnButton.click();
   await expect(dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
 });
-
 test('renders a fresh conflict, keeps staging, and requires a new deliberate save key', async ({
   page,
   request,
@@ -774,7 +755,12 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await stageBorrow(page, seed.stockItem.name, '3');
   await stageReturn(page, seed.item.name, '2');
   await stageBorrow(page, seed.archiveItem.name);
-  let frozenRequest: { key: string; body: unknown } | undefined;
+  let frozenRequest:
+    | {
+        key: string;
+        body: unknown;
+      }
+    | undefined;
   page.on('request', (outgoing) => {
     if (
       outgoing.method() === 'POST' &&
@@ -794,12 +780,10 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
       )
     ).ok(),
   ).toBeTruthy();
-  const eventsAfterMutation = rows<{ count: number }>(
-    database,
-    'SELECT COUNT(*) count FROM inventory_events',
-  )[0]!.count;
+  const eventsAfterMutation = rows<{
+    count: number;
+  }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count;
   await confirmSave(page);
-
   const conflicts = page.locator('.staged-section .field-error span');
   await expect(conflicts).toHaveText([
     'אין די מלאי זמין',
@@ -817,10 +801,13 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast')).toHaveCSS('animation-name', 'none');
   expect(
-    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+    rows<{
+      count: number;
+    }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(eventsAfterMutation);
-
-  const rejected = rows<{ key: string }>(
+  const rejected = rows<{
+    key: string;
+  }>(
     database,
     "SELECT key FROM idempotency_receipts WHERE subject_id=? AND outcome='rejected'",
     seed.borrower.id,
@@ -829,9 +816,9 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   expect(frozenRequest?.key).toBe(rejected[0]!.key);
   expect(frozenRequest?.body).toMatchObject({
     items: [
-      { itemId: seed.stockItem.id, borrow: [{ quantity: 3, note: '' }] },
-      { itemId: seed.item.id, return: [{ usable: 2, damaged: 0, note: '' }] },
-      { itemId: seed.archiveItem.id, borrow: [{ quantity: 1, note: '' }] },
+      { itemId: seed.stockItem.id, borrow: [{ quantity: 3, note: '', locationId: 1 }] },
+      { itemId: seed.item.id, return: [{ usable: 2, damaged: 0, note: '', locationId: 1 }] },
+      { itemId: seed.archiveItem.id, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
     ],
   });
   expect(
@@ -841,10 +828,9 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
       )
     ).ok(),
   ).toBeTruthy();
-  const beforeReplay = rows<{ count: number }>(
-    database,
-    'SELECT COUNT(*) count FROM inventory_events',
-  )[0]!.count;
+  const beforeReplay = rows<{
+    count: number;
+  }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count;
   const replay = await request.post(`/api/borrowers/${seed.borrower.id}/operations`, {
     headers: { 'Idempotency-Key': rejected[0]!.key },
     data: frozenRequest!.body,
@@ -857,7 +843,9 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
     currentValidation: { status: 'now_valid', conflicts: [] },
   });
   expect(
-    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+    rows<{
+      count: number;
+    }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(beforeReplay);
   const rootActions = page.locator('[data-dialog-level="root"] .dialog-shell-actions');
   await rootActions.getByRole('button', { name: 'סגירה', exact: true }).click();
@@ -869,15 +857,13 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await stageBorrow(page, seed.stockItem.name);
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-  const receipts = rows<{ key: string; outcome: string }>(
-    database,
-    'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?',
-    seed.borrower.id,
-  );
+  const receipts = rows<{
+    key: string;
+    outcome: string;
+  }>(database, 'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?', seed.borrower.id);
   expect(receipts).toHaveLength(2);
   expect(receipts.find(({ outcome }) => outcome === 'committed')?.key).not.toBe(rejected[0]?.key);
 });
-
 test('reconciles a stale combined held balance before a deliberate retry', async ({
   page,
   request,
@@ -892,8 +878,10 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
   await lossDialog.getByRole('button', { name: 'אישור' }).click();
   await stageBorrow(page, seed.stockItem.name);
-
-  const attempts: Array<{ key: string; body: unknown }> = [];
+  const attempts: Array<{
+    key: string;
+    body: unknown;
+  }> = [];
   page.on('request', (outgoing) => {
     if (
       outgoing.method() === 'POST' &&
@@ -906,15 +894,19 @@ test('reconciles a stale combined held balance before a deliberate retry', async
     }
   });
   const externalReturn = await request.post('/api/return', {
-    data: { checkoutId: seed.checkoutId, usable: 1, damaged: 0, note: 'e2e held conflict' },
+    data: {
+      checkoutId: seed.checkoutId,
+      usable: 1,
+      damaged: 0,
+      note: 'e2e held conflict',
+      locationId: 1,
+    },
   });
   expect(externalReturn.status()).toBe(201);
   const database = openLedger();
-  const beforeAttempt = rows<{ count: number }>(
-    database,
-    'SELECT COUNT(*) count FROM inventory_events',
-  )[0]!.count;
-
+  const beforeAttempt = rows<{
+    count: number;
+  }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count;
   const firstResponse = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
@@ -944,10 +936,15 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   await expect(pending.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'אישור פעולות' })).toBeDisabled();
   expect(
-    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+    rows<{
+      count: number;
+    }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(beforeAttempt);
   expect(
-    rows<{ kind: string; quantity: number }>(
+    rows<{
+      kind: string;
+      quantity: number;
+    }>(
       database,
       'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
       seed.checkoutId,
@@ -958,19 +955,17 @@ test('reconciles a stale combined held balance before a deliberate retry', async
     items: [
       {
         itemId: seed.item.id,
-        return: [{ usable: 1, damaged: 0, note: '' }],
+        return: [{ usable: 1, damaged: 0, note: '', locationId: 1 }],
         lost: [{ quantity: 1, note: '' }],
       },
-      { itemId: seed.stockItem.id, borrow: [{ quantity: 1, note: '' }] },
+      { itemId: seed.stockItem.id, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
     ],
   });
-  const rejected = rows<{ key: string; outcome: string }>(
-    database,
-    'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?',
-    seed.borrower.id,
-  );
+  const rejected = rows<{
+    key: string;
+    outcome: string;
+  }>(database, 'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?', seed.borrower.id);
   expect(rejected).toEqual([{ key: attempts[0]!.key, outcome: 'rejected' }]);
-
   const lossRow = pending.locator('.borrower-pending-row').filter({ hasText: 'סמן כאבוד' });
   await lossRow.getByRole('button', { name: 'ביטול פעולה' }).click();
   await expect(lossRow).toHaveCount(0);
@@ -978,17 +973,19 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   await expect(page.getByRole('button', { name: 'אישור פעולות' })).toBeEnabled();
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-
   expect(attempts).toHaveLength(2);
   expect(attempts[1]!.key).not.toBe(attempts[0]!.key);
   expect(attempts[1]!.body).toMatchObject({
     items: [
-      { itemId: seed.item.id, return: [{ usable: 1, damaged: 0, note: '' }] },
-      { itemId: seed.stockItem.id, borrow: [{ quantity: 1, note: '' }] },
+      { itemId: seed.item.id, return: [{ usable: 1, damaged: 0, note: '', locationId: 1 }] },
+      { itemId: seed.stockItem.id, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
     ],
   });
   expect(
-    rows<{ kind: string; quantity: number }>(
+    rows<{
+      kind: string;
+      quantity: number;
+    }>(
       database,
       'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
       seed.checkoutId,
@@ -998,7 +995,9 @@ test('reconciles a stale combined held balance before a deliberate retry', async
     { kind: 'returned_usable', quantity: 1 },
   ]);
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM inventory_events WHERE borrower_id=? AND item_id=? AND kind='marked_lost'",
       seed.borrower.id,
@@ -1006,18 +1005,18 @@ test('reconciles a stale combined held balance before a deliberate retry', async
     )[0]!.count,
   ).toBe(0);
   expect(
-    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+    rows<{
+      count: number;
+    }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(beforeAttempt + 2);
-  const receipts = rows<{ key: string; outcome: string }>(
-    database,
-    'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?',
-    seed.borrower.id,
-  );
+  const receipts = rows<{
+    key: string;
+    outcome: string;
+  }>(database, 'SELECT key,outcome FROM idempotency_receipts WHERE subject_id=?', seed.borrower.id);
   expect(receipts).toHaveLength(2);
   expect(receipts).toContainEqual({ key: attempts[0]!.key, outcome: 'rejected' });
   expect(receipts).toContainEqual({ key: attempts[1]!.key, outcome: 'committed' });
 });
-
 test('rejects an operation without writes when the borrower becomes archived', async ({
   page,
   request,
@@ -1028,22 +1027,21 @@ test('rejects an operation without writes when the borrower becomes archived', a
   await stageBorrow(page, seed.stockItem.name);
   const database = openLedger();
   expect((await request.post(`/__e2e__/archive-borrower/${seed.borrower.id}`)).ok()).toBeTruthy();
-  const eventCount = rows<{ count: number }>(
-    database,
-    'SELECT COUNT(*) count FROM inventory_events',
-  )[0]!.count;
+  const eventCount = rows<{
+    count: number;
+  }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count;
   await confirmSave(page);
-
   const conflict = page.getByText('השואל אינו פעיל');
   await expect(conflict).toBeVisible();
   await expect(conflict.locator('xpath=ancestor::*[@data-compatible="false"]')).toBeFocused();
   await expect(page.locator('.staged-section .borrower-pending-row')).toContainText('השאלה');
   await expect(page.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(1);
   expect(
-    rows<{ count: number }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
+    rows<{
+      count: number;
+    }>(database, 'SELECT COUNT(*) count FROM inventory_events')[0]!.count,
   ).toBe(eventCount);
 });
-
 test('retains an unknown envelope through authorization loss and clears it after epoch replacement', async ({
   page,
   request,
@@ -1057,7 +1055,6 @@ test('retains an unknown envelope through authorization loss and clears it after
   await confirmSave(page);
   const retry = page.getByRole('button', { name: 'בדיקת תוצאת השמירה' });
   await expect(retry).toBeVisible();
-
   await page.unrouteAll({ behavior: 'wait' });
   await page.route(endpoint, (route) =>
     route.fulfill({
@@ -1073,7 +1070,6 @@ test('retains an unknown envelope through authorization loss and clears it after
       Object.keys(localStorage).filter((key) => key.startsWith('mapatz:frozen-attempt:v1:')),
     ),
   ).toHaveLength(1);
-
   expect((await request.post('/__e2e__/rotate-epoch')).ok()).toBeTruthy();
   await page.unrouteAll({ behavior: 'wait' });
   await retry.click();
@@ -1085,21 +1081,24 @@ test('retains an unknown envelope through authorization loss and clears it after
   ).toEqual([]);
   const database = openLedger();
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       'SELECT COUNT(*) count FROM idempotency_receipts WHERE subject_id=?',
       seed.borrower.id,
     )[0]?.count,
   ).toBe(0);
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM inventory_events WHERE borrower_id=? AND kind='checked_out'",
       seed.borrower.id,
     )[0]?.count,
   ).toBe(1);
 });
-
 test('resolves a committed-but-lost creation with the exact envelope before retrying card load', async ({
   page,
   openLedger,
@@ -1112,7 +1111,10 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   await create.getByLabel('שם פלאיה').fill(playaName);
   await create.getByLabel('שם מלא').fill('שואל שנוצר');
   await create.getByLabel('מספר טלפון').fill('050-123');
-  const createAttempts: Array<{ key: string; body: unknown }> = [];
+  const createAttempts: Array<{
+    key: string;
+    body: unknown;
+  }> = [];
   let loseCreateResponse = true;
   await page.route('**/api/borrowers', async (route) => {
     if (route.request().method() !== 'POST') return route.continue();
@@ -1143,7 +1145,6 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
     idempotencyKey: createAttempts[0]!.key,
     body: createAttempts[0]!.body,
   });
-
   let failedCardLoad = false;
   await page.route('**/api/borrowers/*/desk-snapshot', async (route) => {
     if (!failedCardLoad) {
@@ -1152,7 +1153,6 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
     } else await route.continue();
   });
   await recovery.click();
-
   await expect(page.locator('.toast')).toHaveCount(1);
   await expect(page.locator('.toast')).toContainText('השואל נוצר');
   expect(createAttempts).toHaveLength(2);
@@ -1167,24 +1167,22 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   await retryCard.click();
   await expect(page.locator('.borrower-identity-meta')).toBeFocused();
   await expect(page.getByRole('listbox')).toHaveCount(0);
-
   const database = openLedger();
   expect(
-    rows<{ count: number }>(
-      database,
-      'SELECT COUNT(*) count FROM borrowers WHERE playa_name=?',
-      playaName,
-    )[0]?.count,
+    rows<{
+      count: number;
+    }>(database, 'SELECT COUNT(*) count FROM borrowers WHERE playa_name=?', playaName)[0]?.count,
   ).toBe(1);
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM idempotency_receipts WHERE command_kind='borrower_create' AND key=?",
       envelope.idempotencyKey,
     )[0]?.count,
   ).toBe(1);
 });
-
 test('keeps duplicate borrower values and archived-match guidance with one error Toast', async ({
   page,
   seed,
@@ -1200,7 +1198,6 @@ test('keeps duplicate borrower values and archived-match guidance with one error
   await create.getByLabel('מספר טלפון').fill(seed.archivedBorrower.phoneNumber);
   await create.getByLabel('מחנה / מחלקה').fill(seed.archivedBorrower.campDepartment);
   await create.getByRole('button', { name: 'יצירה' }).click();
-
   await expect(create).toBeVisible();
   await expect(playaName).toHaveValue(seed.archivedBorrower.playaName);
   await expect(create.getByLabel('שם מלא')).toBeFocused();
@@ -1215,13 +1212,14 @@ test('keeps duplicate borrower values and archived-match guidance with one error
   ).toEqual([]);
   const database = openLedger();
   expect(
-    rows<{ count: number }>(
+    rows<{
+      count: number;
+    }>(
       database,
       "SELECT COUNT(*) count FROM idempotency_receipts WHERE command_kind='borrower_create' AND outcome='rejected'",
     )[0]?.count,
   ).toBeGreaterThanOrEqual(1);
 });
-
 test('traps keyboard focus at both dialog depths and guards dirty Escape with one alertdialog', async ({
   page,
   seed,
@@ -1243,7 +1241,6 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await page.keyboard.press('Escape');
   await expect(child).toBeHidden();
   await expect(itemSearch).toBeFocused();
-
   await stageBorrow(page, seed.stockItem.name);
   const root = page.getByRole('dialog', { name: /כרטיס שואל/ });
   const rootClose = root.locator('.dialog-close');
@@ -1254,7 +1251,6 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await page.keyboard.press('Tab');
   await expect(rootClose).toBeFocused();
   await page.keyboard.press('Escape');
-
   const discard = page.getByRole('alertdialog', { name: 'ביטול פעולות ממתינות?' });
   await expect(discard).toBeVisible();
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
@@ -1266,7 +1262,6 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   await expect(root).toBeHidden();
   await expect(borrowerSearch).toBeFocused();
 });
-
 test('marks lost equipment at the borrower desk without offering reversal', async ({
   page,
   seed,
@@ -1281,17 +1276,18 @@ test('marks lost equipment at the borrower desk without offering reversal', asyn
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-
   const database = openLedger();
   expect(
-    rows<{ kind: string; quantity: number }>(
+    rows<{
+      kind: string;
+      quantity: number;
+    }>(
       database,
       "SELECT kind,quantity FROM inventory_events WHERE related_event_id=? AND kind IN ('marked_lost','found_returned') ORDER BY id",
       seed.checkoutId,
     ),
   ).toEqual([{ kind: 'marked_lost', quantity: 1 }]);
 });
-
 test('operator credits a previously lost unit back to usable inventory', async ({
   page,
   seed,
@@ -1305,7 +1301,6 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await lostDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
   await lostDialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
-
   await openSeededCard(page, seed.borrower.playaName);
   await expect(page.getByRole('button', { name: 'החזרת ציוד' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'אפשרויות נוספות' })).toHaveCount(0);
@@ -1320,10 +1315,12 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
   await expect(page.locator('.toast')).toContainText('השמירה הושלמה');
-
   const database = openLedger();
   expect(
-    rows<{ kind: string; quantity: number }>(
+    rows<{
+      kind: string;
+      quantity: number;
+    }>(
       database,
       'SELECT kind,quantity FROM inventory_events WHERE related_event_id=? ORDER BY id',
       seed.checkoutId,
@@ -1333,7 +1330,9 @@ test('operator credits a previously lost unit back to usable inventory', async (
     { kind: 'found_returned', quantity: 1 },
   ]);
   expect(
-    rows<{ available: number }>(
+    rows<{
+      available: number;
+    }>(
       database,
       `SELECT SUM(CASE kind
         WHEN 'stock_added' THEN quantity WHEN 'returned_usable' THEN quantity WHEN 'found_returned' THEN quantity
@@ -1343,7 +1342,6 @@ test('operator credits a previously lost unit back to usable inventory', async (
     )[0]!.available,
   ).toBe(5);
 });
-
 test('retires legacy presentation while preserving borrower controls and responsive accessibility', async ({
   page,
   seed,
@@ -1361,7 +1359,6 @@ test('retires legacy presentation while preserving borrower controls and respons
   await expect(page.getByRole('heading', { name: 'ציוד בחוץ ואבוד' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'החזרה' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'סמן אבוד' })).toHaveCount(0);
-
   await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   const staged: Locator = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
@@ -1424,7 +1421,6 @@ test('retires legacy presentation while preserving borrower controls and respons
     'transition-duration',
     '0s',
   );
-
   await page.setViewportSize({ width: 761, height: 720 });
   const splitThreshold = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
   expect(splitThreshold[0]!.x).toBeGreaterThan(splitThreshold[1]!.x);
@@ -1433,7 +1429,6 @@ test('retires legacy presentation while preserving borrower controls and respons
       .locator('.dialog-workspace .dialog-shell-body')
       .evaluate((body) => body.scrollWidth <= body.clientWidth),
   ).toBe(true);
-
   await page.setViewportSize({ width: 760, height: 720 });
   const stackThreshold = await Promise.all([staged.boundingBox(), holdings.boundingBox()]);
   expect(stackThreshold[0]!.y).toBeLessThan(stackThreshold[1]!.y);
@@ -1442,7 +1437,6 @@ test('retires legacy presentation while preserving borrower controls and respons
       .locator('.dialog-workspace .dialog-shell-body')
       .evaluate((body) => body.scrollWidth <= body.clientWidth),
   ).toBe(true);
-
   await page.setViewportSize({ width: 640, height: 720 });
   const zoomed = await Promise.all([
     staged.boundingBox(),
@@ -1452,7 +1446,6 @@ test('retires legacy presentation while preserving borrower controls and respons
   expect(zoomed[0]!.y).toBeLessThan(zoomed[1]!.y);
   expect(zoomed[2]!.y).toBeGreaterThan(zoomed[1]!.y);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-
   await page.setViewportSize({ width: 320, height: 720 });
   const narrow = await Promise.all([
     staged.boundingBox(),
@@ -1468,14 +1461,13 @@ test('retires legacy presentation while preserving borrower controls and respons
   ).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
-
 test('keeps the ledger schema free of transaction grouping or receipt relations', async ({
   openLedger,
 }) => {
   const database = openLedger();
-  const eventColumns = rows<{ name: string }>(database, 'PRAGMA table_info(inventory_events)').map(
-    ({ name }) => name,
-  );
+  const eventColumns = rows<{
+    name: string;
+  }>(database, 'PRAGMA table_info(inventory_events)').map(({ name }) => name);
   expect(eventColumns).toEqual([
     'id',
     'kind',
@@ -1484,6 +1476,8 @@ test('keeps the ledger schema free of transaction grouping or receipt relations'
     'quantity',
     'related_event_id',
     'note',
+    'location_name',
+    'location_code',
     'created_at',
   ]);
   expect(eventColumns.some((name) => /batch|transaction|receipt/i.test(name))).toBe(false);

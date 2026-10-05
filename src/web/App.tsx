@@ -79,6 +79,8 @@ type LedgerEvent = {
   borrowerName?: string;
   quantity: number;
   note?: string;
+  location_name?: string | null;
+  location_code?: string | null;
 };
 type Session = { role: Role; deadline: number | null };
 type Tab = 'desk' | 'summary' | 'catalogs' | 'ledger' | 'radios';
@@ -120,6 +122,10 @@ const eventNames: Record<string, string> = {
   found_returned_damaged: 'נמצא והוחזר פגום',
   repaired: 'תיקון',
   written_off: 'גריעה',
+  transferred_out: 'העברת מלאי תקין — יציאה',
+  transferred_in: 'העברת מלאי תקין — קבלה',
+  damaged_transferred_out: 'העברת מלאי פגום — יציאה',
+  damaged_transferred_in: 'העברת מלאי פגום — קבלה',
 };
 const ledgerEventName = (event: LedgerEvent) =>
   event.kind === 'stock_removed' && event.note === 'ארכוב פריט'
@@ -167,6 +173,8 @@ export function App() {
   const [managementTab, setManagementTab] = useState<ManagementTab>('inventory');
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
+  const [resetAllocationOpen, setResetAllocationOpen] = useState(false);
+  const [resetAllocationLocation, setResetAllocationLocation] = useState('');
   const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
   const borrowerGuidanceShownRef = useRef(new Set<string>());
   const [borrowerCreateOpen, setBorrowerCreateOpen] = useState(false);
@@ -927,6 +935,13 @@ export function App() {
       sortValue: (event) => event.borrowerName ?? '',
     },
     {
+      key: 'location',
+      label: 'מיקום',
+      render: (event) =>
+        [event.location_name, event.location_code].filter(Boolean).join(' · ') || '—',
+      sortValue: (event) => [event.location_name, event.location_code].filter(Boolean).join(' · '),
+    },
+    {
       key: 'quantity',
       label: 'כמות',
       render: (event) => event.quantity,
@@ -1060,6 +1075,7 @@ export function App() {
         {tab === 'desk' && (
           <div id="desk-consumables-panel" hidden={deskView !== 'consumables'}>
             <ConsumablesDesk
+              locations={locations}
               items={items}
               ledgerEpoch={inventoryEpoch}
               refresh={refresh}
@@ -1254,10 +1270,18 @@ export function App() {
                 <div className="grid gap-4 lg:grid-cols-2">
                   <ActionCard
                     title="ייצוא מלאי"
-                    description="קובץ XLSX לאיפוס, שחזור ודוחות — ללא סיסמאות או הגדרות"
+                    description="קובץ XLSX לאיפוס, שחזור ודוחות — כולל ברירת המחדל למיקום, ללא סיסמאות"
                     icon={Download}
                     disabled={!adminActionsEnabled || pending}
-                    onSubmit={() => action('ייצוא מלאי', downloadInventoryWorkbook)}
+                    onSubmit={() => {
+                      if (items.some((item) => item.borrowed > 0 || item.lost > 0)) {
+                        setResetAllocationLocation(
+                          locations.find((l) => l.isDefault && !l.archived)?.name ?? '',
+                        );
+                        setResetAllocationOpen(true);
+                      } else return action('ייצוא מלאי', () => downloadInventoryWorkbook());
+                      return false;
+                    }}
                   >
                     <p className="text-sm text-ctp-subtext">
                       הקובץ כולל אזורי איפוס ושחזור נפרדים. שמרו אותו במקום מאובטח.
@@ -1369,6 +1393,8 @@ export function App() {
                   ledgerEventName(event),
                   event.itemName,
                   event.borrowerName,
+                  event.location_name,
+                  event.location_code,
                   event.quantity,
                   event.note,
                 )
@@ -1517,6 +1543,61 @@ export function App() {
                 ביטול
               </button>
             </div>
+          </div>
+        </Dialog>
+      )}
+      {resetAllocationOpen && (
+        <Dialog
+          title="הקצאת ציוד לאיפוס הבא"
+          description="יחידות מושאלות ואבודות יתווספו פעם אחת למיקום שתבחרו בגיליון Reset Items. זו הקצאה למחזור הבא; השחזור המדויק והיתרות הנוכחיות נשמרים ללא שינוי."
+          level="root"
+          role="alertdialog"
+          variant="standard"
+          busy={pending}
+          dismissible={!pending}
+          onClose={() => setResetAllocationOpen(false)}
+        >
+          <label className="field-label">
+            מיקום להקצאת יחידות מושאלות ואבודות
+            <select
+              className="input-field"
+              value={resetAllocationLocation}
+              disabled={pending}
+              onChange={(event) => setResetAllocationLocation(event.target.value)}
+            >
+              <option value="">בחרו מיקום פעיל</option>
+              {locations
+                .filter((l) => !l.archived)
+                .map((l) => (
+                  <option key={l.id} value={l.name}>
+                    {l.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <div className="dialog-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={pending}
+              onClick={() => setResetAllocationOpen(false)}
+            >
+              ביטול
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={pending || !resetAllocationLocation}
+              onClick={() => {
+                void action('ייצוא מלאי', () =>
+                  downloadInventoryWorkbook(resetAllocationLocation),
+                ).then((success) => {
+                  if (success) setResetAllocationOpen(false);
+                });
+              }}
+            >
+              אישור הקצאה וייצוא
+            </button>
           </div>
         </Dialog>
       )}

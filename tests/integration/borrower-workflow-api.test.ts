@@ -8,14 +8,11 @@ import { DomainError } from '../../src/domain/types.js';
 import { createApp } from '../../src/server/index.js';
 import { apiRouter } from '../../src/server/routes.js';
 import { SessionStore } from '../../src/server/session.js';
-
 const databases: InventoryDatabase[] = [];
-
 afterEach(() => {
   vi.restoreAllMocks();
   for (const db of databases.splice(0)) db.close();
 });
-
 function fixture() {
   const db = openDatabase(':memory:');
   databases.push(db);
@@ -23,19 +20,48 @@ function fixture() {
   const app = createApp({ database: db, adminPassword: 'admin-pass', serveWeb: false });
   return { db, inventory, agent: request.agent(app) };
 }
-
 describe('borrower workflow snapshot API', () => {
   it('commits a standalone consumable batch atomically with replay and strict quantity validation', async () => {
     const { db, inventory, agent } = fixture();
-    const first = inventory.createItem({ name: 'Tape', kind: 'consumable' });
-    const second = inventory.createItem({ name: 'Ties', kind: 'consumable' });
-    inventory.addStock(first.id, 3);
-    inventory.addStock(second.id, 2);
+    const first = inventory.createItem({
+      name: 'Tape',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    const second = inventory.createItem({
+      name: 'Ties',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      first.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.addStock(
+      second.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const body = {
       ledgerEpoch: 1,
       items: [
-        { itemId: first.id, quantity: 2, note: 'desk' },
-        { itemId: second.id, quantity: 1, note: '' },
+        { itemId: first.id, quantity: 2, note: 'desk', locationId: 1 },
+        { itemId: second.id, quantity: 1, note: '', locationId: 1 },
       ],
     };
     const path = '/api/issue-batch';
@@ -73,13 +99,16 @@ describe('borrower workflow snapshot API', () => {
     await agent
       .post(path)
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000915')
-      .send({ ledgerEpoch: 1, items: [{ itemId: first.id, quantity: 1.5, note: '' }] })
+      .send({
+        ledgerEpoch: 1,
+        items: [{ itemId: first.id, quantity: 1.5, note: '', locationId: 1 }],
+      })
       .expect(400);
     const shortage = {
       ledgerEpoch: 1,
       items: [
-        { itemId: first.id, quantity: 2, note: '' },
-        { itemId: second.id, quantity: 2, note: '' },
+        { itemId: first.id, quantity: 2, note: '', locationId: 1 },
+        { itemId: second.id, quantity: 2, note: '', locationId: 1 },
       ],
     };
     await agent
@@ -124,10 +153,33 @@ describe('borrower workflow snapshot API', () => {
       fullName: 'Operator Loss',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Operator tent', kind: 'non_consumable' });
-    inventory.addStock(item.id, 3);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 3);
-
+    const item = inventory.createItem({
+      name: 'Operator tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000119')
@@ -138,13 +190,12 @@ describe('borrower workflow snapshot API', () => {
           {
             itemId: item.id,
             lost: [{ quantity: 2, note: 'missing' }],
-            lostCredit: [{ quantity: 1, condition: 'usable', note: 'received' }],
+            lostCredit: [{ quantity: 1, condition: 'usable', note: 'received', locationId: 1 }],
           },
         ],
       })
       .expect(201)
       .expect(({ body }) => expect(body).toMatchObject({ outcome: 'committed' }));
-
     expect(
       db
         .prepare(
@@ -160,7 +211,6 @@ describe('borrower workflow snapshot API', () => {
       inventory: [expect.objectContaining({ id: item.id, available: 1 })],
     });
   });
-
   it('accepts an operator lost-credit part and rejects malformed lost-credit payloads', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -168,11 +218,34 @@ describe('borrower workflow snapshot API', () => {
       fullName: 'Lost Credit',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Recovered tent', kind: 'non_consumable' });
-    inventory.addStock(item.id, 1);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
+    const item = inventory.createItem({
+      name: 'Recovered tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkoutId, 1, true);
-
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000120')
@@ -180,7 +253,10 @@ describe('borrower workflow snapshot API', () => {
         contractVersion: 1,
         ledgerEpoch: 1,
         items: [
-          { itemId: item.id, lostCredit: [{ quantity: 1, condition: 'usable', note: 'found' }] },
+          {
+            itemId: item.id,
+            lostCredit: [{ quantity: 1, condition: 'usable', note: 'found', locationId: 1 }],
+          },
         ],
       })
       .expect(201)
@@ -200,7 +276,6 @@ describe('borrower workflow snapshot API', () => {
     ]);
     expect(inventory.listItems().find((entry) => entry.id === item.id)!.available).toBe(1);
     expect(inventory.listLoans()).toEqual([]);
-
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000121')
@@ -210,16 +285,17 @@ describe('borrower workflow snapshot API', () => {
         items: [
           {
             itemId: item.id,
-            lostCredit: [{ quantity: 1, condition: 'usable', note: '', extra: true }],
+            lostCredit: [
+              { quantity: 1, condition: 'usable', note: '', extra: true, locationId: 1 },
+            ],
           },
         ],
       })
       .expect(400)
       .expect(({ body }) => expect(body.error).toBe('validation_error'));
-
     for (const invalidPart of [
       { quantity: 1, note: 'implicit usable' },
-      { quantity: 1, condition: 'broken', note: '' },
+      { quantity: 1, condition: 'broken', note: '', locationId: 1 },
     ])
       await agent
         .post(`/api/borrowers/${borrower.id}/operations`)
@@ -232,7 +308,6 @@ describe('borrower workflow snapshot API', () => {
         .expect(400)
         .expect(({ body }) => expect(body.error).toBe('validation_error'));
   });
-
   it('accepts an operator damaged lost recovery without usable-stock credit', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -240,11 +315,34 @@ describe('borrower workflow snapshot API', () => {
       fullName: 'Damaged Lost Credit',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Damaged found tent', kind: 'non_consumable' });
-    inventory.addStock(item.id, 1);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 1);
+    const item = inventory.createItem({
+      name: 'Damaged found tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkoutId, 1, true);
-
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000123')
@@ -254,7 +352,9 @@ describe('borrower workflow snapshot API', () => {
         items: [
           {
             itemId: item.id,
-            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'returned broken' }],
+            lostCredit: [
+              { quantity: 1, condition: 'damaged', note: 'returned broken', locationId: 1 },
+            ],
           },
         ],
       })
@@ -272,7 +372,6 @@ describe('borrower workflow snapshot API', () => {
     });
     expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([]);
   });
-
   it('returns the exact search and desk snapshot transports', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -294,11 +393,43 @@ describe('borrower workflow snapshot API', () => {
       phoneNumber: '999',
       campDepartment: 'מחנה אחר',
     });
-    const item = inventory.createItem({ name: 'Tent', kind: 'non_consumable' });
-    inventory.addStock(item.id, 2);
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
-    inventory.returnCheckout(checkout, 0, 1);
-
+    const item = inventory.createItem({
+      name: 'Tent',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkout,
+      0,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     await agent
       .get('/api/borrowers/search')
       .query({ q: ' ０５０   １２３ ' })
@@ -339,7 +470,13 @@ describe('borrower workflow snapshot API', () => {
               name: view.name,
               kind: view.kind,
               lotSize: view.lotSize,
-              locationId: view.locationId,
+              balances: [
+                {
+                  locationId: view.balances[0]!.locationId,
+                  available: view.available,
+                  damaged: view.damaged,
+                },
+              ],
               archived: view.archived,
               aliases: view.aliases,
               available: view.available,
@@ -350,11 +487,12 @@ describe('borrower workflow snapshot API', () => {
           holdings: [{ itemId: item.id, returnable: 1, lost: 0 }],
           stateRevision: 3,
           ledgerEpoch: 1,
+          locations: inventory.listLocations(),
+          defaultLocationId: null,
         });
       });
     expect(db.isTransaction).toBe(false);
   });
-
   it('uses the existing typed envelope for unknown, inactive, and internal snapshot failures', async () => {
     const { db, inventory, agent } = fixture();
     const active = inventory.createBorrower({
@@ -368,7 +506,6 @@ describe('borrower workflow snapshot API', () => {
       campDepartment: 'מחנה אחר',
     });
     inventory.archiveBorrower(inactive.id, true);
-
     await agent
       .get('/api/borrowers/999999/desk-snapshot')
       .expect(404)
@@ -381,7 +518,6 @@ describe('borrower workflow snapshot API', () => {
       .expect(({ body }) =>
         expect(body).toEqual({ error: 'inactive_borrower', message: 'Borrower is inactive' }),
       );
-
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     db.exec('DROP TABLE items');
     await agent
@@ -400,15 +536,20 @@ describe('borrower workflow snapshot API', () => {
       );
     expect(db.isTransaction).toBe(false);
   });
-
   it('preserves forbidden mutation behavior without writing an event or receipt', async () => {
     const { db, inventory, agent } = fixture();
-    const item = inventory.createItem({ name: 'Protected', kind: 'consumable' });
+    const item = inventory.createItem({
+      name: 'Protected',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const before = {
       events: db.prepare('SELECT COUNT(*) count FROM inventory_events').get(),
       receipts: db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get(),
     };
-
     await agent
       .post('/api/stock/add')
       .send({ itemId: item.id, quantity: 1 })
@@ -421,7 +562,6 @@ describe('borrower workflow snapshot API', () => {
       receipts: db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get(),
     }).toEqual(before);
   });
-
   it('validates command transport strictly before writing receipts and preserves unknown borrower 404', async () => {
     const { db, agent } = fixture();
     await agent
@@ -444,7 +584,6 @@ describe('borrower workflow snapshot API', () => {
     expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
       count: 0,
     });
-
     await agent
       .post('/api/borrowers/1/operations')
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000100')
@@ -454,10 +593,12 @@ describe('borrower workflow snapshot API', () => {
         items: [
           {
             itemId: 1,
-            borrow: [{ quantity: Number.MAX_SAFE_INTEGER + 1, note: 'x'.repeat(501) }],
-            return: [{ usable: 0, damaged: 0, note: '', extra: true }],
+            borrow: [
+              { quantity: Number.MAX_SAFE_INTEGER + 1, note: 'x'.repeat(501), locationId: 1 },
+            ],
+            return: [{ usable: 0, damaged: 0, note: '', extra: true, locationId: 1 }],
           },
-          { itemId: 1, borrow: [{ quantity: 1, note: '' }] },
+          { itemId: 1, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
         ],
       })
       .expect(400)
@@ -470,14 +611,13 @@ describe('borrower workflow snapshot API', () => {
     expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
       count: 0,
     });
-
     await agent
       .post('/api/borrowers/999999/operations')
       .set('Idempotency-Key', '00000000-0000-4000-8000-000000000101')
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, borrow: [{ quantity: 1, note: '' }] }],
+        items: [{ itemId: 1, borrow: [{ quantity: 1, note: '', locationId: 1 }] }],
       })
       .expect(404)
       .expect(({ body }) =>
@@ -487,7 +627,6 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it('rejects unsafe aggregate quantities before domain access', async () => {
     const { db, agent } = fixture();
     await agent
@@ -500,12 +639,12 @@ describe('borrower workflow snapshot API', () => {
           {
             itemId: 1,
             borrow: [
-              { quantity: Number.MAX_SAFE_INTEGER, note: '' },
-              { quantity: 1, note: '' },
+              { quantity: Number.MAX_SAFE_INTEGER, note: '', locationId: 1 },
+              { quantity: 1, note: '', locationId: 1 },
             ],
             return: [
-              { usable: Number.MAX_SAFE_INTEGER, damaged: 1, note: '' },
-              { usable: 1, damaged: 0, note: '' },
+              { usable: Number.MAX_SAFE_INTEGER, damaged: 1, note: '', locationId: 1 },
+              { usable: 1, damaged: 0, note: '', locationId: 1 },
             ],
             lost: [
               { quantity: Number.MAX_SAFE_INTEGER, note: '' },
@@ -536,7 +675,6 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it('rejects unsafe combined return and loss consumption before domain conflict handling', async () => {
     const { db, agent } = fixture();
     await agent
@@ -548,7 +686,7 @@ describe('borrower workflow snapshot API', () => {
         items: [
           {
             itemId: 1,
-            return: [{ usable: Number.MAX_SAFE_INTEGER, damaged: 0, note: '' }],
+            return: [{ usable: Number.MAX_SAFE_INTEGER, damaged: 0, note: '', locationId: 1 }],
             lost: [{ quantity: 1, note: '' }],
           },
         ],
@@ -570,7 +708,6 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it('strictly rejects malformed borrower creation before borrower or receipt insertion', async () => {
     const { db, agent } = fixture();
     await agent
@@ -613,7 +750,6 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it.each([
     {
       name: 'empty item list',
@@ -632,8 +768,8 @@ describe('borrower workflow snapshot API', () => {
         contractVersion: 1,
         ledgerEpoch: 1,
         items: [
-          { itemId: 1, borrow: [{ quantity: 1, note: '' }] },
-          { itemId: 1, borrow: [{ quantity: 1, note: '' }] },
+          { itemId: 1, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
+          { itemId: 1, borrow: [{ quantity: 1, note: '', locationId: 1 }] },
         ],
       },
       fieldErrors: [
@@ -708,7 +844,7 @@ describe('borrower workflow snapshot API', () => {
       body: {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, return: [{ usable: 0, damaged: 0, note: '' }] }],
+        items: [{ itemId: 1, return: [{ usable: 0, damaged: 0, note: '', locationId: 1 }] }],
       },
       fieldErrors: [
         {
@@ -723,7 +859,12 @@ describe('borrower workflow snapshot API', () => {
       body: {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: Number.MAX_SAFE_INTEGER + 1, borrow: [{ quantity: 1, note: '' }] }],
+        items: [
+          {
+            itemId: Number.MAX_SAFE_INTEGER + 1,
+            borrow: [{ quantity: 1, note: '', locationId: 1 }],
+          },
+        ],
       },
       fieldErrors: [
         {
@@ -741,7 +882,7 @@ describe('borrower workflow snapshot API', () => {
         items: [
           {
             itemId: 1,
-            borrow: [{ quantity: Number.MAX_SAFE_INTEGER + 1, note: '' }],
+            borrow: [{ quantity: Number.MAX_SAFE_INTEGER + 1, note: '', locationId: 1 }],
           },
         ],
       },
@@ -768,7 +909,7 @@ describe('borrower workflow snapshot API', () => {
       body: {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, return: [{ usable: -1, damaged: 2, note: '' }] }],
+        items: [{ itemId: 1, return: [{ usable: -1, damaged: 2, note: '', locationId: 1 }] }],
       },
       fieldErrors: [
         {
@@ -783,7 +924,7 @@ describe('borrower workflow snapshot API', () => {
       body: {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, return: [{ usable: 2, damaged: -1, note: '' }] }],
+        items: [{ itemId: 1, return: [{ usable: 2, damaged: -1, note: '', locationId: 1 }] }],
       },
       fieldErrors: [
         {
@@ -798,7 +939,7 @@ describe('borrower workflow snapshot API', () => {
       body: {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, borrow: [{ quantity: 1, note: 'x'.repeat(501) }] }],
+        items: [{ itemId: 1, borrow: [{ quantity: 1, note: 'x'.repeat(501), locationId: 1 }] }],
       },
       fieldErrors: [
         {
@@ -813,7 +954,7 @@ describe('borrower workflow snapshot API', () => {
       body: {
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, borrow: [{ quantity: 1, note: '', extra: true }] }],
+        items: [{ itemId: 1, borrow: [{ quantity: 1, note: '', extra: true, locationId: 1 }] }],
       },
       fieldErrors: [
         {
@@ -843,14 +984,12 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it('parses authorized command bodies locally and rejects malformed or oversized JSON without domain access', async () => {
     const create = vi.spyOn(InventoryService.prototype, 'createBorrowerCommand');
     const commit = vi.spyOn(InventoryService.prototype, 'commitBorrowerOperations');
     const getSession = vi.spyOn(SessionStore.prototype, 'get');
     const { db, agent } = fixture();
     const oversized = 'x'.repeat(33 * 1024);
-
     for (const path of [
       '/api/borrowers',
       '/api/borrowers/',
@@ -865,7 +1004,6 @@ describe('borrower workflow snapshot API', () => {
         .send('{"incomplete"')
         .expect(400)
         .expect({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
-
     await agent
       .post('/api/borrowers')
       .send({
@@ -883,11 +1021,10 @@ describe('borrower workflow snapshot API', () => {
       .send({
         contractVersion: 1,
         ledgerEpoch: 1,
-        items: [{ itemId: 1, borrow: [{ quantity: 1, note: oversized }] }],
+        items: [{ itemId: 1, borrow: [{ quantity: 1, note: oversized, locationId: 1 }] }],
       })
       .expect(400)
       .expect({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
-
     expect(create).not.toHaveBeenCalled();
     expect(commit).not.toHaveBeenCalled();
     expect(getSession).toHaveBeenCalledTimes(8);
@@ -895,7 +1032,6 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it('rejects unsupported versions before epoch or receipt access for both commands', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -903,8 +1039,23 @@ describe('borrower workflow snapshot API', () => {
       fullName: 'Version Subject',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Version item', kind: 'non_consumable' });
-    inventory.addStock(item.id, 2);
+    const item = inventory.createItem({
+      name: 'Version item',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const createKey = '00000000-0000-4000-8000-000000000109';
     const operationKey = '00000000-0000-4000-8000-000000000110';
     const createBody = {
@@ -918,7 +1069,7 @@ describe('borrower workflow snapshot API', () => {
     const operationBody = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: '' }] }],
+      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: '', locationId: 1 }] }],
     };
     await agent
       .post('/api/borrowers')
@@ -935,7 +1086,6 @@ describe('borrower workflow snapshot API', () => {
     });
     const create = vi.spyOn(InventoryService.prototype, 'createBorrowerCommand');
     const commit = vi.spyOn(InventoryService.prototype, 'commitBorrowerOperations');
-
     const rejectUnsupportedVersions = async () => {
       await agent
         .post('/api/borrowers')
@@ -966,7 +1116,7 @@ describe('borrower workflow snapshot API', () => {
         .send({
           contractVersion: 2,
           ledgerEpoch: 1,
-          items: [{ itemId: item.id, borrow: [{ quantity: 2, note: '' }] }],
+          items: [{ itemId: item.id, borrow: [{ quantity: 2, note: '', locationId: 1 }] }],
         })
         .expect(400)
         .expect({
@@ -981,7 +1131,6 @@ describe('borrower workflow snapshot API', () => {
           ],
         });
     };
-
     await rejectUnsupportedVersions();
     db.prepare('UPDATE inventory_replacement_guard SET ledger_epoch=2 WHERE singleton=1').run();
     const before = {
@@ -990,7 +1139,6 @@ describe('borrower workflow snapshot API', () => {
       receipts: db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get(),
     };
     await rejectUnsupportedVersions();
-
     expect(create).not.toHaveBeenCalled();
     expect(commit).not.toHaveBeenCalled();
     await agent
@@ -1012,7 +1160,6 @@ describe('borrower workflow snapshot API', () => {
       receipts: db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get(),
     }).toEqual(before);
   });
-
   it('maps command conflicts and protocol errors to receipt-safe 409 responses', async () => {
     const { db, inventory, agent } = fixture();
     const borrower = inventory.createBorrower({
@@ -1020,12 +1167,19 @@ describe('borrower workflow snapshot API', () => {
       fullName: 'Conflict User',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Unavailable', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Unavailable',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const operationKey = '00000000-0000-4000-8000-000000000105';
     const operation = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: '' }] }],
+      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: '', locationId: 1 }] }],
     };
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)
@@ -1039,7 +1193,6 @@ describe('borrower workflow snapshot API', () => {
           idempotencyKey: operationKey,
         }),
       );
-
     const createKey = '00000000-0000-4000-8000-000000000106';
     await agent
       .post('/api/borrowers')
@@ -1060,7 +1213,6 @@ describe('borrower workflow snapshot API', () => {
           idempotencyKey: createKey,
         }),
       );
-
     const beforeProtocolErrors = {
       borrowers: db.prepare('SELECT COUNT(*) count FROM borrowers').get(),
       events: db.prepare('SELECT COUNT(*) count FROM inventory_events').get(),
@@ -1070,7 +1222,10 @@ describe('borrower workflow snapshot API', () => {
     await agent
       .post(`/api/borrowers/${borrower.id}/operations`)
       .set('Idempotency-Key', operationKey)
-      .send({ ...operation, items: [{ itemId: item.id, borrow: [{ quantity: 2, note: '' }] }] })
+      .send({
+        ...operation,
+        items: [{ itemId: item.id, borrow: [{ quantity: 2, note: '', locationId: 1 }] }],
+      })
       .expect(409)
       .expect(({ body }) =>
         expect(body).toMatchObject({
@@ -1121,7 +1276,6 @@ describe('borrower workflow snapshot API', () => {
       receiptRows: db.prepare('SELECT * FROM idempotency_receipts ORDER BY key').all(),
     }).toEqual(beforeProtocolErrors);
   });
-
   it('exposes atomic creation and borrower operation replay envelopes to operators', async () => {
     const { db, inventory, agent } = fixture();
     const createKey = '00000000-0000-4000-8000-000000000102';
@@ -1211,14 +1365,28 @@ describe('borrower workflow snapshot API', () => {
       campDepartment: 'מחנה אחר',
       archived: false,
     });
-
-    const item = inventory.createItem({ name: 'Command item', kind: 'non_consumable' });
-    inventory.addStock(item.id, 1);
+    const item = inventory.createItem({
+      name: 'Command item',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const operationKey = '00000000-0000-4000-8000-000000000103';
     const operationBody = {
       contractVersion: 1,
       ledgerEpoch: 1,
-      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: 'route' }] }],
+      items: [{ itemId: item.id, borrow: [{ quantity: 1, note: 'route', locationId: 1 }] }],
     };
     await agent
       .post(`/api/borrowers/${borrowerId}/operations`)
@@ -1248,7 +1416,6 @@ describe('borrower workflow snapshot API', () => {
       count: 1,
     });
   });
-
   it('rejects unauthorized command requests before transport parsing or domain access', async () => {
     const db = openDatabase(':memory:');
     databases.push(db);
@@ -1269,7 +1436,6 @@ describe('borrower workflow snapshot API', () => {
       if (error instanceof DomainError)
         res.status(error.status).json({ error: error.code, message: error.message });
     }) as express.ErrorRequestHandler);
-
     for (const path of [
       '/api/borrowers',
       '/api/borrowers/',
@@ -1288,48 +1454,40 @@ describe('borrower workflow snapshot API', () => {
       count: 0,
     });
   });
-
   it('rejects malformed and oversized legacy JSON before production session resolution', async () => {
     const db = openDatabase(':memory:');
     databases.push(db);
     const getSession = vi.spyOn(SessionStore.prototype, 'get');
     const app = createApp({ database: db, adminPassword: 'admin-pass', serveWeb: false });
-
     await request(app)
       .post('/api/issue')
       .set('Content-Type', 'application/json')
       .send('{"itemId"')
       .expect(400)
       .expect({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
-
     await request(app)
       .post('/api/issue')
       .send({ note: 'x'.repeat(33 * 1024) })
       .expect(400)
       .expect({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
-
     await request(app)
       .post('/api/borrowers/1/operations/extra')
       .set('Content-Type', 'application/json')
       .send('{"itemId"')
       .expect(400)
       .expect({ error: 'invalid_json', message: 'גוף הבקשה אינו JSON תקין או גדול מדי' });
-
     expect(getSession).not.toHaveBeenCalled();
   });
-
   it('maps malformed encoded command paths to a client error', async () => {
     const db = openDatabase(':memory:');
     databases.push(db);
     const getSession = vi.spyOn(SessionStore.prototype, 'get');
     const app = createApp({ database: db, adminPassword: 'admin-pass', serveWeb: false });
-
     await request(app)
       .post('/api/borrowers/%ZZ/operations')
       .send({})
       .expect(400)
       .expect({ error: 'invalid_path', message: 'Invalid request path' });
-
     expect(getSession).toHaveBeenCalledTimes(1);
   });
 });

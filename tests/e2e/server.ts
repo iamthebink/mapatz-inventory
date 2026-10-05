@@ -7,18 +7,25 @@ import { allocateIdentity } from '../../src/db/identity-high-water.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 import { periodBounds, todayInIsrael } from '../../src/domain/period-summary.js';
 import { createApp } from '../../src/server/index.js';
-
 const directory = mkdtempSync(join(tmpdir(), 'mapatz-e2e-'));
 const databasePath = join(directory, 'inventory.sqlite');
 const database = openDatabase(databasePath);
 const inventory = new InventoryService(database);
+const fixtureDefault = inventory.listLocations().find((location) => location.code === 'monster')!;
+inventory.saveInventoryLocation({
+  key: 'e2e-default',
+  ledgerEpoch: 1,
+  locationId: fixtureDefault.id,
+  name: fixtureDefault.name,
+  code: fixtureDefault.code,
+  isDefault: true,
+});
 const app = createApp({
   database,
   adminPassword: 'e2e-admin-password',
   serveWeb: false,
 });
 let sequence = 0;
-
 app.get('/__e2e__/health', (_request, response) => response.json({ ready: true }));
 app.get('/__e2e__/database', (_request, response) => response.json({ databasePath }));
 app.post('/__e2e__/table-data', (_request, response) => {
@@ -31,22 +38,67 @@ app.post('/__e2e__/table-data', (_request, response) => {
     campDepartment: '',
   });
   for (let index = 0; index < 36; index += 1) {
-    const item = inventory.createItem({ name: `ציוד ${prefix}-${index}`, kind: 'non_consumable' });
-    inventory.addStock(item.id, 5);
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
+    const item = inventory.createItem({
+      name: `ציוד ${prefix}-${index}`,
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkout, 1, true);
     const consumable = inventory.createItem({
       name: `מתכלה ${prefix}-${index}`,
       kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
     });
-    inventory.addStock(consumable.id, 5);
+    inventory.addStock(
+      consumable.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const other = inventory.createBorrower({
       fullName: `שואל ${prefix}-${index}`,
       playaName: `${prefix}-${index}`,
       phoneNumber: '',
       campDepartment: '',
     });
-    inventory.checkout(item.id, other.id, 1);
+    inventory.checkout(
+      item.id,
+      other.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.createLocation(`${prefix}-${index}`, `מיקום ${prefix}-${index}`);
   }
   response.json({ borrower, prefix });
@@ -57,18 +109,54 @@ app.post('/__e2e__/seed', (_request, response) => {
     name: `פריט מלאי בדיקה ${sequence}`,
     kind: 'non_consumable',
     aliases: [`stock-${sequence}`],
+    locationId: Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
   });
-  inventory.addStock(stockItem.id, 3, 'e2e seed');
+  inventory.addStock(
+    stockItem.id,
+    3,
+    'e2e seed',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   const consumable = inventory.createItem({
     name: `מתכלה בדיקה ${sequence}`,
     kind: 'consumable',
+    locationId: Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
   });
-  inventory.addStock(consumable.id, 5, 'e2e seed');
+  inventory.addStock(
+    consumable.id,
+    5,
+    'e2e seed',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   const secondConsumable = inventory.createItem({
     name: `מתכלה נוסף ${sequence}`,
     kind: 'consumable',
+    locationId: Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
   });
-  inventory.addStock(secondConsumable.id, 4, 'e2e seed');
+  inventory.addStock(
+    secondConsumable.id,
+    4,
+    'e2e seed',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   const borrower = inventory.createBorrower({
     playaName: `e2e-${sequence}`,
     fullName: `שואל בדיקה ${sequence}`,
@@ -79,15 +167,48 @@ app.post('/__e2e__/seed', (_request, response) => {
     name: `אוהל בדיקה ${sequence}`,
     kind: 'non_consumable',
     aliases: [`tent-${sequence}`],
+    locationId: Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
   });
-  inventory.addStock(item.id, 6, 'e2e seed');
-  const checkoutId = inventory.checkout(item.id, borrower.id, 2, 'e2e holding');
+  inventory.addStock(
+    item.id,
+    6,
+    'e2e seed',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
+  const checkoutId = inventory.checkout(
+    item.id,
+    borrower.id,
+    2,
+    'e2e holding',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   const archiveItem = inventory.createItem({
     name: `פריט ארכיון בדיקה ${sequence}`,
     kind: 'non_consumable',
     aliases: [`archive-${sequence}`],
+    locationId: Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
   });
-  inventory.addStock(archiveItem.id, 2, 'e2e seed');
+  inventory.addStock(
+    archiveItem.id,
+    2,
+    'e2e seed',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   const archivedBorrower = inventory.createBorrower({
     playaName: `archived-${sequence}`,
     fullName: `שואל ארכיון ${sequence}`,
@@ -108,7 +229,7 @@ app.post('/__e2e__/seed', (_request, response) => {
 });
 app.post('/__e2e__/period-summary/history/:borrowerId/:itemId', (request, response) => {
   const today = todayInIsrael();
-  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86_400_000)
+  const yesterday = new Date(Date.parse(`${today}T00:00:00Z`) - 86400000)
     .toISOString()
     .slice(0, 10);
   const { startUtc } = periodBounds(yesterday, yesterday);
@@ -143,14 +264,23 @@ app.post(
         name: stockItem.name,
         aliases: stockItem.aliases,
         lotSize: stockItem.lotSize,
-        locationId: stockItem.locationId,
+        locationId: stockItem.balances[0]!.locationId,
         targetAvailable: 0,
         stockRevision: stockItem.stockRevision,
         note: 'e2e stock conflict',
       });
     const loan = inventory.listLoans().find((candidate) => candidate.checkoutId === checkoutId);
     if (loan?.outstanding)
-      inventory.returnCheckout(checkoutId, loan.outstanding, 0, 'e2e return conflict');
+      inventory.returnCheckout(
+        checkoutId,
+        loan.outstanding,
+        0,
+        'e2e return conflict',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
     inventory.archiveItem(archiveItemId, true);
     response.status(204).end();
   },
@@ -162,10 +292,35 @@ app.post(
     const itemId = Number(request.params.itemId);
     const stockItemId = Number(request.params.stockItemId);
     const archiveItemId = Number(request.params.archiveItemId);
-    inventory.addStock(stockItemId, 4, 'e2e conflict resolution');
-    inventory.checkout(itemId, borrowerId, 2, 'e2e conflict resolution');
+    inventory.addStock(
+      stockItemId,
+      4,
+      'e2e conflict resolution',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.checkout(
+      itemId,
+      borrowerId,
+      2,
+      'e2e conflict resolution',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.archiveItem(archiveItemId, false);
-    inventory.addStock(archiveItemId, 2, 'e2e conflict resolution');
+    inventory.addStock(
+      archiveItemId,
+      2,
+      'e2e conflict resolution',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     response.status(204).end();
   },
 );
@@ -173,7 +328,16 @@ app.post('/__e2e__/archive-borrower/:borrowerId', (request, response) => {
   const borrowerId = Number(request.params.borrowerId);
   for (const loan of inventory.listLoans()) {
     if (Number(loan.borrowerId) === borrowerId && Number(loan.outstanding) > 0)
-      inventory.returnCheckout(Number(loan.checkoutId), Number(loan.outstanding), 0);
+      inventory.returnCheckout(
+        Number(loan.checkoutId),
+        Number(loan.outstanding),
+        0,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
   }
   inventory.archiveBorrower(borrowerId, true);
   response.status(204).end();
@@ -184,7 +348,6 @@ app.post('/__e2e__/rotate-epoch', (_request, response) => {
   );
   response.status(204).end();
 });
-
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
@@ -202,7 +365,6 @@ app.post('/__e2e__/shutdown', (_request, response) => {
   response.status(204).end();
   setImmediate(() => void shutdown().then(() => process.exit(0)));
 });
-
 const vite = await createViteServer({
   server: { middlewareMode: true, hmr: false },
   appType: 'spa',

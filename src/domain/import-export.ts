@@ -21,6 +21,7 @@ type Row = Record<string, unknown>;
 export interface TransferLocation {
   name: string;
   archived: boolean;
+  isDefault: boolean;
 }
 
 export interface TransferItem {
@@ -63,6 +64,8 @@ export interface TransferBorrower {
 }
 
 export interface TransferEvent {
+  locationName: string | null;
+  locationCode: string | null;
   id: number;
   kind: EventKind;
   itemId: number;
@@ -144,25 +147,26 @@ export function unresolvedDamageReport(
 export function consumablesUsageReport(
   snapshot: InventoryTransferSnapshot,
 ): ConsumablesUsageReportRow[] {
-  return snapshot.items
-    .filter((item) => item.kind === 'consumable')
-    .map((item) => {
-      let addedDuringCycle = 0;
-      let usage = 0;
-      for (const event of snapshot.events) {
-        if (event.itemId !== item.id || event.id <= item.baselineThroughEventId) continue;
-        if (event.kind === 'stock_added') addedDuringCycle += event.quantity;
-        if (event.kind === 'issued') usage += event.quantity;
-      }
-      return {
-        itemName: item.name,
-        location: item.location,
-        startOfCycleStock: item.startingStock,
-        addedDuringCycle,
-        usage,
-        left: item.available,
-      };
-    });
+  const identities = new Map<number, TransferItem[]>();
+  for (const item of snapshot.items)
+    if (item.kind === 'consumable')
+      identities.set(item.id, [...(identities.get(item.id) ?? []), item]);
+  return [...identities.values()].map((placements) => {
+    const item = placements[0]!;
+    const events = snapshot.events.filter(
+      (e) => e.itemId === item.id && e.id > item.baselineThroughEventId,
+    );
+    return {
+      itemName: item.name,
+      location: placements.map((p) => p.location).join(', '),
+      startOfCycleStock: item.startingStock,
+      addedDuringCycle: events
+        .filter((e) => e.kind === 'stock_added')
+        .reduce((t, e) => t + e.quantity, 0),
+      usage: events.filter((e) => e.kind === 'issued').reduce((t, e) => t + e.quantity, 0),
+      left: placements.reduce((t, p) => t + p.available, 0),
+    };
+  });
 }
 
 function invalidWorkbook(message: string): never {
@@ -206,6 +210,61 @@ function utcTimestamp(value: string): number {
   return Date.parse(`${value.replace(' ', 'T')}Z`);
 }
 
+function identityMetadata(item: ResetItem | RecoveryItem): string {
+  const common = {
+    name: normalizeItemName(item.name),
+    kind: item.kind,
+    aliases: [...item.aliases].sort(),
+    lotSize: item.lotSize,
+    archived: item.archived,
+  };
+  return JSON.stringify(
+    'id' in item
+      ? {
+          ...common,
+          id: item.id,
+          createdAt: item.createdAt,
+          startingStock: item.startingStock,
+          baselineThroughEventId: item.baselineThroughEventId,
+          borrowed: item.borrowed,
+          lost: item.lost,
+          revision: item.revision,
+        }
+      : common,
+  );
+}
+
+export function validateResetPayload(payload: ResetPayload): ResetPayload {
+  const locations = new Map(payload.locations.map((l) => [l.name.toLocaleLowerCase(), l]));
+  if (
+    locations.size !== payload.locations.length ||
+    payload.locations.filter((l) => l.isDefault).length > 1 ||
+    payload.locations.some((l) => l.isDefault && l.archived)
+  )
+    invalidWorkbook('Invalid or duplicate reset locations/default');
+  const identities = new Map<string, ResetItem>();
+  const placements = new Set<string>();
+  const totals = new Map<string, number>();
+  for (const item of payload.items) {
+    if (!Number.isSafeInteger(item.total) || item.total < 0 || (item.archived && item.total > 0))
+      invalidWorkbook('Invalid reset quantity');
+    const location = locations.get(item.location?.toLocaleLowerCase() ?? '');
+    if (!location || location.archived) invalidWorkbook('Reset items require an active location');
+    const key = normalizeItemName(item.name);
+    const placement = JSON.stringify([key, location.name.toLocaleLowerCase()]);
+    if (placements.has(placement)) invalidWorkbook('Duplicate reset placement');
+    placements.add(placement);
+    const identity = identities.get(key);
+    if (identity && identityMetadata(identity) !== identityMetadata(item))
+      invalidWorkbook('Reset identity metadata disagrees');
+    identities.set(key, item);
+    const total = (totals.get(key) ?? 0) + item.total;
+    if (!Number.isSafeInteger(total)) invalidWorkbook('Reset totals exceed safe integer range');
+    totals.set(key, total);
+  }
+  return payload;
+}
+
 export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPayload {
   const identityFields = ['nextItemId', 'nextBorrowerId', 'nextLocationId', 'nextEventId'] as const;
   if (
@@ -239,7 +298,14 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery Locations contains duplicate name "${location.name}"`);
     locations.set(key, location);
   }
+  if (
+    payload.locations.filter((l) => l.isDefault).length > 1 ||
+    payload.locations.some((l) => l.isDefault && l.archived)
+  )
+    invalidWorkbook('Invalid recovery default');
   const items = new Map<number, RecoveryItem>();
+  const placements = new Set<string>();
+  const physicalTotals = new Map<number, number>();
   const itemNames = new Set<string>();
   for (const item of payload.items) {
     safe(item.id, 'Item ID', true);
@@ -255,13 +321,22 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       safe(item[field], `Recovery item ${item.id} ${field}`);
     if (item.revision > payload.stateRevision)
       invalidWorkbook(`Recovery item ${item.id} revision exceeds the state revision`);
-    if (items.has(item.id)) invalidWorkbook(`Recovery Items contains duplicate Item ID ${item.id}`);
+    const existing = items.get(item.id);
+    if (existing && identityMetadata(existing) !== identityMetadata(item))
+      invalidWorkbook(`Recovery item ${item.id} metadata disagrees`);
+    const placement = JSON.stringify([item.id, item.location?.toLocaleLowerCase()]);
+    if (placements.has(placement)) invalidWorkbook('Recovery Items contains duplicate placement');
+    placements.add(placement);
+    const physical = (physicalTotals.get(item.id) ?? 0) + item.available + item.damaged;
+    if (!Number.isSafeInteger(physical + item.borrowed + item.lost))
+      invalidWorkbook('Recovery total exceeds safe integer range');
+    physicalTotals.set(item.id, physical);
     const nameKey = normalizeItemName(item.name);
-    if (itemNames.has(nameKey))
+    if (!existing && itemNames.has(nameKey))
       invalidWorkbook(`Recovery Items contains duplicate Name "${item.name}"`);
     const location =
       item.location == null ? undefined : locations.get(item.location.toLocaleLowerCase());
-    if (item.location != null && !location)
+    if (!location)
       invalidWorkbook(`Recovery item ${item.id} references unknown Location "${item.location}"`);
     if (location?.archived)
       invalidWorkbook(`Recovery item ${item.id} references an archived location`);
@@ -317,6 +392,10 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     'found_returned_damaged',
     'repaired',
     'written_off',
+    'transferred_out',
+    'transferred_in',
+    'damaged_transferred_out',
+    'damaged_transferred_in',
   ]);
   const relatedKinds = new Set<EventKind>([
     'returned_usable',
@@ -371,6 +450,8 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
       invalidWorkbook(`Recovery event ${event.id} cannot reference a borrower or checkout`);
     if (event.kind === 'issued' && item.kind !== 'consumable')
       invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
+    if (event.kind !== 'marked_lost' && (!event.locationName || !event.locationCode))
+      invalidWorkbook('Recovery physical event is missing location attribution');
     events.set(event.id, event);
   }
   if (payload.identityHighWater.nextEventId <= previousId)
@@ -455,9 +536,15 @@ export class InventoryTransferService {
   private snapshotInTransaction(): InventoryTransferSnapshot {
     const locations = (
       this.db
-        .prepare('SELECT name, archived FROM locations ORDER BY name COLLATE NOCASE')
+        .prepare(
+          'SELECT name, archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) is_default FROM locations ORDER BY name COLLATE NOCASE',
+        )
         .all() as Row[]
-    ).map((row) => ({ name: String(row.name), archived: Boolean(row.archived) }));
+    ).map((row) => ({
+      name: String(row.name),
+      archived: Boolean(row.archived),
+      isDefault: Boolean(row.is_default),
+    }));
     const aliases = new Map<number, string[]>();
     for (const row of this.db
       .prepare('SELECT item_id, alias FROM item_aliases ORDER BY item_id, alias COLLATE NOCASE')
@@ -470,8 +557,8 @@ export class InventoryTransferService {
         .prepare(
           `SELECT i.*, l.name location_name,b.quantity starting_stock,
           b.through_event_id baseline_through_event_id,
-          s.available,s.borrowed,s.damaged,s.lost,s.revision
-          FROM items i LEFT JOIN locations l ON l.id=i.location_id
+          p.available,s.borrowed,p.damaged,s.lost,s.revision
+          FROM items i JOIN item_location_balances p ON p.item_id=i.id JOIN locations l ON l.id=p.location_id
           LEFT JOIN inventory_baselines b ON b.item_id=i.id
           LEFT JOIN item_state s ON s.item_id=i.id ORDER BY i.name COLLATE NOCASE`,
         )
@@ -537,13 +624,15 @@ export class InventoryTransferService {
       this.db
         .prepare(
           `SELECT e.id,e.kind,i.id item_id,b.id borrower_id,e.quantity,
-          e.related_event_id,e.note,e.created_at FROM inventory_events e
+          e.related_event_id,e.note,e.created_at,e.location_name,e.location_code FROM inventory_events e
           JOIN items i ON i.id=e.item_id LEFT JOIN borrowers b ON b.id=e.borrower_id ORDER BY e.id`,
         )
         .all() as Row[]
     ).map((row) => ({
       id: Number(row.id),
       kind: row.kind as EventKind,
+      locationName: row.location_name == null ? null : String(row.location_name),
+      locationCode: row.location_code == null ? null : String(row.location_code),
       itemId: Number(row.item_id),
       borrowerId: row.borrower_id == null ? null : Number(row.borrower_id),
       quantity: Number(row.quantity),
@@ -589,9 +678,7 @@ export class InventoryTransferService {
   }
 
   replaceWithReset(payload: ResetPayload): void {
-    for (const item of payload.items)
-      if (!Number.isSafeInteger(item.total) || item.total < 0 || (item.archived && item.total > 0))
-        invalidWorkbook(`Reset item ${item.name} has invalid total or archived stock`);
+    payload = validateResetPayload(payload);
     transaction(this.db, () => {
       const previousHighWater = getIdentityHighWater(this.db);
       this.rotateLedgerEpoch();
@@ -600,6 +687,10 @@ export class InventoryTransferService {
       persistIdentityHighWater(this.db, previousHighWater);
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM loan_state').run();
+      this.db.prepare('DELETE FROM item_location_balances').run();
+      this.db
+        .prepare('UPDATE inventory_settings SET default_location_id=NULL WHERE singleton=1')
+        .run();
       this.db.prepare('DELETE FROM item_state').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
@@ -621,35 +712,61 @@ export class InventoryTransferService {
           Number(location.archived),
         );
         locationIds.set(location.name.toLocaleLowerCase(), locationId);
+        if (location.isDefault)
+          this.db
+            .prepare('UPDATE inventory_settings SET default_location_id=? WHERE singleton=1')
+            .run(locationId);
       });
 
-      const insertItem = this.db.prepare(
-        'INSERT INTO items(id,name,kind,lot_size,location_id,archived) VALUES (?,?,?,?,?,?)',
-      );
-      const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
-      const insertEvent = this.db.prepare(
-        "INSERT INTO inventory_events(id,kind,item_id,quantity,note) VALUES (?,'stock_added',?,?,?)",
-      );
-      const insertBaseline = this.db.prepare(
-        'INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,?,?)',
-      );
-      const insertState = this.db.prepare('INSERT INTO item_state(item_id,available) VALUES (?,?)');
+      const identities = new Map<string, ResetItem[]>();
       for (const item of payload.items) {
+        const key = normalizeItemName(item.name);
+        identities.set(key, [...(identities.get(key) ?? []), item]);
+      }
+      for (const placements of identities.values()) {
+        const item = placements[0]!;
         const itemId = allocateIdentity(this.db, 'item');
-        insertItem.run(
-          itemId,
-          item.name,
-          item.kind,
-          item.lotSize,
-          item.location == null ? null : locationIds.get(item.location.toLocaleLowerCase())!,
-          Number(item.archived),
-        );
-        insertState.run(itemId, item.total);
-        for (const alias of item.aliases) insertAlias.run(itemId, alias);
-        const baselineEventId = item.total === 0 ? 0 : allocateIdentity(this.db, 'event');
-        if (baselineEventId !== 0)
-          insertEvent.run(baselineEventId, itemId, item.total, 'Reset baseline import');
-        insertBaseline.run(itemId, item.total, baselineEventId);
+        this.db
+          .prepare('INSERT INTO items(id,name,kind,lot_size,archived) VALUES (?,?,?,?,?)')
+          .run(itemId, item.name, item.kind, item.lotSize, Number(item.archived));
+        this.db.prepare('INSERT INTO item_state(item_id) VALUES (?)').run(itemId);
+        for (const alias of item.aliases)
+          this.db
+            .prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)')
+            .run(itemId, alias);
+        let lastEvent = 0;
+        let total = 0;
+        for (const placement of placements) {
+          const locationId = locationIds.get(placement.location!.toLocaleLowerCase())!;
+          this.db
+            .prepare(
+              'INSERT INTO item_location_balances(item_id,location_id,available) VALUES (?,?,?)',
+            )
+            .run(itemId, locationId, placement.total);
+          total += placement.total;
+          if (placement.total) {
+            lastEvent = allocateIdentity(this.db, 'event');
+            const location = this.db
+              .prepare('SELECT name,code FROM locations WHERE id=?')
+              .get(locationId)!;
+            this.db
+              .prepare(
+                "INSERT INTO inventory_events(id,kind,item_id,quantity,note,location_name,location_code) VALUES (?,'stock_added',?,?,'Reset baseline import',?,?)",
+              )
+              .run(
+                lastEvent,
+                itemId,
+                placement.total,
+                String(location.name),
+                String(location.code),
+              );
+          }
+        }
+        this.db
+          .prepare(
+            'INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,?,?)',
+          )
+          .run(itemId, total, lastEvent);
       }
       this.db.prepare('UPDATE state_clock SET revision=0 WHERE singleton=1').run();
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=0 WHERE singleton=1').run();
@@ -678,6 +795,10 @@ export class InventoryTransferService {
       });
       this.db.prepare('UPDATE inventory_replacement_guard SET enabled=1 WHERE singleton=1').run();
       this.db.prepare('DELETE FROM loan_state').run();
+      this.db.prepare('DELETE FROM item_location_balances').run();
+      this.db
+        .prepare('UPDATE inventory_settings SET default_location_id=NULL WHERE singleton=1')
+        .run();
       this.db.prepare('DELETE FROM item_state').run();
       this.db.prepare('DELETE FROM inventory_events').run();
       this.db.prepare('DELETE FROM inventory_baselines').run();
@@ -699,38 +820,41 @@ export class InventoryTransferService {
           Number(location.archived),
         );
         locationIds.set(location.name.toLocaleLowerCase(), locationId);
+        if (location.isDefault)
+          this.db
+            .prepare('UPDATE inventory_settings SET default_location_id=? WHERE singleton=1')
+            .run(locationId);
       });
 
       const itemIds = new Map<number, number>();
-      const insertItem = this.db.prepare(
-        `INSERT INTO items(id,name,kind,lot_size,location_id,archived,created_at)
-        VALUES (?,?,?,?,?,?,?)`,
-      );
-      const insertAlias = this.db.prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)');
-      const insertState = this.db
-        .prepare(`INSERT INTO item_state(item_id,available,borrowed,damaged,lost,revision)
-        VALUES (?,?,?,?,?,?)`);
       for (const item of payload.items) {
-        const itemId = allocateIdentity(this.db, 'item');
-        insertItem.run(
-          itemId,
-          item.name,
-          item.kind,
-          item.lotSize,
-          item.location == null ? null : locationIds.get(item.location.toLocaleLowerCase())!,
-          Number(item.archived),
-          item.createdAt,
-        );
-        itemIds.set(item.id, itemId);
-        insertState.run(
-          itemId,
-          item.available,
-          item.borrowed,
-          item.damaged,
-          item.lost,
-          item.revision,
-        );
-        for (const alias of item.aliases) insertAlias.run(itemId, alias);
+        let itemId = itemIds.get(item.id);
+        if (itemId === undefined) {
+          itemId = allocateIdentity(this.db, 'item');
+          itemIds.set(item.id, itemId);
+          this.db
+            .prepare(
+              'INSERT INTO items(id,name,kind,lot_size,archived,created_at) VALUES (?,?,?,?,?,?)',
+            )
+            .run(itemId, item.name, item.kind, item.lotSize, Number(item.archived), item.createdAt);
+          this.db
+            .prepare('INSERT INTO item_state(item_id,borrowed,lost,revision) VALUES (?,?,?,?)')
+            .run(itemId, item.borrowed, item.lost, item.revision);
+          for (const alias of item.aliases)
+            this.db
+              .prepare('INSERT INTO item_aliases(item_id,alias) VALUES (?,?)')
+              .run(itemId, alias);
+        }
+        this.db
+          .prepare(
+            'INSERT INTO item_location_balances(item_id,location_id,available,damaged) VALUES (?,?,?,?)',
+          )
+          .run(
+            itemId,
+            locationIds.get(item.location!.toLocaleLowerCase())!,
+            item.available,
+            item.damaged,
+          );
       }
 
       const borrowerIds = new Map<number, number>();
@@ -754,8 +878,8 @@ export class InventoryTransferService {
       }
 
       const insertEvent = this.db.prepare(
-        `INSERT INTO inventory_events(id,kind,item_id,borrower_id,quantity,related_event_id,note,created_at)
-        VALUES (?,?,?,?,?,?,?,?)`,
+        `INSERT INTO inventory_events(id,kind,item_id,borrower_id,quantity,related_event_id,note,created_at,location_name,location_code)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`,
       );
       for (const event of payload.events) {
         insertEvent.run(
@@ -767,6 +891,8 @@ export class InventoryTransferService {
           event.relatedEventId,
           event.note,
           event.createdAt,
+          event.locationName,
+          event.locationCode,
         );
       }
       const insertLoan = this.db.prepare(`INSERT INTO loan_state(
@@ -789,7 +915,7 @@ export class InventoryTransferService {
         `INSERT INTO inventory_baselines(item_id,quantity,through_event_id,established_at)
         VALUES (?,?,?,?)`,
       );
-      for (const item of payload.items) {
+      for (const item of new Map(payload.items.map((item) => [item.id, item])).values()) {
         const anchor = payload.events.find((event) => event.id === item.baselineThroughEventId);
         const establishedAt =
           item.baselineThroughEventId === 0

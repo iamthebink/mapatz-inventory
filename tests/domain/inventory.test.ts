@@ -6,12 +6,10 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
-
 const cleanup: string[] = [];
 afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
-
 function checkoutDatabaseForReopen() {
   const directory = mkdtempSync(join(tmpdir(), 'mapatz-checkout-integrity-'));
   cleanup.push(directory);
@@ -28,9 +26,33 @@ function checkoutDatabaseForReopen() {
     fullName: 'Other Owner',
     campDepartment: '',
   });
-  const item = inventory.createItem({ name: 'Checkout integrity item', kind: 'non_consumable' });
-  inventory.addStock(item.id, 3);
-  const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+  const item = inventory.createItem({
+    name: 'Checkout integrity item',
+    kind: 'non_consumable',
+    locationId: Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  });
+  inventory.addStock(
+    item.id,
+    3,
+    '',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
+  const checkoutId = inventory.checkout(
+    item.id,
+    borrower.id,
+    2,
+    '',
+    Number(
+      (inventory.listLocations().find((l) => l.code === 'monster') ?? inventory.listLocations()[0])!
+        .id,
+    ),
+  );
   return {
     db,
     filename,
@@ -39,12 +61,18 @@ function checkoutDatabaseForReopen() {
     checkoutId,
   };
 }
-
 describe('inventory domain', () => {
   it('rolls back an audit append when its stored-state update fails', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Atomic state', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Atomic state',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const before = {
       item: inventory.listItems()[0],
       events: db.prepare('SELECT COUNT(*) count FROM inventory_events').get(),
@@ -52,26 +80,59 @@ describe('inventory domain', () => {
     };
     db.exec(`CREATE TRIGGER fail_state_update BEFORE UPDATE ON item_state
       BEGIN SELECT RAISE(ABORT, 'state update failed'); END`);
-    expect(() => inventory.addStock(item.id, 1)).toThrow('state update failed');
+    expect(() =>
+      inventory.addStock(
+        item.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow('state update failed');
     expect(inventory.listItems()[0]).toEqual(before.item);
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(before.events);
     expect(db.prepare('SELECT revision FROM state_clock').get()).toEqual(before.clock);
     db.close();
   });
-
   it('rejects unsafe balance arithmetic without appending an audit event', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Safe arithmetic', kind: 'non_consumable' });
-    inventory.addStock(item.id, Number.MAX_SAFE_INTEGER);
+    const item = inventory.createItem({
+      name: 'Safe arithmetic',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      Number.MAX_SAFE_INTEGER,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const before = inventory.listItems()[0];
     const eventCount = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
-    expect(() => inventory.addStock(item.id, 1)).toThrow();
+    expect(() =>
+      inventory.addStock(
+        item.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow();
     expect(inventory.listItems()[0]).toEqual(before);
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(eventCount);
     db.close();
   });
-
   it('rejects movement that makes a non-consumable combined total unsafe atomically', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
@@ -80,49 +141,73 @@ describe('inventory domain', () => {
       fullName: 'Total Owner',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Combined total', kind: 'non_consumable' });
-    inventory.addStock(item.id, Number.MAX_SAFE_INTEGER);
-    inventory.checkout(item.id, borrower.id, 1);
+    const item = inventory.createItem({
+      name: 'Combined total',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      Number.MAX_SAFE_INTEGER,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const before = inventory.listItems()[0];
     const eventCount = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
     const revision = db.prepare('SELECT revision FROM state_clock').get();
-
-    expect(() => inventory.addStock(item.id, 1)).toThrow(
-      expect.objectContaining({ code: 'excessive_quantity' }),
-    );
+    expect(() =>
+      inventory.addStock(
+        item.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'excessive_quantity' }));
     expect(inventory.listItems()[0]).toEqual(before);
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual(eventCount);
     expect(db.prepare('SELECT revision FROM state_clock').get()).toEqual(revision);
     db.close();
   });
-
   it('rejects a loan whose checkout audit identity changed before reopen', () => {
     const state = checkoutDatabaseForReopen();
     state.db
       .prepare('UPDATE loan_state SET borrower_id=? WHERE checkout_id=?')
       .run(state.otherBorrowerId, state.checkoutId);
     state.db.close();
-
     expect(() => openDatabase(state.filename)).toThrow(/inconsistent checkout and loan state/);
   });
-
   it('rejects a checkout event without operational loan state before reopen', () => {
     const state = checkoutDatabaseForReopen();
     state.db.prepare('DELETE FROM loan_state WHERE checkout_id=?').run(state.checkoutId);
     state.db.prepare('UPDATE item_state SET borrowed=0 WHERE item_id=?').run(state.itemId);
     state.db.close();
-
     expect(() => openDatabase(state.filename)).toThrow(/inconsistent checkout and loan state/);
   });
-
   it('rejects operational aggregate corruption before reopen', () => {
     const state = checkoutDatabaseForReopen();
     state.db.prepare('UPDATE item_state SET borrowed=borrowed+1 WHERE item_id=?').run(state.itemId);
     state.db.close();
-
     expect(() => openDatabase(state.filename)).toThrow(/invalid authoritative inventory balances/);
   });
-
   it('uses stored balances and loan identity after restart with audit SELECTs blocked', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-stored-state-'));
     cleanup.push(directory);
@@ -134,12 +219,35 @@ describe('inventory domain', () => {
       fullName: 'Test',
       campDepartment: '',
     });
-    const item = inventory.createItem({ name: 'Radio case', kind: 'non_consumable' });
-    inventory.addStock(item.id, 3);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+    const item = inventory.createItem({
+      name: 'Radio case',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkoutId, 1, true);
     db.close();
-
     db = openDatabase(filename);
     const guarded = new Proxy(db, {
       get(target, property) {
@@ -159,7 +267,16 @@ describe('inventory domain', () => {
     expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([
       { itemId: item.id, returnable: 1, lost: 1 },
     ]);
-    inventory.returnCheckout(checkoutId, 1, 0);
+    inventory.returnCheckout(
+      checkoutId,
+      1,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(() => inventory.archiveItem(item.id, true)).toThrow();
     db.close();
   });
@@ -167,16 +284,46 @@ describe('inventory domain', () => {
     const db = openDatabase(':memory:');
     try {
       const inventory = new InventoryService(db);
-      const first = inventory.createItem({ name: 'Tape', kind: 'consumable' });
-      const second = inventory.createItem({ name: 'Ties', kind: 'consumable' });
-      inventory.addStock(first.id, 3);
-      inventory.addStock(second.id, 2);
+      const first = inventory.createItem({
+        name: 'Tape',
+        kind: 'consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      });
+      const second = inventory.createItem({
+        name: 'Ties',
+        kind: 'consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      });
+      inventory.addStock(
+        first.id,
+        3,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      inventory.addStock(
+        second.id,
+        2,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
       const input = {
         key: crypto.randomUUID(),
         ledgerEpoch: 1,
         items: [
-          { itemId: first.id, quantity: 2, note: 'desk' },
-          { itemId: second.id, quantity: 1, note: '' },
+          { itemId: first.id, quantity: 2, note: 'desk', locationId: 1 },
+          { itemId: second.id, quantity: 1, note: '', locationId: 1 },
         ],
       };
       expect(inventory.issueBatch(input)).toMatchObject({ outcome: 'committed', replayed: false });
@@ -195,8 +342,8 @@ describe('inventory domain', () => {
         ...input,
         key: crypto.randomUUID(),
         items: [
-          { itemId: first.id, quantity: 2, note: '' },
-          { itemId: second.id, quantity: 2, note: '' },
+          { itemId: first.id, quantity: 2, note: '', locationId: 1 },
+          { itemId: second.id, quantity: 2, note: '', locationId: 1 },
         ],
       };
       expect(inventory.issueBatch(shortage)).toMatchObject({
@@ -214,21 +361,36 @@ describe('inventory domain', () => {
         key: crypto.randomUUID(),
         ledgerEpoch: 1,
         items: [
-          { itemId: first.id, quantity: 1, note: '' },
-          { itemId: first.id, quantity: 1, note: '' },
+          { itemId: first.id, quantity: 1, note: '', locationId: 1 },
+          { itemId: first.id, quantity: 1, note: '', locationId: 1 },
         ],
       };
       expect(inventory.issueBatch(repeated)).toMatchObject({
         outcome: 'rejected',
         conflicts: [{ itemId: first.id, code: 'insufficient_stock', available: 1 }],
       });
-      const tool = inventory.createItem({ name: 'Hammer', kind: 'non_consumable' });
-      inventory.addStock(tool.id, 2);
+      const tool = inventory.createItem({
+        name: 'Hammer',
+        kind: 'non_consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      });
+      inventory.addStock(
+        tool.id,
+        2,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
       expect(
         inventory.issueBatch({
           key: crypto.randomUUID(),
           ledgerEpoch: 1,
-          items: [{ itemId: tool.id, quantity: 1, note: '' }],
+          items: [{ itemId: tool.id, quantity: 1, note: '', locationId: 1 }],
         }),
       ).toMatchObject({
         outcome: 'rejected',
@@ -253,16 +415,16 @@ describe('inventory domain', () => {
     legacy.exec('ALTER TABLE credentials DROP COLUMN recoverable_password');
     legacy.prepare('DELETE FROM migrations WHERE version=8').run();
     legacy.close();
-
     const migrated = openDatabase(filename);
-    const columns = migrated.prepare('PRAGMA table_info(credentials)').all() as { name: string }[];
+    const columns = migrated.prepare('PRAGMA table_info(credentials)').all() as {
+      name: string;
+    }[];
     expect(columns.some((column) => column.name === 'recoverable_password')).toBe(true);
     expect(migrated.prepare('SELECT version FROM migrations WHERE version=8').get()).toEqual({
       version: 8,
     });
     migrated.close();
   });
-
   it('rejects an old database without authoritative state before changing its schema', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-old-state-'));
     cleanup.push(directory);
@@ -277,13 +439,11 @@ describe('inventory domain', () => {
     );
     legacy.prepare('INSERT INTO migrations(version) VALUES (1)').run();
     legacy.close();
-
-    expect(() => openDatabase(filename)).toThrow('missing authoritative inventory state');
+    expect(() => openDatabase(filename)).toThrow('obsolete inventory placement schema');
     const unchanged = new DatabaseSync(filename);
     expect(unchanged.prepare('SELECT version FROM migrations').all()).toEqual([{ version: 1 }]);
     unchanged.close();
   });
-
   it('migrates idempotently, seeds locations, and persists monotonic identities and stored state', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mapatz-domain-'));
     cleanup.push(directory);
@@ -293,7 +453,15 @@ describe('inventory domain', () => {
     expect(inventory.listLocations().map((location) => location.code)).toEqual(
       expect.arrayContaining(['monster', 'kabira', 'submarine']),
     );
-    const gloves = inventory.createItem({ name: 'כפפות', kind: 'consumable', aliases: ['Gloves'] });
+    const gloves = inventory.createItem({
+      name: 'כפפות',
+      kind: 'consumable',
+      aliases: ['Gloves'],
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     expect(gloves.id).toBe(1);
     expect(gloves).not.toHaveProperty('code');
     expect(
@@ -306,25 +474,52 @@ describe('inventory domain', () => {
       db.prepare("SELECT name FROM sqlite_master WHERE name='code_sequence'").get(),
     ).toBeUndefined();
     expect(inventory.listItems(String(gloves.id))).toEqual([]);
-    inventory.addStock(gloves.id, 12);
-    inventory.issue(gloves.id, 3);
+    inventory.addStock(
+      gloves.id,
+      12,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.issue(
+      gloves.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     db.close();
-
     db = openDatabase(filename);
     inventory = new InventoryService(db);
     expect(
-      (db.prepare('SELECT COUNT(*) count FROM migrations').get() as { count: number }).count,
+      (
+        db.prepare('SELECT COUNT(*) count FROM migrations').get() as {
+          count: number;
+        }
+      ).count,
     ).toBe(9);
     expect(inventory.listItems('gLoV')).toHaveLength(1);
     expect(inventory.listItems('Gloves')[0]?.available).toBe(9);
-    expect(inventory.createItem({ name: 'פטיש', kind: 'non_consumable' }).id).toBe(2);
+    expect(
+      inventory.createItem({
+        name: 'פטיש',
+        kind: 'non_consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      }).id,
+    ).toBe(2);
     expect(() => db.prepare('UPDATE inventory_events SET quantity=99 WHERE id=1').run()).toThrow(
       /immutable/,
     );
     expect(() => db.prepare('DELETE FROM inventory_events WHERE id=1').run()).toThrow(/immutable/);
     db.close();
   });
-
   it('keeps item names unique across create, update, archive state, and direct writes', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
@@ -332,6 +527,10 @@ describe('inventory domain', () => {
       name: 'TÉNT',
       kind: 'non_consumable',
       aliases: ['Shelter'],
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
     });
     inventory.archiveItem(original.id, true);
     const identityHighWaterBeforeConflict = db
@@ -339,10 +538,16 @@ describe('inventory domain', () => {
         "SELECT result_json FROM inventory_command_receipts WHERE key='system:identity-high-water'",
       )
       .get();
-
-    expect(() => inventory.createItem({ name: '\t  tént\n', kind: 'consumable' })).toThrow(
-      expect.objectContaining({ code: 'duplicate_item_name', status: 409 }),
-    );
+    expect(() =>
+      inventory.createItem({
+        name: '\t  tént\n',
+        kind: 'consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      }),
+    ).toThrow(expect.objectContaining({ code: 'duplicate_item_name', status: 409 }));
     expect(
       db
         .prepare(
@@ -350,8 +555,14 @@ describe('inventory domain', () => {
         )
         .get(),
     ).toEqual(identityHighWaterBeforeConflict);
-
-    const other = inventory.createItem({ name: 'Lantern', kind: 'non_consumable' });
+    const other = inventory.createItem({
+      name: 'Lantern',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     expect(() =>
       inventory.updateItem(other.id, {
         name: 'TE\u0301NT',
@@ -362,7 +573,6 @@ describe('inventory domain', () => {
       name: 'Lantern',
       aliases: [],
     });
-
     expect(() =>
       db
         .prepare(
@@ -375,76 +585,197 @@ describe('inventory domain', () => {
     );
     db.close();
   });
-
   it('tracks camp equipment by quantity while rejecting issue and checkout lifecycles', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'שולחן קבוע', kind: 'camp_equipment' });
-    inventory.addStock(item.id, 8);
+    const item = inventory.createItem({
+      name: 'שולחן קבוע',
+      kind: 'camp_equipment',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      8,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(inventory.listItems(item.name)[0]).toMatchObject({
       kind: 'camp_equipment',
       available: 8,
       damaged: 0,
     });
-    expect(() => inventory.issue(item.id, 1)).toThrow(
-      expect.objectContaining({ code: 'wrong_item_kind' }),
-    );
-    expect(() => inventory.checkout(item.id, 999, 1)).toThrow(
-      expect.objectContaining({ code: 'wrong_item_kind' }),
-    );
-    expect(() => inventory.createItem({ name: 'בר', kind: 'camp_equipment', lotSize: 2 })).toThrow(
-      expect.objectContaining({ code: 'invalid_lot_size' }),
-    );
+    expect(() =>
+      inventory.issue(
+        item.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'wrong_item_kind' }));
+    expect(() =>
+      inventory.checkout(
+        item.id,
+        999,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'wrong_item_kind' }));
+    expect(() =>
+      inventory.createItem({
+        name: 'בר',
+        kind: 'camp_equipment',
+        lotSize: 2,
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_lot_size' }));
     expect(inventory.listLedger().map((event) => event.kind)).toEqual(['stock_added']);
     db.close();
   });
-
   it('atomically rejects inactive borrowers, insufficient stock, over-return, and archive with active loans', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'פטיש', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'פטיש',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'Alice',
       fullName: 'אליס',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 2);
-    expect(() => inventory.checkout(item.id, borrower.id, 3)).toThrow(
-      expect.objectContaining({ code: 'insufficient_stock' }),
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
     );
+    expect(() =>
+      inventory.checkout(
+        item.id,
+        borrower.id,
+        3,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'insufficient_stock' }));
     expect(inventory.listLedger()).toHaveLength(1);
     inventory.archiveBorrower(borrower.id, true);
-    expect(() => inventory.checkout(item.id, borrower.id, 1)).toThrow(
-      expect.objectContaining({ code: 'inactive_borrower' }),
-    );
+    expect(() =>
+      inventory.checkout(
+        item.id,
+        borrower.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'inactive_borrower' }));
     inventory.archiveBorrower(borrower.id, false);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 2);
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(() => inventory.archiveItem(item.id, true)).toThrow(
       expect.objectContaining({ code: 'nonzero_balances' }),
     );
     expect(() => inventory.archiveBorrower(borrower.id, true)).toThrow(
       expect.objectContaining({ code: 'active_loan' }),
     );
-    inventory.returnCheckout(checkoutId, 1, 0);
-    expect(inventory.listLoans()[0]?.outstanding).toBe(1);
-    expect(() => inventory.returnCheckout(checkoutId, 2, 0)).toThrow(
-      expect.objectContaining({ code: 'over_return' }),
+    inventory.returnCheckout(
+      checkoutId,
+      1,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
     );
+    expect(inventory.listLoans()[0]?.outstanding).toBe(1);
+    expect(() =>
+      inventory.returnCheckout(
+        checkoutId,
+        2,
+        0,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'over_return' }));
     expect(inventory.listLoans()[0]?.outstanding).toBe(1);
     db.close();
   });
-
   it('projects lost, damaged, repaired, and written-off lifecycles without rewriting history', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'מסור', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'מסור',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'builder',
       fullName: 'בונה',
       campDepartment: 'מחנה אחר',
     });
-    inventory.addStock(item.id, 3);
-    const checkoutId = inventory.checkout(item.id, borrower.id, 3);
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkoutId = inventory.checkout(
+      item.id,
+      borrower.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkoutId, 1, true);
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
     const beforeRestoration = inventory.listLedger();
@@ -455,26 +786,76 @@ describe('inventory domain', () => {
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
     foundReturned(inventory, checkoutId, 1);
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 0 });
-    inventory.returnCheckout(checkoutId, 0, 2);
+    inventory.returnCheckout(
+      checkoutId,
+      0,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(inventory.listItems('מסור')[0]).toMatchObject({ available: 1, damaged: 2 });
-    inventory.resolveDamage(item.id, 1, true);
-    inventory.resolveDamage(item.id, 1, false);
+    inventory.resolveDamage(
+      item.id,
+      1,
+      true,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.resolveDamage(
+      item.id,
+      1,
+      false,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(inventory.listItems('מסור')[0]).toMatchObject({ available: 2, damaged: 0 });
     expect(inventory.listLedger()).toHaveLength(7);
     db.close();
   });
-
   it('blocks archival through partial recovery and permits it after all equipment is settled', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'Archival lifecycle', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Archival lifecycle',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'archive-lifecycle',
       fullName: 'Archive lifecycle',
       campDepartment: 'מחנה אחר',
     });
-    inventory.addStock(item.id, 4);
-    const checkout = inventory.checkout(item.id, borrower.id, 4);
+    inventory.addStock(
+      item.id,
+      4,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      4,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkout, 2, true);
     foundReturned(inventory, checkout, 1);
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 2, lost: 1 });
@@ -493,7 +874,16 @@ describe('inventory domain', () => {
       });
     };
     expectArchivalBlocked();
-    inventory.returnCheckout(checkout, 2, 0);
+    inventory.returnCheckout(
+      checkout,
+      2,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(inventory.listLoans()[0]).toMatchObject({ outstanding: 0, lost: 1 });
     expectArchivalBlocked();
     expect(
@@ -503,7 +893,9 @@ describe('inventory domain', () => {
         items: [
           {
             itemId: item.id,
-            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'final damaged recovery' }],
+            lostCredit: [
+              { quantity: 1, condition: 'damaged', note: 'final damaged recovery', locationId: 1 },
+            ],
           },
         ],
       }),
@@ -513,14 +905,26 @@ describe('inventory domain', () => {
       expect.objectContaining({ code: 'nonzero_balances' }),
     );
     inventory.archiveBorrower(borrower.id, true);
-    inventory.resolveDamage(item.id, 1, true);
+    inventory.resolveDamage(
+      item.id,
+      1,
+      true,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.saveInventoryItem({
       key: 'zero-before-archive',
       itemId: item.id,
       name: item.name,
       aliases: [],
       lotSize: null,
-      locationId: null,
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
       targetAvailable: 0,
       stockRevision: inventory.listItems(item.name)[0]!.stockRevision,
     });
@@ -533,7 +937,6 @@ describe('inventory domain', () => {
     });
     db.close();
   });
-
   it('preserves omitted item fields while replacing aliases and enforces alias bounds', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
@@ -546,7 +949,11 @@ describe('inventory domain', () => {
       aliases: ['Rope', 'ישן'],
     });
     const updated = inventory.updateItem(item.id, { name: 'חבל חדש', aliases: ['Cord'] });
-    expect(updated).toMatchObject({ lotSize: 5, locationId: location.id, aliases: ['Cord'] });
+    expect(updated).toMatchObject({
+      lotSize: 5,
+      balances: expect.arrayContaining([expect.objectContaining({ locationId: location.id })]),
+      aliases: ['Cord'],
+    });
     expect(inventory.listItems('rope')).toEqual([]);
     expect(inventory.listItems('cord')).toHaveLength(1);
     expect(inventory.updateItem(item.id, { name: 'חבל סופי' }).aliases).toEqual(['Cord']);
@@ -558,6 +965,10 @@ describe('inventory domain', () => {
         name: 'עודף',
         kind: 'consumable',
         aliases: Array.from({ length: 21 }, (_, index) => `a${index}`),
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
       }),
     ).toThrow(expect.objectContaining({ code: 'too_many_aliases' }));
     expect(() => inventory.updateLocation(999, { code: 'missing', name: 'חסר' })).toThrow(
@@ -565,23 +976,64 @@ describe('inventory domain', () => {
     );
     db.close();
   });
-
   it('rejects archiving an item until damaged stock is resolved', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    const item = inventory.createItem({ name: 'מקדחה', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'מקדחה',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'repair-user',
       fullName: 'מתקן',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 1);
-    const checkout = inventory.checkout(item.id, borrower.id, 1);
-    inventory.returnCheckout(checkout, 0, 1, 'נשבר');
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkout,
+      0,
+      1,
+      'נשבר',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(() => inventory.archiveItem(item.id, true)).toThrow(
       expect.objectContaining({ code: 'nonzero_balances' }),
     );
-    inventory.resolveDamage(item.id, 1, false, 'לא ניתן לתקן');
+    inventory.resolveDamage(
+      item.id,
+      1,
+      false,
+      'לא ניתן לתקן',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.archiveItem(item.id, true);
     expect(inventory.listItems('', true)[0]?.archived).toBe(true);
     db.close();

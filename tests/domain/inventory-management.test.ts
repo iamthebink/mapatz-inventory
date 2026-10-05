@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
-
 const setup = () => {
   const db = openDatabase(':memory:');
   return { db, inventory: new InventoryService(db) };
 };
-
 describe('inventory management commands', () => {
   it('replays an uncertain location creation without inserting a second location', () => {
     const { db, inventory } = setup();
@@ -21,7 +19,6 @@ describe('inventory management commands', () => {
     expect(inventory.listLocations(true)).toHaveLength(initialCount + 1);
     db.close();
   });
-
   it('rejects the identity high-water receipt key for every inventory command', () => {
     const { db, inventory } = setup();
     const location = inventory.createLocation('reserved-key-location', 'Reserved key location');
@@ -57,6 +54,18 @@ describe('inventory management commands', () => {
           expectedItemIds: [item.id],
           expectedCode: location.code,
           expectedName: location.name,
+          expectedBalances: [item.id]
+            .map((itemId) => {
+              const item = inventory.listItems('', true).find((item) => item.id === itemId)!;
+              const balance = item.balances.find((p) => p.locationId === Number(location.id))!;
+              return {
+                itemId,
+                available: balance.available,
+                damaged: balance.damaged,
+                stockRevision: item.stockRevision,
+              };
+            })
+            .sort((a, b) => a.itemId - b.itemId),
         }),
       () =>
         inventory.saveInventoryItem({
@@ -82,7 +91,6 @@ describe('inventory management commands', () => {
           itemId: item.id,
           expectedStockRevision: preview.stockRevision,
           expectedName: preview.name,
-          expectedLocationId: preview.locationId,
         }),
       () =>
         inventory.deleteBorrowerCommand({
@@ -101,7 +109,7 @@ describe('inventory management commands', () => {
         inventory.issueBatch({
           key: reservedKey,
           ledgerEpoch,
-          items: [{ itemId: item.id, quantity: 1, note: '' }],
+          items: [{ itemId: item.id, quantity: 1, note: '', locationId: 1 }],
         }),
       () =>
         inventory.resolveDamageCommand({
@@ -111,9 +119,15 @@ describe('inventory management commands', () => {
           quantity: 1,
           repaired: true,
           note: '',
+          locationId: Number(
+            (inventory.listLocations().find((l) => l.code === 'monster') ??
+              inventory.listLocations()[0])!.id,
+          ),
+          stockRevision: inventory
+            .listItems('', true)
+            .find((candidate) => candidate.id === item.id)!.stockRevision,
         }),
     ];
-
     for (const command of commands)
       expect(command).toThrow(expect.objectContaining({ code: 'idempotency_conflict' }));
     expect(inventory.listItems('Reserved key item')).toHaveLength(1);
@@ -126,7 +140,6 @@ describe('inventory management commands', () => {
     ).toEqual({ count: 1 });
     db.close();
   });
-
   it('creates item and stock together, and rejects a duplicate without an item or event', () => {
     const { db, inventory } = setup();
     const input = {
@@ -135,7 +148,7 @@ describe('inventory management commands', () => {
       kind: 'camp_equipment' as const,
       aliases: ['Shelter'],
       lotSize: null,
-      locationId: null,
+      locationId: 1,
       targetAvailable: 20,
       note: '',
     };
@@ -156,13 +169,27 @@ describe('inventory management commands', () => {
     expect(inventory.listLedger()).toHaveLength(1);
     db.close();
   });
-
   it('saves absolute counts and metadata atomically, rejects stale counts, and permits metadata-only saves', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Hammer', kind: 'non_consumable' });
-    inventory.addStock(item.id, 20);
+    const item = inventory.createItem({
+      name: 'Hammer',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      20,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const snapshot = inventory.listItems('Hammer')[0]!;
-    const base = { itemId: item.id, aliases: [], lotSize: null, locationId: null, note: '' };
+    const base = { itemId: item.id, aliases: [], lotSize: null, locationId: 1, note: '' };
     const reduced = inventory.saveInventoryItem({
       ...base,
       key: 'count-down-0001',
@@ -181,7 +208,15 @@ describe('inventory management commands', () => {
     });
     expect(increased.available).toBe(25);
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_added', quantity: 8 });
-    inventory.addStock(item.id, 1);
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const ledgerBefore = inventory.listLedger();
     expect(() =>
       inventory.saveInventoryItem({
@@ -214,18 +249,41 @@ describe('inventory management commands', () => {
     expect(inventory.listItems('Hammer three')[0]?.name).toBe('Hammer three');
     db.close();
   });
-
   it('rejects a target of 17 after checkout changes the observed 20 to 18', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Checkout race', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Checkout race',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'race',
       fullName: 'Race',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 20);
+    inventory.addStock(
+      item.id,
+      20,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const snapshot = inventory.listItems('Checkout race')[0]!;
-    inventory.checkout(item.id, borrower.id, 2);
+    inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     expect(() =>
       inventory.saveInventoryItem({
         key: 'checkout-race-01',
@@ -233,7 +291,10 @@ describe('inventory management commands', () => {
         name: 'Uncommitted rename',
         aliases: [],
         lotSize: null,
-        locationId: null,
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
         targetAvailable: 17,
         stockRevision: snapshot.stockRevision,
       }),
@@ -249,13 +310,35 @@ describe('inventory management commands', () => {
     ]);
     db.close();
   });
-
   it('invalidates an observed revision even when stock returns to its old quantity', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Revision cycle', kind: 'non_consumable' });
-    inventory.addStock(item.id, 5);
+    const item = inventory.createItem({
+      name: 'Revision cycle',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const observed = inventory.listItems('Revision cycle')[0]!;
-    inventory.addStock(item.id, 1);
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const increased = inventory.listItems('Revision cycle')[0]!;
     inventory.saveInventoryItem({
       key: 'revision-cycle-1',
@@ -263,7 +346,10 @@ describe('inventory management commands', () => {
       name: item.name,
       aliases: [],
       lotSize: null,
-      locationId: null,
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
       targetAvailable: 5,
       stockRevision: increased.stockRevision,
     });
@@ -275,7 +361,10 @@ describe('inventory management commands', () => {
         name: 'Uncommitted rename',
         aliases: [],
         lotSize: null,
-        locationId: null,
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
         targetAvailable: 4,
         stockRevision: observed.stockRevision,
       }),
@@ -283,11 +372,25 @@ describe('inventory management commands', () => {
     expect(inventory.listItems('Revision cycle')[0]).toMatchObject({ available: 5 });
     db.close();
   });
-
   it('records a five-unit addition when an absolute target changes from 20 to 25', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Count up', kind: 'camp_equipment' });
-    inventory.addStock(item.id, 20);
+    const item = inventory.createItem({
+      name: 'Count up',
+      kind: 'camp_equipment',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      20,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const snapshot = inventory.listItems('Count up')[0]!;
     inventory.saveInventoryItem({
       key: 'count-up-five',
@@ -295,7 +398,10 @@ describe('inventory management commands', () => {
       name: item.name,
       aliases: [],
       lotSize: null,
-      locationId: null,
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
       targetAvailable: 25,
       stockRevision: snapshot.stockRevision,
     });
@@ -303,18 +409,50 @@ describe('inventory management commands', () => {
     expect(inventory.listLedger()[0]).toMatchObject({ kind: 'stock_added', quantity: 5 });
     db.close();
   });
-
   it('resolves damage once, preserves loan balances, and checks quantity against current damage', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Saw', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Saw',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'worker',
       fullName: 'Worker',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 14);
-    const checkout = inventory.checkout(item.id, borrower.id, 4);
-    inventory.returnCheckout(checkout, 0, 4);
+    inventory.addStock(
+      item.id,
+      14,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      4,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkout,
+      0,
+      4,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const before = inventory.listItems('Saw')[0]!;
     expect(before).toMatchObject({ available: 10, borrowed: 0, lost: 0, damaged: 4 });
     const command = {
@@ -323,6 +461,12 @@ describe('inventory management commands', () => {
       quantity: 2,
       repaired: true,
       note: '',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+      stockRevision: inventory.listItems('', true).find((candidate) => candidate.id === item.id)!
+        .stockRevision,
     };
     const first = inventory.resolveDamageCommand(command);
     expect(inventory.resolveDamageCommand(command)).toEqual(first);
@@ -333,9 +477,19 @@ describe('inventory management commands', () => {
       lost: 0,
     });
     expect(() =>
-      inventory.resolveDamageCommand({ ...command, key: 'damage-too-many', quantity: 3 }),
+      inventory.resolveDamageCommand({
+        ...command,
+        key: 'damage-too-many',
+        quantity: 3,
+        stockRevision: inventory.listItems('Saw')[0]!.stockRevision,
+      }),
     ).toThrow(expect.objectContaining({ code: 'excessive_quantity' }));
-    inventory.resolveDamageCommand({ ...command, key: 'damage-writeoff', repaired: false });
+    inventory.resolveDamageCommand({
+      ...command,
+      key: 'damage-writeoff',
+      repaired: false,
+      stockRevision: inventory.listItems('Saw')[0]!.stockRevision,
+    });
     expect(inventory.listItems('Saw')[0]).toMatchObject({
       available: 12,
       damaged: 0,
@@ -344,7 +498,6 @@ describe('inventory management commands', () => {
     });
     db.close();
   });
-
   it('zeros available stock while archiving and prevents archived locations on active items', () => {
     const { db, inventory } = setup();
     const location = inventory.createLocation('store', 'Store');
@@ -358,9 +511,18 @@ describe('inventory management commands', () => {
         code: 'store',
         name: 'Store',
         archived: true,
+        isDefault: false,
       }),
     ).toThrow(expect.objectContaining({ code: 'location_in_use' }));
-    inventory.addStock(item.id, 1);
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.archiveItem(item.id, true);
     expect(inventory.listItems('Rope', true)[0]).toMatchObject({ archived: true, available: 0 });
     expect(inventory.listLedger()[0]).toMatchObject({
@@ -373,6 +535,7 @@ describe('inventory management commands', () => {
         code: 'store',
         name: 'Store',
         archived: true,
+        isDefault: false,
       }),
     ).toThrow(expect.objectContaining({ code: 'location_in_use' }));
     const destination = inventory.createLocation('destination', 'Destination');
@@ -385,22 +548,42 @@ describe('inventory management commands', () => {
       expectedItemIds: [item.id],
       expectedCode: location.code,
       expectedName: location.name,
+      expectedBalances: [item.id]
+        .map((itemId) => {
+          const item = inventory.listItems('', true).find((item) => item.id === itemId)!;
+          const balance = item.balances.find((p) => p.locationId === Number(location.id))!;
+          return {
+            itemId,
+            available: balance.available,
+            damaged: balance.damaged,
+            stockRevision: item.stockRevision,
+          };
+        })
+        .sort((a, b) => a.itemId - b.itemId),
     });
     expect(() => inventory.archiveItem(item.id, false, Number(location.id))).toThrow(
       expect.objectContaining({ code: 'invalid_location' }),
     );
     inventory.archiveItem(item.id, false);
     expect(inventory.listItems('Rope')[0]).toMatchObject({
-      locationId: Number(destination.id),
+      balances: expect.arrayContaining([
+        expect.objectContaining({ locationId: Number(destination.id) }),
+      ]),
       archived: false,
       available: 0,
     });
     db.close();
   });
-
   it('rejects an old ledger command after replacement and replays archive without undoing later changes', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Archive replay', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Archive replay',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const epoch = inventory.inventoryEpoch();
     const archive = {
       key: 'archive-replay-1',
@@ -420,11 +603,25 @@ describe('inventory management commands', () => {
     );
     db.close();
   });
-
   it('replays a keyed archive without removing available stock twice', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Archive stock replay', kind: 'consumable' });
-    inventory.addStock(item.id, 5);
+    const item = inventory.createItem({
+      name: 'Archive stock replay',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const command = {
       key: 'archive-stock-replay-1',
       ledgerEpoch: inventory.inventoryEpoch(),
@@ -439,17 +636,40 @@ describe('inventory management commands', () => {
     ]);
     db.close();
   });
-
   it('blocks archive when only the lost balance remains', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Lost only', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Lost only',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'lost-only',
       fullName: 'Lost',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 1);
-    const checkout = inventory.checkout(item.id, borrower.id, 1);
+    inventory.addStock(
+      item.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkout, 1, true);
     expect(inventory.listItems('Lost only', true)[0]).toMatchObject({
       available: 0,
@@ -467,15 +687,32 @@ describe('inventory management commands', () => {
     ).toThrow(expect.objectContaining({ code: 'nonzero_balances' }));
     db.close();
   });
-
   it('deletes an eligible item atomically, replays its receipt, and never reuses its internal id', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Reusable name', kind: 'consumable' });
-    inventory.addStock(item.id, 3);
+    const item = inventory.createItem({
+      name: 'Reusable name',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      item.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const before = inventory.listItems('Reusable name')[0]!;
     const maxEventIdBeforeDelete = Number(
-      (db.prepare('SELECT MAX(id) max_id FROM inventory_events').get() as { max_id: number })
-        .max_id,
+      (
+        db.prepare('SELECT MAX(id) max_id FROM inventory_events').get() as {
+          max_id: number;
+        }
+      ).max_id,
     );
     const command = {
       key: 'delete-item-0001',
@@ -483,9 +720,7 @@ describe('inventory management commands', () => {
       itemId: item.id,
       expectedStockRevision: before.stockRevision,
       expectedName: before.name,
-      expectedLocationId: before.locationId,
     };
-
     const committed = inventory.deleteItemCommand(command);
     expect(committed).toEqual({ outcome: 'committed', action: 'delete_item', itemId: item.id });
     expect(inventory.deleteItemCommand(command)).toEqual(committed);
@@ -510,9 +745,23 @@ describe('inventory management commands', () => {
         expectedStockRevision: command.expectedStockRevision + 1,
       }),
     ).toThrow(expect.objectContaining({ code: 'idempotency_conflict' }));
-
-    const replacement = inventory.createItem({ name: 'Reusable name', kind: 'consumable' });
-    inventory.addStock(replacement.id, 1);
+    const replacement = inventory.createItem({
+      name: 'Reusable name',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      replacement.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const replacementStockEvent = inventory.listLedger()[0]!;
     expect(replacement.id).toBeGreaterThan(item.id);
     expect(replacementStockEvent.item_id).toBe(replacement.id);
@@ -524,18 +773,41 @@ describe('inventory management commands', () => {
     });
     db.close();
   });
-
   it('reports newly ineligible item balances before stale confirmation and leaves deletion state untouched', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Eligibility race', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Eligibility race',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'eligibility-race',
       fullName: 'Race',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 2);
+    inventory.addStock(
+      item.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const preview = inventory.listItems('Eligibility race')[0]!;
-    const checkout = inventory.checkout(item.id, borrower.id, 1);
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const revisionBeforeDelete = Number(
       (
         db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get() as {
@@ -544,7 +816,11 @@ describe('inventory management commands', () => {
       ).revision,
     );
     const eventCountBeforeDelete = Number(
-      (db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as { count: number }).count,
+      (
+        db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as {
+          count: number;
+        }
+      ).count,
     );
     const command = {
       key: 'delete-item-ineligible',
@@ -552,9 +828,7 @@ describe('inventory management commands', () => {
       itemId: item.id,
       expectedStockRevision: preview.stockRevision,
       expectedName: preview.name,
-      expectedLocationId: preview.locationId,
     };
-
     expect(() => inventory.deleteItemCommand(command)).toThrow(
       expect.objectContaining({
         code: 'deletion_ineligible',
@@ -579,22 +853,54 @@ describe('inventory management commands', () => {
     ).toEqual({ enabled: 0 });
     db.close();
   });
-
   it.each(['damaged', 'lost'] as const)(
     'blocks item deletion with %s balances without partial writes',
     (blocker) => {
       const { db, inventory } = setup();
-      const item = inventory.createItem({ name: `${blocker} blocker`, kind: 'non_consumable' });
+      const item = inventory.createItem({
+        name: `${blocker} blocker`,
+        kind: 'non_consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      });
       const borrower = inventory.createBorrower({
         playaName: `${blocker}-blocker`,
         fullName: 'Blocker',
         campDepartment: '',
       });
-      inventory.addStock(item.id, 2);
-      const checkout = inventory.checkout(item.id, borrower.id, 1);
-      if (blocker === 'damaged') inventory.returnCheckout(checkout, 0, 1);
+      inventory.addStock(
+        item.id,
+        2,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      const checkout = inventory.checkout(
+        item.id,
+        borrower.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      if (blocker === 'damaged')
+        inventory.returnCheckout(
+          checkout,
+          0,
+          1,
+          '',
+          Number(
+            (inventory.listLocations().find((l) => l.code === 'monster') ??
+              inventory.listLocations()[0])!.id,
+          ),
+        );
       else inventory.markLost(checkout, 1, true);
-
       const preview = inventory.listItems(`${blocker} blocker`)[0]!;
       const revisionBefore = db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get();
       const eventsBefore = db.prepare('SELECT COUNT(*) count FROM inventory_events').get();
@@ -604,9 +910,7 @@ describe('inventory management commands', () => {
         itemId: item.id,
         expectedStockRevision: preview.stockRevision,
         expectedName: preview.name,
-        expectedLocationId: preview.locationId,
       };
-
       expect(() => inventory.deleteItemCommand(command)).toThrow(
         expect.objectContaining({ code: 'deletion_ineligible' }),
       );
@@ -626,18 +930,50 @@ describe('inventory management commands', () => {
       db.close();
     },
   );
-
   it('deletes a settled borrower history while preserving stock and identity on playaName reuse', () => {
     const { db, inventory } = setup();
-    const item = inventory.createItem({ name: 'Surviving stock', kind: 'non_consumable' });
+    const item = inventory.createItem({
+      name: 'Surviving stock',
+      kind: 'non_consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const borrower = inventory.createBorrower({
       playaName: 'reusable-user',
       fullName: 'Old Name',
       campDepartment: '',
     });
-    inventory.addStock(item.id, 5);
-    const checkout = inventory.checkout(item.id, borrower.id, 2);
-    inventory.returnCheckout(checkout, 2, 0);
+    inventory.addStock(
+      item.id,
+      5,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    const checkout = inventory.checkout(
+      item.id,
+      borrower.id,
+      2,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.returnCheckout(
+      checkout,
+      2,
+      0,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const balanceBefore = inventory.listItems('Surviving stock')[0]!;
     const status = inventory.borrowerDeletionStatus(borrower.id);
     expect(status).toMatchObject({ outstanding: 0, lost: 0 });
@@ -653,7 +989,6 @@ describe('inventory management commands', () => {
       expectedPhoneNumber: status.borrower.phoneNumber,
       expectedCampDepartment: status.borrower.campDepartment,
     };
-
     const committed = inventory.deleteBorrowerCommand(command);
     expect(committed).toEqual({
       outcome: 'committed',
@@ -676,7 +1011,6 @@ describe('inventory management commands', () => {
       damaged: balanceBefore.damaged,
       lost: balanceBefore.lost,
     });
-
     const replacement = inventory.createBorrower({
       playaName: 'reusable-user',
       fullName: 'New Name',
@@ -692,19 +1026,42 @@ describe('inventory management commands', () => {
     });
     db.close();
   });
-
   it.each(['outstanding', 'lost'] as const)(
     'blocks borrower deletion with %s balances and leaves history untouched',
     (blocker) => {
       const { db, inventory } = setup();
-      const item = inventory.createItem({ name: `${blocker} loan`, kind: 'non_consumable' });
+      const item = inventory.createItem({
+        name: `${blocker} loan`,
+        kind: 'non_consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      });
       const borrower = inventory.createBorrower({
         playaName: `${blocker}-borrower`,
         fullName: 'Borrower blocker',
         campDepartment: '',
       });
-      inventory.addStock(item.id, 1);
-      const checkout = inventory.checkout(item.id, borrower.id, 1);
+      inventory.addStock(
+        item.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      const checkout = inventory.checkout(
+        item.id,
+        borrower.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
       if (blocker === 'lost') inventory.markLost(checkout, 1, true);
       const status = inventory.borrowerDeletionStatus(borrower.id);
       const revisionBefore = db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get();
@@ -721,7 +1078,6 @@ describe('inventory management commands', () => {
         expectedPhoneNumber: status.borrower.phoneNumber,
         expectedCampDepartment: status.borrower.campDepartment,
       };
-
       expect(() => inventory.deleteBorrowerCommand(command)).toThrow(
         expect.objectContaining({ code: 'deletion_ineligible' }),
       );
@@ -740,7 +1096,6 @@ describe('inventory management commands', () => {
       db.close();
     },
   );
-
   it('rejects a borrower deletion after a stale zero-balance preview without partial writes', () => {
     const { db, inventory } = setup();
     const borrower = inventory.createBorrower({
@@ -748,9 +1103,24 @@ describe('inventory management commands', () => {
       fullName: 'Stale Preview',
       campDepartment: '',
     });
-    const unrelated = inventory.createItem({ name: 'Unrelated state change', kind: 'consumable' });
+    const unrelated = inventory.createItem({
+      name: 'Unrelated state change',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const status = inventory.borrowerDeletionStatus(borrower.id);
-    inventory.addStock(unrelated.id, 1);
+    inventory.addStock(
+      unrelated.id,
+      1,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const revisionBeforeDelete = db
       .prepare('SELECT revision FROM state_clock WHERE singleton=1')
       .get();
@@ -767,7 +1137,6 @@ describe('inventory management commands', () => {
       expectedPhoneNumber: status.borrower.phoneNumber,
       expectedCampDepartment: status.borrower.campDepartment,
     };
-
     expect(() => inventory.deleteBorrowerCommand(command)).toThrow(
       expect.objectContaining({ code: 'confirmation_changed' }),
     );
@@ -787,7 +1156,6 @@ describe('inventory management commands', () => {
     ).toEqual({ count: 0 });
     db.close();
   });
-
   it('moves active and archived location contents before deleting the location', () => {
     const { db, inventory } = setup();
     const source = inventory.createLocation('source', 'Source');
@@ -802,12 +1170,16 @@ describe('inventory management commands', () => {
       kind: 'consumable',
       locationId: Number(source.id),
     });
-    inventory.addStock(active.id, 4);
-    inventory.addStock(archived.id, 3);
+    inventory.addStock(active.id, 4, '', source.id);
+    inventory.addStock(archived.id, 3, '', source.id);
     inventory.archiveItem(archived.id, true);
     const expectedItemIds = [active.id, archived.id].sort((left, right) => left - right);
     const eventCount = Number(
-      (db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as { count: number }).count,
+      (
+        db.prepare('SELECT COUNT(*) count FROM inventory_events').get() as {
+          count: number;
+        }
+      ).count,
     );
     const command = {
       key: 'delete-location-0001',
@@ -818,8 +1190,19 @@ describe('inventory management commands', () => {
       expectedItemIds,
       expectedCode: source.code,
       expectedName: source.name,
+      expectedBalances: expectedItemIds
+        .map((itemId) => {
+          const item = inventory.listItems('', true).find((item) => item.id === itemId)!;
+          const balance = item.balances.find((p) => p.locationId === Number(source.id))!;
+          return {
+            itemId,
+            available: balance.available,
+            damaged: balance.damaged,
+            stockRevision: item.stockRevision,
+          };
+        })
+        .sort((a, b) => a.itemId - b.itemId),
     };
-
     expect(inventory.retireLocationCommand(command)).toEqual({
       action: 'delete',
       locationId: Number(source.id),
@@ -833,23 +1216,22 @@ describe('inventory management commands', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: active.id,
-          locationId: Number(destination.id),
+          balances: [{ locationId: Number(destination.id), available: 4, damaged: 0 }],
           available: 4,
         }),
         expect.objectContaining({
           id: archived.id,
-          locationId: Number(destination.id),
+          balances: [{ locationId: Number(destination.id), available: 0, damaged: 0 }],
           archived: true,
           available: 0,
         }),
       ]),
     );
     expect(db.prepare('SELECT COUNT(*) count FROM inventory_events').get()).toEqual({
-      count: eventCount,
+      count: eventCount + 2,
     });
     db.close();
   });
-
   it('rejects missing, unknown, self, and archived relocation destinations without changes', () => {
     const { db, inventory } = setup();
     const source = inventory.createLocation('source-invalid-destinations', 'Source');
@@ -858,6 +1240,7 @@ describe('inventory management commands', () => {
       code: 'archived-destination',
       name: 'Old store',
       archived: true,
+      isDefault: false,
     });
     const item = inventory.createItem({
       name: 'Destination validation item',
@@ -868,7 +1251,7 @@ describe('inventory management commands', () => {
     const expectedItemIds = [item.id];
     const cases = [
       { key: 'retire-destination-missing', destination: undefined, code: 'destination_required' },
-      { key: 'retire-destination-unknown', destination: 99_999, code: 'invalid_location' },
+      { key: 'retire-destination-unknown', destination: 99999, code: 'invalid_location' },
       {
         key: 'retire-destination-self',
         destination: Number(source.id),
@@ -880,7 +1263,6 @@ describe('inventory management commands', () => {
         code: 'invalid_location',
       },
     ] as const;
-
     for (const testCase of cases) {
       const command = {
         key: testCase.key,
@@ -893,13 +1275,26 @@ describe('inventory management commands', () => {
         ...(testCase.destination === undefined
           ? {}
           : { replacementLocationId: testCase.destination }),
+        expectedBalances: expectedItemIds
+          .map((itemId) => {
+            const item = inventory.listItems('', true).find((item) => item.id === itemId)!;
+            const balance = item.balances.find((p) => p.locationId === Number(source.id))!;
+            return {
+              itemId,
+              available: balance.available,
+              damaged: balance.damaged,
+              stockRevision: item.stockRevision,
+            };
+          })
+          .sort((a, b) => a.itemId - b.itemId),
       };
       expect(() => inventory.retireLocationCommand(command)).toThrow(
         expect.objectContaining({ code: testCase.code }),
       );
     }
-
-    expect(inventory.listItems('Destination validation item')[0]?.locationId).toBe(source.id);
+    expect(inventory.listItems('Destination validation item')[0]!.balances[0]!.locationId).toBe(
+      source.id,
+    );
     expect(
       inventory.listLocations(true).find((location) => location.id === source.id)?.archived,
     ).toBe(false);
@@ -913,7 +1308,6 @@ describe('inventory management commands', () => {
     ).toEqual({ count: 0 });
     db.close();
   });
-
   it('rejects deletion when previewed item, location, or borrower metadata changed', () => {
     const { db, inventory } = setup();
     const location = inventory.createLocation('metadata-source', 'Original location');
@@ -951,14 +1345,12 @@ describe('inventory management commands', () => {
       fullName: 'Renamed borrower',
       campDepartment: '',
     });
-
     const deleteItem = {
       key: 'delete-item-after-rename',
       ledgerEpoch: inventory.inventoryEpoch(),
       itemId: item.id,
       expectedStockRevision: itemPreview.stockRevision,
       expectedName: itemPreview.name,
-      expectedLocationId: itemPreview.locationId,
     };
     expect(() => inventory.deleteItemCommand(deleteItem)).toThrow(
       expect.objectContaining({ code: 'confirmation_changed' }),
@@ -972,6 +1364,18 @@ describe('inventory management commands', () => {
       expectedItemIds: [item.id],
       expectedCode: 'metadata-source',
       expectedName: 'Original location',
+      expectedBalances: [item.id]
+        .map((itemId) => {
+          const item = inventory.listItems('', true).find((item) => item.id === itemId)!;
+          const balance = item.balances.find((p) => p.locationId === Number(location.id))!;
+          return {
+            itemId,
+            available: balance.available,
+            damaged: balance.damaged,
+            stockRevision: item.stockRevision,
+          };
+        })
+        .sort((a, b) => a.itemId - b.itemId),
     };
     expect(() => inventory.retireLocationCommand(retireLocation)).toThrow(
       expect.objectContaining({ code: 'confirmation_changed' }),
@@ -1008,7 +1412,6 @@ describe('inventory management commands', () => {
       ).toEqual({ count: 0 });
     db.close();
   });
-
   it.each(['phoneNumber', 'campDepartment'] as const)(
     'protects deletion from isolated %s changes after preview',
     (field) => {
@@ -1019,10 +1422,43 @@ describe('inventory management commands', () => {
         phoneNumber: '050',
         campDepartment: 'Camp',
       });
-      const item = inventory.createItem({ name: 'History', kind: 'non_consumable' });
-      inventory.addStock(item.id, 1);
-      const checkout = inventory.checkout(item.id, borrower.id, 1);
-      inventory.returnCheckout(checkout, 1, 0);
+      const item = inventory.createItem({
+        name: 'History',
+        kind: 'non_consumable',
+        locationId: Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      });
+      inventory.addStock(
+        item.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      const checkout = inventory.checkout(
+        item.id,
+        borrower.id,
+        1,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
+      inventory.returnCheckout(
+        checkout,
+        1,
+        0,
+        '',
+        Number(
+          (inventory.listLocations().find((l) => l.code === 'monster') ??
+            inventory.listLocations()[0])!.id,
+        ),
+      );
       const events = db.prepare('SELECT * FROM inventory_events ORDER BY id').all();
       const loans = db.prepare('SELECT * FROM loan_state ORDER BY checkout_id').all();
       const preview = inventory.borrowerDeletionStatus(borrower.id);
@@ -1054,7 +1490,6 @@ describe('inventory management commands', () => {
       db.close();
     },
   );
-
   it('rolls back location relocation when source deletion fails mid-transaction', () => {
     const { db, inventory } = setup();
     const source = inventory.createLocation('rollback-source', 'Source');
@@ -1069,18 +1504,23 @@ describe('inventory management commands', () => {
       kind: 'consumable',
       locationId: Number(source.id),
     });
-    inventory.addStock(active.id, 3);
+    inventory.addStock(
+      active.id,
+      3,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.archiveItem(archived.id, true);
     const highWaterBefore = db
       .prepare('SELECT result_json FROM inventory_command_receipts WHERE key=?')
       .get('system:identity-high-water');
     const revisionBefore = db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get();
-    db.exec(
-      `CREATE TRIGGER fail_source_location_delete
+    db.exec(`CREATE TRIGGER fail_source_location_delete
         BEFORE DELETE ON locations WHEN OLD.id=${Number(source.id)}
-        BEGIN SELECT RAISE(ABORT, 'injected location deletion failure'); END;`,
-    );
-
+        BEGIN SELECT RAISE(ABORT, 'injected location deletion failure'); END;`);
     const command = {
       key: 'retire-location-rollback-1',
       ledgerEpoch: inventory.inventoryEpoch(),
@@ -1090,11 +1530,23 @@ describe('inventory management commands', () => {
       expectedItemIds: [active.id, archived.id].sort((left, right) => left - right),
       expectedCode: source.code,
       expectedName: source.name,
+      expectedBalances: [active.id, archived.id]
+        .sort((left, right) => left - right)
+        .map((itemId) => {
+          const item = inventory.listItems('', true).find((item) => item.id === itemId)!;
+          const balance = item.balances.find((p) => p.locationId === Number(source.id))!;
+          return {
+            itemId,
+            available: balance.available,
+            damaged: balance.damaged,
+            stockRevision: item.stockRevision,
+          };
+        })
+        .sort((a, b) => a.itemId - b.itemId),
     };
     expect(() => inventory.retireLocationCommand(command)).toThrow(
       /injected location deletion failure/,
     );
-
     expect(inventory.listLocations(true)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: source.id, archived: false }),
@@ -1103,8 +1555,16 @@ describe('inventory management commands', () => {
     );
     expect(inventory.listItems('', true)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: active.id, locationId: source.id, available: 3 }),
-        expect.objectContaining({ id: archived.id, locationId: source.id, archived: true }),
+        expect.objectContaining({
+          id: active.id,
+          balances: expect.arrayContaining([expect.objectContaining({ locationId: source.id })]),
+          available: 3,
+        }),
+        expect.objectContaining({
+          id: archived.id,
+          balances: [{ locationId: source.id, available: 0, damaged: 0 }],
+          archived: true,
+        }),
       ]),
     );
     expect(db.prepare('SELECT revision FROM state_clock WHERE singleton=1').get()).toEqual(

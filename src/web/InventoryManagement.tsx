@@ -17,7 +17,10 @@ import {
 } from './borrower-workflow-recovery.js';
 
 type Editor =
-  { kind: 'item'; item: Item | null } | { kind: 'damage'; item: Item } | { kind: 'locations' };
+  | { kind: 'item'; item: Item | null }
+  | { kind: 'damage'; item: Item }
+  | { kind: 'transfer'; item: Item }
+  | { kind: 'locations' };
 type Draft = {
   name: string;
   kind: Item['kind'];
@@ -48,9 +51,9 @@ const itemDraft = (item: Item | null): Draft => ({
   name: item?.name ?? '',
   kind: item?.kind ?? 'consumable',
   aliases: item?.aliases.join(', ') ?? '',
-  locationId: item?.locationId?.toString() ?? '',
+  locationId: '',
   lotSize: item?.lotSize?.toString() ?? '',
-  available: item?.available.toString() ?? '0',
+  available: '0',
   note: '',
 });
 const safeInteger = (text: string, min: number) =>
@@ -79,10 +82,14 @@ export function InventoryManagement({
   const [draft, setDraft] = useState<Draft>(itemDraft(null));
   const [damageQuantity, setDamageQuantity] = useState('1');
   const [damageNote, setDamageNote] = useState('');
+  const [damageLocationId, setDamageLocationId] = useState('');
+  const [transferDestination, setTransferDestination] = useState('');
+  const [transferCondition, setTransferCondition] = useState<'usable' | 'damaged'>('usable');
   const [resolution, setResolution] = useState<'repair' | 'write_off'>('repair');
   const [locationEdit, setLocationEdit] = useState<Location | 'new' | null>(null);
   const [locationName, setLocationName] = useState('');
   const [locationCode, setLocationCode] = useState('');
+  const [locationDefault, setLocationDefault] = useState(false);
   const [locationQuery, setLocationQuery] = useState('');
   const [dirty, setDirty] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
@@ -91,6 +98,7 @@ export function InventoryManagement({
   const [locationRetirement, setLocationRetirement] = useState<{
     location: Location;
     action: 'archive' | 'delete';
+    items: Item[];
   } | null>(null);
   const [replacementLocationId, setReplacementLocationId] = useState('');
   const [pending, setPending] = useState(false);
@@ -111,6 +119,7 @@ export function InventoryManagement({
   const pendingRef = useRef(false);
   const refreshPendingRef = useRef(false);
   const pendingNavigationRef = useRef<(() => void) | null>(null);
+  const pendingEditorChangeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     registerLeaveGuard((continueNavigation) => {
@@ -131,6 +140,14 @@ export function InventoryManagement({
 
   function open(next: Editor) {
     if (pendingRef.current || unresolved || refreshRecovery) return;
+    if (editor && dirty) {
+      pendingEditorChangeRef.current = () => openEditor(next);
+      setDiscardOpen(true);
+      return;
+    }
+    openEditor(next);
+  }
+  function openEditor(next: Editor) {
     triggerRef.current = document.activeElement as HTMLElement;
     setEditor(next);
     setEditorEpoch(ledgerEpoch);
@@ -140,8 +157,28 @@ export function InventoryManagement({
     setReviewSnapshot(null);
     setReviewRequired(false);
     setCurrentBalances(null);
-    if (next.kind === 'item') setDraft(itemDraft(next.item));
+    if (next.kind === 'item') {
+      const initial = itemDraft(next.item);
+      const balance = !admin ? next.item?.balances[0] : undefined;
+      setDraft(
+        balance
+          ? {
+              ...initial,
+              locationId: String(balance.locationId),
+              available: String(balance.available),
+            }
+          : initial,
+      );
+    }
+    if (next.kind === 'transfer') {
+      setDamageLocationId('');
+      setTransferDestination('');
+      setDamageQuantity('1');
+      setDamageNote('');
+      setTransferCondition('usable');
+    }
     if (next.kind === 'damage') {
+      setDamageLocationId('');
       setDamageQuantity('1');
       setDamageNote('');
       setResolution('repair');
@@ -158,6 +195,12 @@ export function InventoryManagement({
   function discard() {
     setDiscardOpen(false);
     setDirty(false);
+    const edit = pendingEditorChangeRef.current;
+    pendingEditorChangeRef.current = null;
+    if (edit) {
+      edit();
+      return;
+    }
     setLocationEdit(null);
     queueMicrotask(() => setEditor(null));
     const next = pendingNavigationRef.current;
@@ -267,6 +310,27 @@ export function InventoryManagement({
           /* The original draft remains available. */
         }
         showToast('המלאי השתנה', 'יש לבדוק את היתרות העדכניות לפני שמירת הכמות', 'warning');
+      } else if (
+        error instanceof ApiError &&
+        error.code === 'stale_stock' &&
+        (editor?.kind === 'transfer' || editor?.kind === 'damage')
+      ) {
+        if (!clearAttempt()) {
+          showToast(
+            'הפעולה נדחתה',
+            'אחסון השחזור אינו זמין. יש לבדוק שוב את אותה פעולה לפני שינוי נוסף.',
+            'warning',
+          );
+          return;
+        }
+        setEditor(null);
+        setDirty(false);
+        try {
+          await onRefresh();
+        } catch {
+          showToast('רענון נכשל', 'יש לרענן את הנתונים לפני פתיחת הפעולה מחדש', 'error');
+        }
+        showToast('המלאי השתנה', 'יש לפתוח את הפעולה מחדש ולבדוק את היתרות העדכניות', 'warning');
       } else if (error instanceof ApiError && error.status < 500) {
         clearAttempt();
         if (error.code === 'confirmation_changed') {
@@ -315,6 +379,7 @@ export function InventoryManagement({
     )
       return;
     if (
+      !draft.locationId ||
       !draft.name.trim() ||
       draft.name.trim().length > 100 ||
       !safeInteger(draft.available, 0) ||
@@ -324,7 +389,10 @@ export function InventoryManagement({
       return;
     }
     const item = editor.item;
-    const countChanged = !item || Number(draft.available) !== item.available;
+    const countChanged =
+      !item ||
+      Number(draft.available) !==
+        (item.balances.find((p) => p.locationId === Number(draft.locationId))?.available ?? 0);
     if (countChanged && reviewRequired && reviewSnapshot === null) {
       showToast('נדרשת בדיקה', 'יש לאשר את היתרות העדכניות', 'warning');
       return;
@@ -363,7 +431,11 @@ export function InventoryManagement({
       refreshRecovery
     )
       return;
-    if (!safeInteger(damageQuantity, 1) || Number(damageQuantity) > editor.item.damaged) {
+    if (
+      !safeInteger(damageQuantity, 1) ||
+      Number(damageQuantity) >
+        (editor.item.balances.find((p) => p.locationId === Number(damageLocationId))?.damaged ?? 0)
+    ) {
       showToast('כמות לא תקינה', 'יש להזין כמות שלמה בין 1 ליתרה הפגומה', 'error');
       return;
     }
@@ -378,6 +450,8 @@ export function InventoryManagement({
         key: crypto.randomUUID(),
         ledgerEpoch: editorEpoch,
         itemId: editor.item.id,
+        locationId: Number(damageLocationId),
+        stockRevision: editor.item.stockRevision,
         quantity: Number(damageQuantity),
         resolution,
         note: damageNote,
@@ -410,7 +484,6 @@ export function InventoryManagement({
         ledgerEpoch,
         expectedStockRevision: item.stockRevision,
         expectedName: item.name,
-        expectedLocationId: item.locationId,
       },
       description: `מחיקת פריט: ${item.name}`,
     });
@@ -420,6 +493,7 @@ export function InventoryManagement({
     setLocationEdit(location);
     setLocationName(location === 'new' ? '' : location.name);
     setLocationCode(location === 'new' ? '' : location.code);
+    setLocationDefault(location !== 'new' && location.isDefault);
     setDirty(false);
   }
   function saveLocation(event: FormEvent<HTMLFormElement>) {
@@ -442,6 +516,7 @@ export function InventoryManagement({
         ledgerEpoch: editorEpoch,
         name: locationName.trim(),
         code: locationCode.trim(),
+        isDefault: locationDefault,
       },
     });
   }
@@ -463,13 +538,18 @@ export function InventoryManagement({
   }
   function retireLocation(location: Location, action: 'archive' | 'delete') {
     setReplacementLocationId('');
-    setLocationRetirement({ location, action });
+    setLocationRetirement({
+      location,
+      action,
+      items: structuredClone(
+        items.filter((item) => item.balances.some((p) => p.locationId === location.id)),
+      ),
+    });
   }
   function confirmLocationRetirement() {
     if (!locationRetirement || ledgerEpoch === null || pendingRef.current) return;
     const { location, action } = locationRetirement;
-    const affected = items
-      .filter((item) => item.locationId === location.id)
+    const affected = locationRetirement.items
       .map((item) => item.id)
       .sort((left, right) => left - right);
     void send({
@@ -485,6 +565,17 @@ export function InventoryManagement({
           ? { replacementLocationId: Number(replacementLocationId) }
           : {}),
         expectedItemIds: affected,
+        expectedBalances: locationRetirement.items
+          .map((item) => {
+            const balance = item.balances.find((p) => p.locationId === location.id)!;
+            return {
+              itemId: item.id,
+              available: balance.available,
+              damaged: balance.damaged,
+              stockRevision: item.stockRevision,
+            };
+          })
+          .sort((a, b) => a.itemId - b.itemId),
       },
       description: `${action === 'archive' ? 'ארכוב' : 'מחיקת'} מיקום: ${location.name}`,
     });
@@ -496,7 +587,7 @@ export function InventoryManagement({
         (item) =>
           (includeArchived || !item.archived) &&
           (!typeFilter || item.kind === typeFilter) &&
-          (!locationFilter || String(item.locationId ?? '') === locationFilter),
+          (!locationFilter || item.balances.some((p) => String(p.locationId) === locationFilter)),
       ),
     [items, includeArchived, typeFilter, locationFilter],
   );
@@ -533,9 +624,16 @@ export function InventoryManagement({
     {
       key: 'location',
       label: 'מיקום',
-      render: (item) => locations.find((location) => location.id === item.locationId)?.name ?? '—',
+      render: (item) =>
+        item.balances
+          .map((p) => locations.find((l) => l.id === p.locationId)?.name)
+          .filter(Boolean)
+          .join(', ') || '—',
       sortValue: (item) =>
-        locations.find((location) => location.id === item.locationId)?.name ?? '',
+        item.balances
+          .map((p) => locations.find((l) => l.id === p.locationId)?.name)
+          .filter(Boolean)
+          .join(', '),
     },
     {
       key: 'available',
@@ -587,9 +685,7 @@ export function InventoryManagement({
     },
   ];
   const selected = editor?.kind === 'item' ? editor.item : null;
-  const confirmedLocationItems = locationRetirement
-    ? items.filter((item) => item.locationId === locationRetirement.location.id)
-    : [];
+  const confirmedLocationItems = locationRetirement ? locationRetirement.items : [];
   const activeRetirementDestinations = locationRetirement
     ? locations.filter(
         (location) => !location.archived && location.id !== locationRetirement.location.id,
@@ -821,11 +917,13 @@ export function InventoryManagement({
               ? selected
                 ? 'עריכת פריט'
                 : 'הוספת פריט חדש'
-              : editor.kind === 'damage'
-                ? 'טיפול בפגומים'
-                : locationEdit === 'new'
-                  ? 'מיקום חדש'
-                  : 'עריכת מיקום'
+              : editor.kind === 'transfer'
+                ? 'העברת מלאי'
+                : editor.kind === 'damage'
+                  ? 'טיפול בפגומים'
+                  : locationEdit === 'new'
+                    ? 'מיקום חדש'
+                    : 'עריכת מיקום'
           }
           level="root"
           role="dialog"
@@ -874,17 +972,47 @@ export function InventoryManagement({
                   <select
                     className="input-field"
                     value={draft.locationId}
-                    disabled={!admin || lockedDraft}
+                    disabled={lockedDraft}
                     onChange={(event) => {
-                      setDraft({ ...draft, locationId: event.target.value });
-                      setDirty(true);
+                      const locationId = event.target.value;
+                      const apply = () => {
+                        setDraft((current) => ({
+                          ...current,
+                          locationId,
+                          available: String(
+                            selected?.balances.find(
+                              (balance) => balance.locationId === Number(locationId),
+                            )?.available ?? 0,
+                          ),
+                        }));
+                        setReviewRequired(false);
+                        setReviewSnapshot(null);
+                        setCurrentBalances(null);
+                        setDirty(
+                          admin &&
+                            (!selected ||
+                              draft.name !== selected.name ||
+                              draft.aliases !== selected.aliases.join(', ') ||
+                              draft.lotSize !== (selected.lotSize?.toString() ?? '') ||
+                              draft.note !== '' ||
+                              !selected.balances.some(
+                                (balance) => balance.locationId === Number(locationId),
+                              )),
+                        );
+                      };
+                      const original =
+                        selected?.balances.find(
+                          (balance) => balance.locationId === Number(draft.locationId),
+                        )?.available ?? 0;
+                      if (admin && draft.locationId && draft.available !== String(original)) {
+                        pendingEditorChangeRef.current = apply;
+                        setDiscardOpen(true);
+                      } else apply();
                     }}
                   >
-                    <option value="">ללא מיקום</option>
+                    <option value="">בחרו מיקום לעריכת היתרה</option>
                     {locations
-                      .filter(
-                        (location) => !location.archived || location.id === selected?.locationId,
-                      )
+                      .filter((location) => !location.archived)
                       .map((location) => (
                         <option key={location.id} value={location.id}>
                           {location.name}
@@ -893,7 +1021,27 @@ export function InventoryManagement({
                       ))}
                   </select>
                 </label>
+                {selected && (
+                  <div>
+                    {selected.balances.map((p) => (
+                      <p key={p.locationId}>
+                        {locations.find((l) => l.id === p.locationId)?.name} · זמין {p.available} ·
+                        פגום {p.damaged}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 {field('available', 'זמין', !admin || !!selected?.archived)}
+                {selected && admin && !selected.archived && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={lockedDraft}
+                    onClick={() => open({ kind: 'transfer', item: selected })}
+                  >
+                    העברת מלאי בין מיקומים
+                  </button>
+                )}
                 <p>
                   מושאל: {selected?.borrowed ?? 0} · אבוד: {selected?.lost ?? 0} · פגום:{' '}
                   {selected?.damaged ?? 0}
@@ -908,22 +1056,52 @@ export function InventoryManagement({
                   )}
                 {selected &&
                   safeInteger(draft.available, 0) &&
-                  Number(draft.available) !== selected.available && (
+                  Number(draft.available) !==
+                    (selected.balances.find((p) => p.locationId === Number(draft.locationId))
+                      ?.available ?? 0) && (
                     <p>
-                      התאמה: {Number(draft.available) - selected.available > 0 ? '+' : ''}
-                      {Number(draft.available) - selected.available}
+                      התאמה:{' '}
+                      {Number(draft.available) -
+                        (selected.balances.find((p) => p.locationId === Number(draft.locationId))
+                          ?.available ?? 0) >
+                      0
+                        ? '+'
+                        : ''}
+                      {Number(draft.available) -
+                        (selected.balances.find((p) => p.locationId === Number(draft.locationId))
+                          ?.available ?? 0)}
                     </p>
                   )}
-                {draft.available !== (selected?.available.toString() ?? '0') &&
-                  field('note', 'הערת התאמה (רשות)', !admin)}
+                {draft.available !==
+                  String(
+                    selected?.balances.find((p) => p.locationId === Number(draft.locationId))
+                      ?.available ?? 0,
+                  ) && field('note', 'הערת התאמה (רשות)', !admin)}
                 {reviewRequired && (
                   <div>
                     {currentBalances ? (
                       <>
                         <p>
-                          יתרות עדכניות: זמין {currentBalances.available}, מושאל{' '}
-                          {currentBalances.borrowed}, אבוד {currentBalances.lost}, פגום{' '}
-                          {currentBalances.damaged}
+                          יתרות עדכניות: זמין{' '}
+                          {currentBalances.balances.find(
+                            (balance) => balance.locationId === Number(draft.locationId),
+                          )?.available ?? 0}
+                          , מושאל {currentBalances.borrowed}, אבוד {currentBalances.lost}, פגום{' '}
+                          {currentBalances.balances.find(
+                            (balance) => balance.locationId === Number(draft.locationId),
+                          )?.damaged ?? 0}
+                        </p>
+                        <p>
+                          מיקום:{' '}
+                          {
+                            locations.find((location) => location.id === Number(draft.locationId))
+                              ?.name
+                          }{' '}
+                          · כמות מבוקשת: {draft.available} · התאמה:{' '}
+                          {Number(draft.available) -
+                            (currentBalances.balances.find(
+                              (balance) => balance.locationId === Number(draft.locationId),
+                            )?.available ?? 0)}
                         </p>
                         <button
                           type="button"
@@ -1007,11 +1185,155 @@ export function InventoryManagement({
               </div>
             </form>
           )}
+          {editor.kind === 'transfer' && (
+            <form
+              className="dialog-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!safeInteger(damageQuantity, 1) || !damageLocationId || !transferDestination) {
+                  showToast('העברת מלאי', 'יש לבחור מקור, יעד וכמות חיובית', 'error');
+                  return;
+                }
+                void send({
+                  path: '/inventory/transfer',
+                  method: 'POST',
+                  body: {
+                    key: crypto.randomUUID(),
+                    ledgerEpoch: editorEpoch,
+                    itemId: editor.item.id,
+                    sourceLocationId: Number(damageLocationId),
+                    destinationLocationId: Number(transferDestination),
+                    quantity: Number(damageQuantity),
+                    condition: transferCondition,
+                    stockRevision: editor.item.stockRevision,
+                    note: damageNote,
+                  },
+                });
+              }}
+            >
+              <label className="field-label">
+                מיקום מקור
+                <select
+                  className="input-field"
+                  value={damageLocationId}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setDamageLocationId(event.target.value);
+                    setDirty(true);
+                  }}
+                >
+                  <option value="">בחרו מיקום</option>
+                  {locations
+                    .filter(
+                      (l) => !l.archived && editor.item.balances.some((p) => p.locationId === l.id),
+                    )
+                    .map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field-label">
+                מיקום יעד
+                <select
+                  className="input-field"
+                  value={transferDestination}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setTransferDestination(event.target.value);
+                    setDirty(true);
+                  }}
+                >
+                  <option value="">בחרו מיקום</option>
+                  {locations
+                    .filter((l) => !l.archived && String(l.id) !== damageLocationId)
+                    .map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field-label">
+                מצב
+                <select
+                  className="input-field"
+                  value={transferCondition}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setTransferCondition(event.target.value as 'usable' | 'damaged');
+                    setDirty(true);
+                  }}
+                >
+                  <option value="usable">תקין</option>
+                  <option value="damaged">פגום</option>
+                </select>
+              </label>
+              <label className="field-label">
+                כמות
+                <input
+                  className="input-field"
+                  type="number"
+                  min="1"
+                  value={damageQuantity}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setDamageQuantity(event.target.value);
+                    setDirty(true);
+                  }}
+                />
+              </label>
+              <label className="field-label">
+                הערה
+                <input
+                  className="input-field"
+                  value={damageNote}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setDamageNote(event.target.value);
+                    setDirty(true);
+                  }}
+                />
+              </label>
+              <div className="dialog-actions">
+                <button className="primary-button" disabled={lockedDraft}>
+                  העברה
+                </button>
+                <button type="button" className="secondary-button" onClick={close}>
+                  ביטול
+                </button>
+              </div>
+            </form>
+          )}
           {editor.kind === 'damage' && (
             <form className="dialog-form" onSubmit={saveDamage}>
               <p>
                 {editor.item.name} · פגום: {editor.item.damaged}
               </p>
+              <label className="field-label">
+                מיקום הפגומים
+                <select
+                  className="input-field"
+                  value={damageLocationId}
+                  disabled={lockedDraft}
+                  onChange={(event) => setDamageLocationId(event.target.value)}
+                >
+                  <option value="">בחרו מיקום</option>
+                  {locations
+                    .filter(
+                      (l) =>
+                        !l.archived &&
+                        (editor.item.balances.find((p) => p.locationId === l.id)?.damaged ?? 0) > 0,
+                    )
+                    .map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name} · פגום{' '}
+                        {editor.item.balances.find((p) => p.locationId === l.id)?.damaged}
+                      </option>
+                    ))}
+                </select>
+              </label>
               <label className="field-label">
                 כמות
                 <input
@@ -1079,6 +1401,18 @@ export function InventoryManagement({
           )}
           {editor.kind === 'locations' && locationEdit && (
             <form className="dialog-form" onSubmit={saveLocation}>
+              <label className="field-label">
+                <input
+                  type="checkbox"
+                  checked={locationDefault}
+                  disabled={lockedDraft}
+                  onChange={(event) => {
+                    setLocationDefault(event.target.checked);
+                    setDirty(true);
+                  }}
+                />
+                מיקום ברירת מחדל
+              </label>
               <label className="field-label">
                 שם
                 <input
@@ -1246,6 +1580,20 @@ export function InventoryManagement({
           returnFocusFallbackRef={fallbackRef}
         >
           {confirmedLocationItems.length > 0 && (
+            <ul>
+              {confirmedLocationItems.map((item) => {
+                const balance = item.balances.find(
+                  (p) => p.locationId === locationRetirement.location.id,
+                )!;
+                return (
+                  <li key={item.id}>
+                    {item.name}: זמין {balance.available}, פגום {balance.damaged}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {confirmedLocationItems.length > 0 && (
             <label className="field-label">
               להעביר את כל הפריטים אל
               <select
@@ -1308,6 +1656,7 @@ export function InventoryManagement({
           onClose={() => {
             setDiscardOpen(false);
             pendingNavigationRef.current = null;
+            pendingEditorChangeRef.current = null;
           }}
           returnFocusRef={firstFieldRef}
           returnFocusFallbackRef={triggerRef}
@@ -1319,6 +1668,7 @@ export function InventoryManagement({
               onClick={() => {
                 setDiscardOpen(false);
                 pendingNavigationRef.current = null;
+                pendingEditorChangeRef.current = null;
               }}
             >
               להמשיך לערוך

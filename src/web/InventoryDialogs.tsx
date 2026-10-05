@@ -2,20 +2,7 @@ import { useId, useRef, useState, type FormEvent, type ReactNode, type RefObject
 import { Dialog } from './Dialog';
 import { RECOVERY_IMPORT_CONFIRMATION, RESET_IMPORT_CONFIRMATION } from './import-confirmation';
 
-export type Item = {
-  id: number;
-  name: string;
-  kind: 'consumable' | 'non_consumable' | 'camp_equipment';
-  lotSize: number | null;
-  locationId: number | null;
-  aliases: string[];
-  available: number;
-  borrowed: number;
-  lost: number;
-  damaged: number;
-  stockRevision: number;
-  archived: boolean;
-};
+export type { Item } from '../domain/types';
 
 export type Borrower = {
   id: number;
@@ -26,7 +13,13 @@ export type Borrower = {
   archived: boolean;
 };
 
-export type Location = { id: number; code: string; name: string; archived: boolean };
+export type Location = {
+  id: number;
+  code: string;
+  name: string;
+  archived: boolean;
+  isDefault: boolean;
+};
 
 export type ActiveDialog =
   | { kind: 'edit-borrower'; borrower: Borrower }

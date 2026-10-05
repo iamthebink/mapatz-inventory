@@ -54,17 +54,18 @@ const borrowerOperationInput = z
           .object({
             itemId: safePositive,
             borrow: z
-              .array(z.object({ quantity: safePositive, note }).strict())
+              .array(z.object({ quantity: safePositive, locationId: safePositive, note }).strict())
               .min(1)
               .optional(),
             issue: z
-              .array(z.object({ quantity: safePositive, note }).strict())
+              .array(z.object({ quantity: safePositive, locationId: safePositive, note }).strict())
               .min(1)
               .optional(),
             return: z
               .array(
                 z
                   .object({
+                    locationId: safePositive,
                     usable: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
                     damaged: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
                     note,
@@ -85,6 +86,7 @@ const borrowerOperationInput = z
                 z
                   .object({
                     quantity: safePositive,
+                    locationId: safePositive,
                     condition: z.enum(['usable', 'damaged']),
                     note,
                   })
@@ -402,6 +404,7 @@ export function apiRouter(
       code: z.string().trim().min(1).max(40),
       name: z.string().trim().min(1).max(100),
       archived: z.boolean().optional(),
+      isDefault: z.boolean().optional(),
     })
     .strict();
   api.post(
@@ -442,6 +445,16 @@ export function apiRouter(
             action: z.enum(['archive', 'delete']),
             replacementLocationId: positive.optional(),
             expectedItemIds: z.array(positive).max(50000),
+            expectedBalances: z.array(
+              z
+                .object({
+                  itemId: positive,
+                  available: z.number().int().nonnegative(),
+                  damaged: z.number().int().nonnegative(),
+                  stockRevision: z.number().int().nonnegative(),
+                })
+                .strict(),
+            ),
             expectedCode: z.string().min(1).max(40),
             expectedName: z.string().min(1).max(100),
           })
@@ -474,6 +487,7 @@ export function apiRouter(
           code: z.string().trim().min(1).max(40),
           name: z.string().trim().min(1).max(100),
           archived: z.boolean().optional(),
+          isDefault: z.boolean().optional(),
         }),
         req.body,
       );
@@ -547,12 +561,34 @@ export function apiRouter(
             ledgerEpoch: positive,
             expectedStockRevision: z.number().int().min(0),
             expectedName: z.string().min(1).max(200),
-            expectedLocationId: positive.nullable(),
           })
           .strict(),
         req.body,
       );
       res.json(service.deleteItemCommand({ ...body, itemId: parse(id, req.params.id) }));
+    }),
+  );
+  api.post(
+    '/inventory/transfer',
+    requireRole('admin'),
+    route((req, res) => {
+      const body = parse(
+        z
+          .object({
+            key: z.string().min(8).max(128),
+            ledgerEpoch: positive,
+            itemId: positive,
+            sourceLocationId: positive,
+            destinationLocationId: positive,
+            quantity: positive,
+            condition: z.enum(['usable', 'damaged']),
+            stockRevision: z.number().int().nonnegative(),
+            note,
+          })
+          .strict(),
+        req.body,
+      );
+      res.json(service.transferStockCommand(body));
     }),
   );
   api.post(
@@ -565,7 +601,9 @@ export function apiRouter(
             key: z.string().min(8).max(128),
             ledgerEpoch: positive,
             itemId: positive,
+            locationId: positive,
             quantity: positive,
+            stockRevision: z.number().int().nonnegative(),
             resolution: z.enum(['repair', 'write_off']),
             note: z.string().max(500).default(''),
           })
@@ -582,7 +620,9 @@ export function apiRouter(
           key: body.key,
           ledgerEpoch: body.ledgerEpoch,
           itemId: body.itemId,
+          locationId: body.locationId,
           quantity: body.quantity,
+          stockRevision: body.stockRevision,
           repaired: body.resolution === 'repair',
           note: body.note,
         }),
@@ -740,17 +780,21 @@ export function apiRouter(
       express.raw({ type: WORKBOOK_CONTRACT.mimeType, limit: '10mb' }),
       route(async (req, res) => {
         const mode = parse(z.enum(['merge', 'replace']), req.query.mode);
+        const returnLocationId =
+          req.query.returnLocationId === undefined
+            ? undefined
+            : parse(id, req.query.returnLocationId);
         if (!Buffer.isBuffer(req.body) || req.body.length === 0)
           throw new DomainError('invalid_workbook', 'יש לבחור קובץ XLSX לייבוא');
         const rows = await parseBorrowerWorkbook(req.body);
         if (operation === 'preview') {
-          res.json(service.previewBorrowerImport(rows, mode));
+          res.json(service.previewBorrowerImport(rows, mode, returnLocationId));
         } else {
           const token = parse(
             z.string().regex(/^[a-f0-9]{64}$/),
             req.header('x-borrower-import-confirmation'),
           );
-          res.json(service.importBorrowers(rows, mode, token));
+          res.json(service.importBorrowers(rows, mode, token, returnLocationId));
         }
       }),
     );
@@ -771,8 +815,13 @@ export function apiRouter(
   api.get(
     '/workbook',
     requireRole('admin'),
-    route(async (_req, res) => {
-      const buffer = await exportWorkbook(transfers.snapshot());
+    route(async (req, res) => {
+      const buffer = await exportWorkbook(
+        transfers.snapshot(),
+        typeof req.query.resetAllocationLocation === 'string'
+          ? req.query.resetAllocationLocation
+          : undefined,
+      );
       res.type(WORKBOOK_CONTRACT.mimeType).attachment(WORKBOOK_CONTRACT.filename).send(buffer);
     }),
   );
@@ -825,10 +874,17 @@ export function apiRouter(
     requireRole('admin'),
     route((req, res) => {
       const body = parse(
-        z.object({ itemId: positive, quantity: positive, note: z.string().max(500).optional() }),
+        z.object({
+          itemId: positive,
+          locationId: positive,
+          quantity: positive,
+          note: z.string().max(500).optional(),
+        }),
         req.body,
       );
-      res.status(201).json({ eventId: service.addStock(body.itemId, body.quantity, body.note) });
+      res.status(201).json({
+        eventId: service.addStock(body.itemId, body.quantity, body.note, body.locationId),
+      });
     }),
   );
   api.post(
@@ -841,7 +897,16 @@ export function apiRouter(
           .object({
             ledgerEpoch: safePositive,
             items: z
-              .array(z.object({ itemId: safePositive, quantity: safePositive, note }).strict())
+              .array(
+                z
+                  .object({
+                    itemId: safePositive,
+                    locationId: safePositive,
+                    quantity: safePositive,
+                    note,
+                  })
+                  .strict(),
+              )
               .min(1),
           })
           .strict(),
@@ -858,11 +923,18 @@ export function apiRouter(
     route((req, res) => {
       const body = parse(
         z
-          .object({ itemId: positive, quantity: positive, note: z.string().max(500).optional() })
+          .object({
+            itemId: positive,
+            locationId: positive,
+            quantity: positive,
+            note: z.string().max(500).optional(),
+          })
           .strict(),
         req.body,
       );
-      res.status(201).json({ eventId: service.issue(body.itemId, body.quantity, body.note) });
+      res
+        .status(201)
+        .json({ eventId: service.issue(body.itemId, body.quantity, body.note, body.locationId) });
     }),
   );
   api.post(
@@ -872,13 +944,20 @@ export function apiRouter(
         z.object({
           itemId: positive,
           borrowerId: positive,
+          locationId: positive,
           quantity: positive,
           note: z.string().max(500).optional(),
         }),
         req.body,
       );
       res.status(201).json({
-        eventId: service.checkout(body.itemId, body.borrowerId, body.quantity, body.note),
+        eventId: service.checkout(
+          body.itemId,
+          body.borrowerId,
+          body.quantity,
+          body.note,
+          body.locationId,
+        ),
       });
     }),
   );
@@ -888,6 +967,7 @@ export function apiRouter(
       const body = parse(
         z.object({
           checkoutId: positive,
+          locationId: positive,
           usable: z.number().int().min(0),
           damaged: z.number().int().min(0),
           note: z.string().max(500).optional(),
@@ -895,7 +975,13 @@ export function apiRouter(
         req.body,
       );
       res.status(201).json({
-        eventIds: service.returnCheckout(body.checkoutId, body.usable, body.damaged, body.note),
+        eventIds: service.returnCheckout(
+          body.checkoutId,
+          body.usable,
+          body.damaged,
+          body.note,
+          body.locationId,
+        ),
       });
     }),
   );
@@ -924,6 +1010,7 @@ export function apiRouter(
       const body = parse(
         z.object({
           itemId: positive,
+          locationId: positive,
           quantity: positive,
           resolution: z.enum(['repair', 'write_off']),
           note: z.string().max(500).optional(),
@@ -941,6 +1028,7 @@ export function apiRouter(
           body.quantity,
           body.resolution === 'repair',
           body.note,
+          body.locationId,
         ),
       });
     }),

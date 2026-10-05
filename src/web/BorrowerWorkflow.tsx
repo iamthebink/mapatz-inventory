@@ -1,3 +1,4 @@
+import { projectedLocationAvailability } from './borrower-workflow-state';
 import { StickyTable } from './StickyTable';
 import {
   borrowerIdentity,
@@ -66,6 +67,7 @@ export type BorrowerWorkflowHandle = {
 
 type QuantityDialog = {
   direction: 'borrow' | 'issue' | 'return';
+  locationId: string;
   condition?: ReturnCondition;
   itemId: number;
   quantity: string;
@@ -120,16 +122,37 @@ function OperationReview({ state }: { state: OperationState }) {
   return (
     <div className="borrower-review-list">
       {state.staged.flatMap((group) => {
-        const rows: Array<{ label: string; quantity: number; note: string }> = [];
+        const rows: Array<{ label: string; quantity: number; note: string; locationId?: number }> =
+          [];
         for (const part of group.borrow)
-          rows.push({ label: 'השאלה', quantity: part.quantity, note: part.note });
+          rows.push({
+            label: 'השאלה',
+            quantity: part.quantity,
+            note: part.note,
+            locationId: part.locationId,
+          });
         for (const part of group.issue ?? [])
-          rows.push({ label: 'ניפוק · מתכלה', quantity: part.quantity, note: part.note });
+          rows.push({
+            label: 'ניפוק · מתכלה',
+            quantity: part.quantity,
+            note: part.note,
+            locationId: part.locationId,
+          });
         for (const part of group.return) {
           if (part.usable > 0)
-            rows.push({ label: 'החזרת ציוד', quantity: part.usable, note: part.note });
+            rows.push({
+              label: 'החזרת ציוד',
+              quantity: part.usable,
+              note: part.note,
+              locationId: part.locationId,
+            });
           if (part.damaged > 0)
-            rows.push({ label: 'החזרת ציוד · פגום', quantity: part.damaged, note: part.note });
+            rows.push({
+              label: 'החזרת ציוד · פגום',
+              quantity: part.damaged,
+              note: part.note,
+              locationId: part.locationId,
+            });
         }
         for (const part of group.lost ?? [])
           rows.push({ label: 'סמן כאבוד', quantity: part.quantity, note: part.note });
@@ -138,6 +161,7 @@ function OperationReview({ state }: { state: OperationState }) {
             label: part.condition === 'damaged' ? 'נמצא והוחזר · פגום' : 'נמצא והוחזר',
             quantity: part.quantity,
             note: part.note,
+            locationId: part.locationId,
           });
         return rows.map((row, index) => (
           <div className="borrower-review-row" key={`${group.itemId}-${index}`}>
@@ -147,6 +171,8 @@ function OperationReview({ state }: { state: OperationState }) {
                 <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
               )}{' '}
               {row.label} · {row.quantity}
+              {row.locationId &&
+                ` · ${state.snapshot.locations.find((l) => l.id === row.locationId)?.name ?? 'מיקום לא זמין'}`}
             </span>
             {row.note && <small>{row.note}</small>}
           </div>
@@ -683,6 +709,13 @@ export const BorrowerWorkflow = forwardRef<
   const submitQuantity = (event: FormEvent) => {
     event.preventDefault();
     if (!operation || !quantity) return;
+    if (
+      quantity.condition !== 'mark-lost' &&
+      !operation.snapshot.locations.some((l) => l.id === Number(quantity.locationId))
+    ) {
+      setQuantity({ ...quantity, error: 'יש לבחור מיקום פעיל' });
+      return;
+    }
     const returnKey =
       quantity.condition === 'mark-lost'
         ? `${quantity.itemId}-more`
@@ -695,7 +728,11 @@ export const BorrowerWorkflow = forwardRef<
         queueMicrotask(() => quantityErrorRef.current?.focus());
         return;
       }
-      const available = projectItem(operation, quantity.itemId)?.projectedAvailability;
+      const available = projectedLocationAvailability(
+        operation,
+        quantity.itemId,
+        Number(quantity.locationId),
+      );
       if (available == null || amount > available) {
         setQuantity({
           ...quantity,
@@ -708,7 +745,7 @@ export const BorrowerWorkflow = forwardRef<
         operationReducer(operation, {
           type: quantity.direction === 'issue' ? 'stage-issue' : 'stage-borrow',
           itemId: quantity.itemId,
-          part: { quantity: amount, note: quantity.note },
+          part: { quantity: amount, note: quantity.note, locationId: Number(quantity.locationId) },
         }),
       );
     } else {
@@ -735,6 +772,7 @@ export const BorrowerWorkflow = forwardRef<
                 itemId: quantity.itemId,
                 part: {
                   quantity: amount,
+                  locationId: Number(quantity.locationId),
                   condition: quantity.damaged ? 'damaged' : 'usable',
                   note: quantity.note,
                 },
@@ -749,6 +787,7 @@ export const BorrowerWorkflow = forwardRef<
                   type: 'stage-return',
                   itemId: quantity.itemId,
                   part: {
+                    locationId: Number(quantity.locationId),
                     usable: quantity.damaged ? 0 : amount,
                     damaged: quantity.damaged ? amount : 0,
                     note: quantity.note,
@@ -1555,6 +1594,15 @@ export const BorrowerWorkflow = forwardRef<
                     setQuantity({
                       direction: item.kind === 'consumable' ? 'issue' : 'borrow',
                       itemId: item.id,
+                      locationId:
+                        operation.snapshot.defaultLocationId !== null &&
+                        projectedLocationAvailability(
+                          operation,
+                          item.id,
+                          operation.snapshot.defaultLocationId,
+                        ) > 0
+                          ? String(operation.snapshot.defaultLocationId)
+                          : '',
                       quantity: '1',
                       note: '',
                       error: '',
@@ -1629,6 +1677,7 @@ export const BorrowerWorkflow = forwardRef<
                     direction: 'return',
                     condition,
                     itemId,
+                    locationId: operation.snapshot.defaultLocationId?.toString() ?? '',
                     quantity: String(defaultQuantity ?? 1),
                     note: '',
                     error: '',
@@ -1714,6 +1763,34 @@ export const BorrowerWorkflow = forwardRef<
             className="dialog-form"
             noValidate
           >
+            {quantity.condition !== 'mark-lost' && (
+              <label className="field-label">
+                {quantity.direction === 'return' ? 'מיקום קבלה' : 'מיקום מקור'}
+                <select
+                  className="input-field"
+                  value={quantity.locationId}
+                  onChange={(event) =>
+                    setQuantity({ ...quantity, locationId: event.target.value, error: '' })
+                  }
+                >
+                  <option value="">בחרו מיקום</option>
+                  {operation.snapshot.locations
+                    .filter(
+                      (l) =>
+                        quantity.direction === 'return' ||
+                        projectedLocationAvailability(operation, quantity.itemId, l.id) > 0,
+                    )
+                    .map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                        {quantity.direction === 'return'
+                          ? ''
+                          : ` · זמין ${projectedLocationAvailability(operation, quantity.itemId, l.id)}`}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
             <label className="field-label">
               כמות
               <input
@@ -1726,7 +1803,13 @@ export const BorrowerWorkflow = forwardRef<
                     ? quantity.condition === 'found'
                       ? projectItem(operation, quantity.itemId)?.lostNow
                       : projectItem(operation, quantity.itemId)?.returnableNow
-                    : (projectItem(operation, quantity.itemId)?.projectedAvailability ?? undefined)
+                    : quantity.locationId
+                      ? projectedLocationAvailability(
+                          operation,
+                          quantity.itemId,
+                          Number(quantity.locationId),
+                        )
+                      : undefined
                 }
                 aria-invalid={Boolean(quantity.error)}
                 value={quantity.quantity}

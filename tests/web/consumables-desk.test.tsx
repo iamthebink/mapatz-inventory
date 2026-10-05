@@ -6,14 +6,13 @@ import type { Item } from '../../src/domain/types';
 import { ConsumablesDesk } from '../../src/web/ConsumablesDesk';
 import { hasStoredConsumableAttempt } from '../../src/web/consumable-attempt-storage';
 import { DialogStackProvider } from '../../src/web/Dialog';
-
 const item = (id: number, name: string, available = 5): Item => ({
   id,
   name,
   kind: 'consumable',
   aliases: [],
   lotSize: null,
-  locationId: null,
+  balances: [{ locationId: 1, available, damaged: 0 }],
   archived: false,
   available,
   damaged: 0,
@@ -33,6 +32,7 @@ function mount(
   render(
     <DialogStackProvider>
       <ConsumablesDesk
+        locations={[{ id: 1, code: 'monster', name: 'מפלצת', archived: false, isDefault: true }]}
         items={items}
         ledgerEpoch={1}
         refresh={refresh}
@@ -56,14 +56,13 @@ beforeEach(() => {
     clear: () => values.clear(),
   });
 });
-
 it('ignores malformed stored attempts and cannot review an empty pending batch', () => {
   localStorage.setItem(
     storageKey,
     JSON.stringify({
       key: 'bad-key',
       ledgerEpoch: 1,
-      items: [{ itemId: 1, quantity: 1, note: '' }],
+      items: [{ itemId: 1, quantity: 1, note: '', locationId: 1 }],
     }),
   );
   expect(hasStoredConsumableAttempt()).toBe(false);
@@ -81,7 +80,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 it('shows searchable active stock, including zero-stock rows, with disabled issue action', async () => {
   const searchableItem = { ...item(87941, 'אזיקונים'), aliases: ['Cable ties'] };
   const { user } = mount([
@@ -114,7 +112,6 @@ it('shows searchable active stock, including zero-stock rows, with disabled issu
   await user.type(screen.getByRole('searchbox', { name: 'חיפוש ציוד מתכלה' }), 'missing');
   expect(screen.getByText('לא נמצאו פריטים המתאימים לחיפוש.')).toBeTruthy();
 });
-
 it('stages only from an item-specific dialog and keeps invalid quantity focused there', async () => {
   const send = vi.fn();
   vi.stubGlobal('fetch', send);
@@ -141,9 +138,13 @@ it('stages only from an item-specific dialog and keeps invalid quantity focused 
   expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('2');
   expect(send).not.toHaveBeenCalled();
 });
-
 it('corrects a staged item by canceling and restaging it, retaining other rows', async () => {
-  const requests: Array<{ key: string; body: { items: unknown[] } }> = [];
+  const requests: Array<{
+    key: string;
+    body: {
+      items: unknown[];
+    };
+  }> = [];
   let lost = true;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
     const key = new Headers(init?.headers).get('Idempotency-Key') ?? '';
@@ -191,7 +192,7 @@ it('corrects a staged item by canceling and restaging it, retaining other rows',
   expect(reviewTrigger.querySelector('svg')).not.toBeNull();
   await user.click(reviewTrigger);
   const review = screen.getByRole('alertdialog', { name: 'אישור ניפוק' });
-  expect(within(review).getByText(/סרט · כמות 2 · מתוקן/)).toBeTruthy();
+  expect(within(review).getByText(/סרט · מפלצת · כמות 2 · מתוקן/)).toBeTruthy();
   expect(within(review).getByText('סך יחידות לניפוק: 3')).toBeTruthy();
   const commit = within(review).getByRole('button', { name: 'אישור ניפוק' });
   expect(commit.classList.contains('primary-button')).toBe(true);
@@ -199,19 +200,22 @@ it('corrects a staged item by canceling and restaging it, retaining other rows',
   await user.click(commit);
   expect(requests).toHaveLength(1);
   expect(requests[0]?.body.items).toEqual([
-    { itemId: 2, quantity: 1, note: '' },
-    { itemId: 1, quantity: 2, note: 'מתוקן' },
+    { itemId: 2, quantity: 1, note: '', locationId: 1 },
+    { itemId: 1, quantity: 2, note: 'מתוקן', locationId: 1 },
   ]);
   await user.click(screen.getByRole('button', { name: 'בדיקת הפעולה השמורה' }));
   expect(requests.map((request) => request.key)).toEqual([requests[0]?.key, requests[0]?.key]);
   expect(refresh).toHaveBeenCalledOnce();
 });
-
 it('restores a valid attempt and preserves correction controls after authoritative rejection', async () => {
   const key = '00000000-0000-4000-8000-000000000921';
   localStorage.setItem(
     storageKey,
-    JSON.stringify({ key, ledgerEpoch: 3, items: [{ itemId: 1, quantity: 2, note: 'saved' }] }),
+    JSON.stringify({
+      key,
+      ledgerEpoch: 3,
+      items: [{ itemId: 1, quantity: 2, note: 'saved', locationId: 1 }],
+    }),
   );
   expect(hasStoredConsumableAttempt()).toBe(true);
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -220,7 +224,7 @@ it('restores a valid attempt and preserves correction controls after authoritati
         outcome: 'rejected',
         idempotencyKey: key,
         replayed: false,
-        conflicts: [{ itemId: 1, code: 'insufficient_stock', available: 1 }],
+        conflicts: [{ itemId: 1, code: 'insufficient_stock', locationId: 1, available: 1 }],
       }),
       { status: 409 },
     ),
@@ -247,7 +251,6 @@ it('restores a valid attempt and preserves correction controls after authoritati
   await user.click(within(restage).getByRole('button', { name: 'הוספה לעסקה' }));
   expect(showToast.mock.lastCall?.[1]).toContain('סרט: זמין 1');
 });
-
 it('rejects a repeated selection that exceeds cumulative stock and keeps the item in focus', async () => {
   const { user } = mount([item(1, 'סרט', 2)]);
   const issue = () =>
@@ -263,7 +266,6 @@ it('rejects a repeated selection that exceeds cumulative stock and keeps the ite
   expect(document.querySelectorAll('.consumables-draft-item')).toHaveLength(1);
   expect(document.activeElement).toBe(within(dialog).getByRole('spinbutton', { name: 'כמות' }));
 });
-
 it('blocks an invalid restage without changing the remaining draft', async () => {
   const showToast = vi.fn();
   const { user } = mount(
@@ -288,7 +290,6 @@ it('blocks an invalid restage without changing the remaining draft', async () =>
   expect(screen.getByText('סך יחידות לניפוק').nextElementSibling?.textContent).toBe('0');
   expect(showToast).not.toHaveBeenCalled();
 });
-
 it('locks navigation and editing while the atomic submission is in flight', async () => {
   let finish!: (response: Response) => void;
   const sent = vi.spyOn(globalThis, 'fetch').mockImplementation(
@@ -319,7 +320,9 @@ it('locks navigation and editing while the atomic submission is in flight', asyn
   const navigate = vi.fn();
   expect(guard(navigate)).toBe(false);
   expect(navigate).not.toHaveBeenCalled();
-  const frozen = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as { key: string };
+  const frozen = JSON.parse(localStorage.getItem(storageKey) ?? '{}') as {
+    key: string;
+  };
   finish(
     new Response(
       JSON.stringify({
@@ -333,9 +336,11 @@ it('locks navigation and editing while the atomic submission is in flight', asyn
   );
   await waitFor(() => expect(localStorage.getItem(storageKey)).toBeNull());
 });
-
 it('preserves the original key and payload after idempotency conflict', async () => {
-  const sent: Array<{ key: string | null; body: unknown }> = [];
+  const sent: Array<{
+    key: string | null;
+    body: unknown;
+  }> = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
     sent.push({
       key: new Headers(init?.headers).get('Idempotency-Key'),
@@ -356,7 +361,6 @@ it('preserves the original key and payload after idempotency conflict', async ()
   expect(sent[1]).toEqual(sent[0]);
   expect(localStorage.getItem(storageKey)).not.toBeNull();
 });
-
 it('does not commit a canceled review or a discarded draft', async () => {
   const sent = vi.fn();
   vi.stubGlobal('fetch', sent);
@@ -383,7 +387,6 @@ it('does not commit a canceled review or a discarded draft', async () => {
     true,
   );
 });
-
 it('keeps a root quantity or review dialog above navigation until it closes', async () => {
   let guard!: LeaveGuard;
   const showToast = vi.fn();
@@ -409,7 +412,6 @@ it('keeps a root quantity or review dialog above navigation until it closes', as
   expect(screen.getByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' })).toBeTruthy();
   expect(navigate).not.toHaveBeenCalled();
 });
-
 it.each(['archived', 'removed'] as const)(
   'clears a %s item selection after stock refresh',
   async (change) => {
@@ -426,7 +428,11 @@ it.each(['archived', 'removed'] as const)(
     };
     const { rerender } = render(
       <DialogStackProvider>
-        <ConsumablesDesk {...props} items={[selected]} />
+        <ConsumablesDesk
+          locations={[{ id: 1, name: 'מפלצת', code: 'monster', archived: false, isDefault: true }]}
+          {...props}
+          items={[selected]}
+        />
       </DialogStackProvider>,
     );
     const user = userEvent.setup();
@@ -435,6 +441,7 @@ it.each(['archived', 'removed'] as const)(
     rerender(
       <DialogStackProvider>
         <ConsumablesDesk
+          locations={[{ id: 1, code: 'monster', name: 'מפלצת', archived: false, isDefault: true }]}
           {...props}
           items={change === 'archived' ? [{ ...selected, archived: true }] : []}
         />
@@ -445,7 +452,6 @@ it.each(['archived', 'removed'] as const)(
     expect(guard(vi.fn())).toBe(true);
   },
 );
-
 it('cancels browser unload while a draft is staged', async () => {
   const { user } = mount([item(1, 'סרט')]);
   await user.click(screen.getByRole('button', { name: 'ניפוק' }));
@@ -453,4 +459,61 @@ it('cancels browser unload while a draft is staged', async () => {
   const unload = new Event('beforeunload', { cancelable: true });
   expect(window.dispatchEvent(unload)).toBe(false);
   expect(unload.defaultPrevented).toBe(true);
+});
+
+it.each([
+  ['eligible', 1, '1'],
+  ['ineligible', 2, ''],
+  ['absent', null, ''],
+] as const)(
+  'uses only an eligible default for issue (%s) and requires explicit selection otherwise',
+  async (_scenario, defaultLocationId, expected) => {
+    render(
+      <DialogStackProvider>
+        <ConsumablesDesk
+          items={[item(1, 'סרט')]}
+          locations={[
+            { id: 1, name: 'A', code: 'a', archived: false, isDefault: defaultLocationId === 1 },
+            { id: 2, name: 'B', code: 'b', archived: false, isDefault: defaultLocationId === 2 },
+          ]}
+          ledgerEpoch={1}
+          refresh={vi.fn()}
+          showToast={vi.fn()}
+        />
+      </DialogStackProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'ניפוק' }));
+    expect(screen.getByLabelText('מיקום מקור')).toHaveProperty('value', expected);
+  },
+);
+it('staging all default stock removes default eligibility without selecting another stocked location', async () => {
+  const split = {
+    ...item(1, 'סרט'),
+    available: 10,
+    balances: [
+      { locationId: 1, available: 5, damaged: 0 },
+      { locationId: 2, available: 5, damaged: 0 },
+    ],
+  };
+  render(
+    <DialogStackProvider>
+      <ConsumablesDesk
+        items={[split]}
+        locations={[
+          { id: 1, name: 'A', code: 'a', archived: false, isDefault: true },
+          { id: 2, name: 'B', code: 'b', archived: false, isDefault: false },
+        ]}
+        ledgerEpoch={1}
+        refresh={vi.fn()}
+        showToast={vi.fn()}
+      />
+    </DialogStackProvider>,
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'ניפוק' }));
+  await user.clear(screen.getByLabelText('כמות'));
+  await user.type(screen.getByLabelText('כמות'), '5');
+  await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
+  await user.click(screen.getByRole('button', { name: 'ניפוק' }));
+  expect(screen.getByLabelText('מיקום מקור')).toHaveProperty('value', '');
 });

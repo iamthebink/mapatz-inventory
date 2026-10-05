@@ -16,7 +16,6 @@ import {
   parseResetWorkbook,
 } from '../../src/io/workbook.js';
 import { recordHistoricalStockRemoval } from '../helpers/historical-events.js';
-
 async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(
@@ -24,11 +23,9 @@ async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   );
   return workbook;
 }
-
 async function save(workbook: ExcelJS.Workbook): Promise<Buffer> {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
-
 function expectRecoveredState(
   actual: InventoryTransferSnapshot,
   expected: InventoryTransferSnapshot,
@@ -39,7 +36,6 @@ function expectRecoveredState(
   for (const field of Object.keys(expectedHighWater) as Array<keyof typeof expectedHighWater>)
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
-
 const emptySnapshot: InventoryTransferSnapshot = {
   radioCount: 0,
   radios: [],
@@ -56,7 +52,6 @@ const emptySnapshot: InventoryTransferSnapshot = {
     nextEventId: 1,
   },
 };
-
 describe('inventory XLSX workbook', () => {
   it('accepts genuinely empty optional recovery borrower cells', async () => {
     const snapshot: InventoryTransferSnapshot = {
@@ -74,7 +69,9 @@ describe('inventory XLSX workbook', () => {
       ],
       identityHighWater: { ...emptySnapshot.identityHighWater, nextBorrowerId: 2 },
     };
-    const workbook = await load(await exportWorkbook(snapshot));
+    const workbook = await load(
+      await exportWorkbook(snapshot, snapshot.locations.find((l) => !l.archived)?.name),
+    );
     const sheet = workbook.getWorksheet('Recovery Borrowers')!;
     for (const column of [2, 4, 5]) sheet.getRow(2).getCell(column).value = null;
     expect((await parseRecoveryWorkbook(await save(workbook))).borrowers).toEqual(
@@ -83,7 +80,6 @@ describe('inventory XLSX workbook', () => {
     sheet.getRow(2).getCell(3).value = null;
     await expect(parseRecoveryWorkbook(await save(workbook))).rejects.toThrow();
   });
-
   it('requires exactly four positive safe identity high-water fields in recovery payloads', () => {
     const valid = structuredClone(emptySnapshot);
     expect(validateRecoveryPayload(valid)).toEqual(valid);
@@ -117,103 +113,111 @@ describe('inventory XLSX workbook', () => {
         expect.objectContaining({ code: 'invalid_workbook' }),
       );
   });
-
   it('normalizes accepted offset timestamps before storing a recovery ledger and summarizing Israel days', async () => {
-    const exported = await exportWorkbook({
-      radioCount: 0,
-      radios: [],
-      locations: [],
-      items: [
-        {
-          id: 100,
-          name: 'Boundary chairs',
-          kind: 'non_consumable',
-          location: null,
-          aliases: [],
-          lotSize: null,
-          archived: false,
-          createdAt: '2026-09-20T17:00:00+03:00',
-          startingStock: 0,
-          baselineThroughEventId: 0,
-          available: 0,
-          borrowed: 3,
-          damaged: 0,
-          lost: 0,
-          revision: 3,
-          resetTotal: 0,
+    const exported = await exportWorkbook(
+      {
+        radioCount: 0,
+        radios: [],
+        locations: [{ name: 'Main', archived: false, isDefault: false }],
+        items: [
+          {
+            id: 100,
+            name: 'Boundary chairs',
+            kind: 'non_consumable',
+            location: 'Main',
+            aliases: [],
+            lotSize: null,
+            archived: false,
+            createdAt: '2026-09-20T17:00:00+03:00',
+            startingStock: 0,
+            baselineThroughEventId: 0,
+            available: 0,
+            borrowed: 3,
+            damaged: 0,
+            lost: 0,
+            revision: 3,
+            resetTotal: 0,
+          },
+        ],
+        borrowers: [
+          {
+            id: 1,
+            playaName: 'boundary',
+            fullName: 'Boundary borrower',
+            phoneNumber: '',
+            campDepartment: '',
+            archived: false,
+            createdAt: '2026-09-20T17:00:00+03:00',
+          },
+        ],
+        events: [
+          {
+            id: 1,
+            kind: 'stock_added',
+            itemId: 100,
+            borrowerId: null,
+            quantity: 3,
+            relatedEventId: null,
+            note: '',
+            createdAt: '2026-09-20T18:00:00+03:00',
+            locationName: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+            locationCode: 'monster',
+          },
+          {
+            id: 2,
+            kind: 'checked_out',
+            itemId: 100,
+            borrowerId: 1,
+            quantity: 1,
+            relatedEventId: null,
+            note: '',
+            createdAt: '2026-09-20T23:59:59.999+03:00',
+            locationName: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+            locationCode: 'monster',
+          },
+          {
+            id: 3,
+            kind: 'checked_out',
+            itemId: 100,
+            borrowerId: 1,
+            quantity: 2,
+            relatedEventId: null,
+            note: '',
+            createdAt: '2026-09-21T00:00:00+03:00',
+            locationName: '\u05DE\u05E4\u05DC\u05E6\u05EA',
+            locationCode: 'monster',
+          },
+        ],
+        loans: [
+          {
+            checkoutId: 2,
+            itemId: 100,
+            borrowerId: 1,
+            quantity: 1,
+            createdAt: '2026-09-20T23:59:59.999+03:00',
+            outstanding: 1,
+            lost: 0,
+          },
+          {
+            checkoutId: 3,
+            itemId: 100,
+            borrowerId: 1,
+            quantity: 2,
+            createdAt: '2026-09-21T00:00:00+03:00',
+            outstanding: 2,
+            lost: 0,
+          },
+        ],
+        stateRevision: 3,
+        identityHighWater: {
+          nextItemId: 2,
+          nextBorrowerId: 2,
+          nextLocationId: 1,
+          nextEventId: 4,
         },
-      ],
-      borrowers: [
-        {
-          id: 1,
-          playaName: 'boundary',
-          fullName: 'Boundary borrower',
-          phoneNumber: '',
-          campDepartment: '',
-          archived: false,
-          createdAt: '2026-09-20T17:00:00+03:00',
-        },
-      ],
-      events: [
-        {
-          id: 1,
-          kind: 'stock_added',
-          itemId: 100,
-          borrowerId: null,
-          quantity: 3,
-          relatedEventId: null,
-          note: '',
-          createdAt: '2026-09-20T18:00:00+03:00',
-        },
-        {
-          id: 2,
-          kind: 'checked_out',
-          itemId: 100,
-          borrowerId: 1,
-          quantity: 1,
-          relatedEventId: null,
-          note: '',
-          createdAt: '2026-09-20T23:59:59.999+03:00',
-        },
-        {
-          id: 3,
-          kind: 'checked_out',
-          itemId: 100,
-          borrowerId: 1,
-          quantity: 2,
-          relatedEventId: null,
-          note: '',
-          createdAt: '2026-09-21T00:00:00+03:00',
-        },
-      ],
-      loans: [
-        {
-          checkoutId: 2,
-          itemId: 100,
-          borrowerId: 1,
-          quantity: 1,
-          createdAt: '2026-09-20T23:59:59.999+03:00',
-          outstanding: 1,
-          lost: 0,
-        },
-        {
-          checkoutId: 3,
-          itemId: 100,
-          borrowerId: 1,
-          quantity: 2,
-          createdAt: '2026-09-21T00:00:00+03:00',
-          outstanding: 2,
-          lost: 0,
-        },
-      ],
-      stateRevision: 3,
-      identityHighWater: {
-        nextItemId: 2,
-        nextBorrowerId: 2,
-        nextLocationId: 1,
-        nextEventId: 4,
       },
-    });
+      'Main',
+    );
     const recovery = await parseRecoveryWorkbook(exported);
     const db = openDatabase(':memory:');
     try {
@@ -246,12 +250,11 @@ describe('inventory XLSX workbook', () => {
       db.close();
     }
   });
-
   it('round-trips camp equipment through reset and recovery workbooks', async () => {
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
     transfers.replaceWithReset({
-      locations: [{ name: 'Main', archived: false }],
+      locations: [{ name: 'Main', archived: false, isDefault: false }],
       items: [
         {
           name: 'Permanent table',
@@ -267,10 +270,12 @@ describe('inventory XLSX workbook', () => {
     const item = new InventoryService(db).listItems('Permanent')[0]!;
     recordHistoricalStockRemoval(db, item.id, 1, 'historical count correction');
     const snapshot = transfers.snapshot();
-    const exported = await exportWorkbook(snapshot);
-
+    const exported = await exportWorkbook(
+      snapshot,
+      snapshot.locations.find((l) => !l.archived)?.name,
+    );
     await expect(parseResetWorkbook(exported)).resolves.toEqual({
-      locations: [{ name: 'Main', archived: false }],
+      locations: [{ name: 'Main', archived: false, isDefault: false }],
       items: [
         {
           name: 'Permanent table',
@@ -287,7 +292,6 @@ describe('inventory XLSX workbook', () => {
     const destination = openDatabase(':memory:');
     new InventoryTransferService(destination).replaceWithRecovery(recovery);
     expectRecoveredState(new InventoryTransferService(destination).snapshot(), snapshot);
-
     const impossibleIssue = await load(exported);
     impossibleIssue
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!
@@ -313,14 +317,13 @@ describe('inventory XLSX workbook', () => {
     db.close();
     destination.close();
   });
-
   it('exports the fixed reset/recovery structure and state-complete mixed inventory without secrets', async () => {
     const db = openDatabase(':memory:');
     const transfers = new InventoryTransferService(db);
     transfers.replaceWithReset({
       locations: [
-        { name: 'מחסן ראשי', archived: false },
-        { name: 'מחסן ישן', archived: true },
+        { name: 'מחסן ראשי', archived: false, isDefault: false },
+        { name: 'מחסן ישן', archived: true, isDefault: false },
       ],
       items: [
         {
@@ -335,7 +338,7 @@ describe('inventory XLSX workbook', () => {
         {
           name: 'אוהל',
           kind: 'non_consumable',
-          location: null,
+          location: 'מחסן ראשי',
           aliases: ['Tent'],
           lotSize: null,
           archived: false,
@@ -344,7 +347,7 @@ describe('inventory XLSX workbook', () => {
         {
           name: 'ישן',
           kind: 'consumable',
-          location: null,
+          location: 'מחסן ראשי',
           aliases: [],
           lotSize: null,
           archived: true,
@@ -355,8 +358,24 @@ describe('inventory XLSX workbook', () => {
     const inventory = new InventoryService(db);
     const water = inventory.listItems('מים', true)[0]!;
     const tent = inventory.listItems('אוהל', true)[0]!;
-    inventory.addStock(water.id, 20, 'receipt');
-    inventory.issue(water.id, 30, 'issued');
+    inventory.addStock(
+      water.id,
+      20,
+      'receipt',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
+    inventory.issue(
+      water.id,
+      30,
+      'issued',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     recordHistoricalStockRemoval(db, water.id, 5, 'historical correction');
     const borrower = inventory.createBorrower({
       playaName: 'camp-a',
@@ -364,9 +383,27 @@ describe('inventory XLSX workbook', () => {
       phoneNumber: '050',
       campDepartment: 'מחנה א',
     });
-    const checkout = inventory.checkout(tent.id, borrower.id, 5, 'loan');
+    const checkout = inventory.checkout(
+      tent.id,
+      borrower.id,
+      5,
+      'loan',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     inventory.markLost(checkout, 2, true, 'lost');
-    inventory.returnCheckout(checkout, 0, 1, 'damaged');
+    inventory.returnCheckout(
+      checkout,
+      0,
+      1,
+      'damaged',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     foundReturned(inventory, checkout, 1);
     expect(
       inventory.commitBorrowerOperations(borrower.id, '00000000-0000-4000-8000-000000000027', {
@@ -375,7 +412,15 @@ describe('inventory XLSX workbook', () => {
         items: [
           {
             itemId: tent.id,
-            lostCredit: [{ quantity: 1, condition: 'damaged', note: 'found broken' }],
+            lostCredit: [
+              {
+                quantity: 1,
+                condition: 'damaged',
+                note: 'found broken',
+                locationId: inventory.listItems('', true).find((item) => item.id === tent.id)!
+                  .balances[0]!.locationId,
+              },
+            ],
           },
         ],
       }),
@@ -394,7 +439,6 @@ describe('inventory XLSX workbook', () => {
       borrower.id,
       '{}',
     );
-
     const snapshot = transfers.snapshot();
     expect(snapshot).not.toHaveProperty('ledgerEpoch');
     expect(snapshot).not.toHaveProperty('receipts');
@@ -415,8 +459,9 @@ describe('inventory XLSX workbook', () => {
       'found_returned',
       'found_returned_damaged',
     ]);
-
-    const workbook = await load(await exportWorkbook(snapshot));
+    const workbook = await load(
+      await exportWorkbook(snapshot, snapshot.locations.find((l) => !l.archived)?.name),
+    );
     expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(
       Object.values(WORKBOOK_CONTRACT.sheets).map((sheet) => sheet.name),
     );
@@ -453,21 +498,19 @@ describe('inventory XLSX workbook', () => {
     expect(serialized).not.toContain('never-export-this-receipt');
     db.close();
   });
-
   it('parses identity-free reset sheets and applies blank defaults', async () => {
     const workbook = await load(await exportWorkbook(emptySnapshot));
     const locations = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetLocations.name)!;
     locations.addRow(['North', '']);
     const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
     items.addRow(['Explicit', 'consumable', 'North', '', '', '', 0]);
-    items.addRow(['Generated', 'non_consumable', '', '', '', '', 3]);
-    items.addRow(['Low', 'consumable', '', '["alias"]', 5, true, 2]);
+    items.addRow(['Generated', 'non_consumable', 'North', '', '', '', 3]);
+    items.addRow(['Low', 'consumable', 'North', '["alias"]', 5, true, 0]);
     workbook.removeWorksheet(
       workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!.id,
     );
-
     await expect(parseResetWorkbook(await save(workbook))).resolves.toEqual({
-      locations: [{ name: 'North', archived: false }],
+      locations: [{ name: 'North', archived: false, isDefault: false }],
       items: [
         {
           name: 'Explicit',
@@ -481,7 +524,7 @@ describe('inventory XLSX workbook', () => {
         {
           name: 'Generated',
           kind: 'non_consumable',
-          location: null,
+          location: 'North',
           aliases: [],
           lotSize: null,
           archived: false,
@@ -490,16 +533,15 @@ describe('inventory XLSX workbook', () => {
         {
           name: 'Low',
           kind: 'consumable',
-          location: null,
+          location: 'North',
           aliases: ['alias'],
           lotSize: 5,
           archived: true,
-          total: 2,
+          total: 0,
         },
       ],
     });
   });
-
   it.each([
     [
       'duplicate names',
@@ -520,12 +562,11 @@ describe('inventory XLSX workbook', () => {
       code: 'invalid_workbook',
     });
   });
-
   it('rejects reset items assigned to an archived location', async () => {
     const workbook = await load(
       await exportWorkbook({
         ...emptySnapshot,
-        locations: [{ name: 'Old storage', archived: true }],
+        locations: [{ name: 'Old storage', archived: true, isDefault: false }],
       }),
     );
     workbook
@@ -536,36 +577,38 @@ describe('inventory XLSX workbook', () => {
       message: expect.stringContaining('archived location'),
     });
   });
-
   it('rejects case-insensitive duplicate item names in recovery workbooks', async () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
-    inventory.createItem({ name: 'Récovery item', kind: 'consumable' });
+    inventory.createItem({
+      name: 'Récovery item',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
     const workbook = await load(await exportWorkbook(new InventoryTransferService(db).snapshot()));
     const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!;
     const duplicate = [...(items.getRow(2).values as unknown[])];
     duplicate[1] = 101;
     duplicate[2] = ' RE\u0301COVERY ITEM ';
     items.addRow(duplicate.slice(1));
-
     await expect(parseRecoveryWorkbook(await save(workbook))).rejects.toMatchObject({
       code: 'invalid_workbook',
       message: expect.stringContaining('duplicate Name'),
     });
     db.close();
   });
-
   it('rejects missing sheets and altered column contracts with legible errors', async () => {
     const missing = await load(await exportWorkbook(emptySnapshot));
     missing.removeWorksheet(missing.getWorksheet(WORKBOOK_CONTRACT.sheets.resetLocations.name)!.id);
     await expect(parseResetWorkbook(await save(missing))).rejects.toThrow(/Missing required sheet/);
-
     const altered = await load(await exportWorkbook(emptySnapshot));
     altered.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!.getRow(1).getCell(9).value =
       'Unexpected';
     await expect(parseResetWorkbook(await save(altered))).rejects.toThrow(/exact exported columns/);
   });
-
   it('accepts trailing styled blank columns added by Apple Numbers', async () => {
     const workbook = await load(await exportWorkbook(emptySnapshot));
     const locations = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetLocations.name)!;
@@ -577,20 +620,33 @@ describe('inventory XLSX workbook', () => {
     };
     const items = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!;
     items.addRow(['Edited in Numbers', 'consumable', 'North', '', '', '', 17]);
-
     const numbersRoundTrip = await save(await load(await save(workbook)));
     await expect(parseResetWorkbook(numbersRoundTrip)).resolves.toMatchObject({
-      locations: [{ name: 'North', archived: false }],
+      locations: [{ name: 'North', archived: false, isDefault: false }],
       items: [{ name: 'Edited in Numbers', total: 17 }],
     });
   });
-
   it('atomically replaces only inventory-domain data and rolls back a commit failure', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);
     const transfers = new InventoryTransferService(db);
-    const old = inventory.createItem({ name: 'Old', kind: 'consumable' });
-    inventory.addStock(old.id, 9);
+    const old = inventory.createItem({
+      name: 'Old',
+      kind: 'consumable',
+      locationId: Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    });
+    inventory.addStock(
+      old.id,
+      9,
+      '',
+      Number(
+        (inventory.listLocations().find((l) => l.code === 'monster') ??
+          inventory.listLocations()[0])!.id,
+      ),
+    );
     const credentialsBefore = db
       .prepare('SELECT role,salt,password_hash,updated_at FROM credentials ORDER BY role')
       .all();
@@ -600,7 +656,7 @@ describe('inventory XLSX workbook', () => {
       ) VALUES (?,?,?,?,?,?,?,?)`,
     ).run('obsolete-reset', 'borrower_operation', 1, 1, 'hash', 'committed', 1, '{}');
     const payload = {
-      locations: [{ name: 'Named Location', archived: false }],
+      locations: [{ name: 'Named Location', archived: false, isDefault: false }],
       items: [
         {
           name: 'New',
@@ -644,7 +700,6 @@ describe('inventory XLSX workbook', () => {
     expect(db.prepare('SELECT COUNT(*) count FROM idempotency_receipts').get()).toEqual({
       count: 0,
     });
-
     db.prepare(
       `INSERT INTO idempotency_receipts(
         key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
