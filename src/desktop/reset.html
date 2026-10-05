@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>איפוס מערכת</title>
+    <style>
+      body {
+        font: 18px sans-serif;
+        max-width: 520px;
+        margin: 24px auto;
+        padding: 24px;
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 12px;
+        margin: 12px 0;
+        width: 100%;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>איפוס מערכת</h1>
+    <p>כל נתוני היישום, הסיסמאות וההגדרות, הגיבויים הפנימיים והפעולות הממתינות יימחקו.</p>
+    <p>
+      ללא קובץ Excel קיים של מלאי או שחזור מלא, הנתונים שנמחקו יאבדו לצמיתות. קבצים בתיקיית הגיבויים
+      הפנימיים יימחקו. קבצים שיוצאו מחוץ לתיקייה זו יישמרו. לאחר האיפוס היישום יופעל מחדש להגדרת
+      סיסמה ראשונית.
+    </p>
+    <form>
+      <label for="phrase">להמשך הקלידו בדיוק: איפוס מערכת</label>
+      <input id="phrase" required autocomplete="off" autofocus />
+      <button id="confirm" disabled>מחיקה ואיפוס מערכת</button>
+    </form>
+    <button id="cancel" type="button">ביטול</button>
+    <p role="status" aria-live="polite"></p>
+    <script src="reset.js"></script>
+  </body>
+</html>

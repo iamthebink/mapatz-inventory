@@ -284,9 +284,19 @@ export function apiRouter(
   sessions: SessionStore,
   desktopRecovery = false,
   radios?: RadioService,
+  desktopReset?: () => Promise<'confirmed' | 'cancelled'>,
 ): Router {
   const api = Router();
   const commandJson = express.json({ limit: '32kb' });
+
+  if (desktopReset)
+    api.post(
+      '/system/reset',
+      requireRole('admin'),
+      route(async (_req, res) => {
+        res.json({ outcome: await desktopReset() });
+      }),
+    );
 
   if (radios) {
     const generation = z.number().int().positive();

@@ -12,12 +12,25 @@ if (!parent) throw new Error('Backend requires Electron utility process');
 let db: ReturnType<typeof openDatabase> | undefined;
 let server: Server | undefined;
 let shuttingDown = false;
+let resetRequest:
+  | { resolve: (outcome: 'confirmed' | 'cancelled') => void; reject: (error: Error) => void }
+  | undefined;
 const sockets = new Set<Socket>();
 const activeRequests = new Map<Socket, number>();
 let settings: { directory: string; port: number; token: string };
 function listen() {
   if (!db) throw new Error('Database not open');
-  const app = createApp({ database: db, accessToken: settings.token, desktopRecovery: true });
+  const app = createApp({
+    database: db,
+    accessToken: settings.token,
+    desktopRecovery: true,
+    desktopReset: () =>
+      new Promise((resolve, reject) => {
+        if (resetRequest || shuttingDown) return reject(new Error('Reset already pending'));
+        resetRequest = { resolve, reject };
+        parent!.postMessage({ type: 'reset-request' });
+      }),
+  });
   server = createServer((request, response) => {
     if (shuttingDown) {
       response.writeHead(503, { Connection: 'close' });
@@ -54,7 +67,11 @@ function listen() {
 }
 parent.on('message', ({ data }) => {
   try {
-    if (data.type === 'start') {
+    if (data.type === 'reset-result') {
+      if (data.error) resetRequest?.reject(new Error(String(data.error)));
+      else resetRequest?.resolve(data.outcome);
+      resetRequest = undefined;
+    } else if (data.type === 'start') {
       settings = data;
       const filename = join(settings.directory, 'inventory.sqlite');
       const profile = JSON.parse(

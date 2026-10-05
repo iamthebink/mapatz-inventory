@@ -6,12 +6,14 @@ import {
   ipcMain,
   utilityProcess,
   powerMonitor,
+  session as electronSession,
   type UtilityProcess,
 } from 'electron';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { performSystemReset, removeOwnedSystemData, RESET_PHRASE } from './system-reset.js';
 import { markProfileInitialized, profilePort } from './profile.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,8 +27,13 @@ let ready = false;
 let stopping = false;
 let backendExited = false;
 let failureOpen = false;
+let resetActive = false;
+let resetFailed = false;
+let deferredFailure: string | undefined;
+let resetWindow: BrowserWindow | undefined;
 let origin = '';
 const token = randomBytes(32).toString('hex');
+const resetURL = new URL('./reset.html', import.meta.url).href;
 const setupURL = new URL('./setup.html', import.meta.url).href;
 function trusted(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent, setup = false) {
   return (
@@ -43,7 +50,159 @@ function log(message: string) {
     console.error('Desktop diagnostic log is unavailable.');
   }
 }
+function confirmReset(): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const confirmation = new BrowserWindow({
+      width: 620,
+      height: 650,
+      show: false,
+      parent: window,
+      modal: !!window,
+      webPreferences: {
+        preload: join(here, 'preload.cjs'),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        partition: 'reset-confirmation',
+      },
+    });
+    resetWindow = confirmation;
+    confirmation.removeMenu();
+    confirmation.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    confirmation.webContents.on('will-navigate', (event) => event.preventDefault());
+    const trustedConfirmation = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) =>
+      event.sender === confirmation.webContents &&
+      event.senderFrame === confirmation.webContents.mainFrame &&
+      event.senderFrame?.url === resetURL;
+    let decided = false;
+    const finish = (confirmed: boolean) => {
+      if (decided) return;
+      decided = true;
+      resolve(confirmed);
+      confirmation.destroy();
+    };
+    confirmation.webContents.on('render-process-gone', (_event, details) => {
+      log(`Reset confirmation renderer stopped (${details.reason}, ${details.exitCode})`);
+      finish(false);
+    });
+    ipcMain.handle('desktop:reset-confirm', (event, phrase: unknown) => {
+      if (!trustedConfirmation(event) || phrase !== RESET_PHRASE)
+        throw new Error('Invalid reset confirmation');
+      finish(true);
+    });
+    const cancel = (event: Electron.IpcMainEvent) => {
+      if (trustedConfirmation(event)) finish(false);
+    };
+    ipcMain.on('desktop:reset-cancel', cancel);
+    confirmation.once('closed', () => {
+      resetWindow = undefined;
+      ipcMain.removeHandler('desktop:reset-confirm');
+      ipcMain.removeListener('desktop:reset-cancel', cancel);
+      if (!decided) resolve(false);
+    });
+    void confirmation
+      .loadURL(resetURL)
+      .then(() => {
+        if (!confirmation.isDestroyed()) confirmation.show();
+      })
+      .catch((error: unknown) => {
+        decided = true;
+        confirmation.destroy();
+        reject(error);
+      });
+  });
+}
+async function stopBackendForReset(): Promise<void> {
+  if (!backend || backendExited) return;
+  const owner = backend;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      owner.removeListener('exit', exited);
+      reject(new Error('Backend did not stop; no files were deleted. Retry or exit.'));
+    }, 30_000);
+    const exited = (code: number) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`Backend stopped with error (${code}); retry reset.`));
+      else resolve();
+    };
+    owner.once('exit', exited);
+    owner.postMessage({ type: 'stop' });
+  });
+}
+async function executeReset(): Promise<void> {
+  ready = false;
+  stopping = true;
+  try {
+    log('System reset: stopping backend');
+    await performSystemReset({
+      stopBackend: stopBackendForReset,
+      clearBrowser: async () => {
+        // Destroy the application renderer before clearing durable commands so it cannot rewrite them.
+        approvedClose = true;
+        window?.destroy();
+        window = undefined;
+        await electronSession.defaultSession.clearStorageData();
+        await electronSession.defaultSession.clearCache();
+        await electronSession.defaultSession.flushStorageData();
+      },
+      removeData: () => removeOwnedSystemData(directory),
+      restart: () => {
+        log('System reset complete; restarting for password setup');
+        app.relaunch();
+        resetActive = false;
+        app.quit();
+      },
+    });
+  } catch (error) {
+    log(`System reset incomplete: ${String(error)}`);
+    resetActive = false;
+    resetFailed = true;
+    stopping = false;
+    await failure(`איפוס המערכת לא הושלם. ניתן לנסות שוב או לצאת. ${String(error)}`);
+  }
+}
+async function requestReset(fromBackend = false): Promise<void> {
+  if (resetActive || stopping) {
+    if (fromBackend) backend?.postMessage({ type: 'reset-result', error: 'Reset already pending' });
+    return;
+  }
+  resetActive = true;
+  try {
+    const confirmed = await confirmReset();
+    if (fromBackend && !backendExited)
+      backend?.postMessage({
+        type: 'reset-result',
+        outcome: confirmed ? 'confirmed' : 'cancelled',
+      });
+    if (confirmed) {
+      deferredFailure = undefined;
+      // Let the accepted HTTP response finish before draining the owner.
+      setImmediate(() => void executeReset());
+    } else {
+      resetActive = false;
+      const pendingFailure = deferredFailure;
+      deferredFailure = undefined;
+      if (resetFailed)
+        await failure(
+          'איפוס המערכת בוטל לאחר איפוס שלא הושלם. ייתכן שחלק מהנתונים כבר נמחקו. ניתן לנסות שוב או לצאת.',
+        );
+      else if (pendingFailure) await failure(pendingFailure);
+      else if (!fromBackend) await failure('ההפעלה נכשלה. איפוס המערכת בוטל; הנתונים נשמרו.');
+    }
+  } catch (error) {
+    resetActive = false;
+    if (fromBackend) backend?.postMessage({ type: 'reset-result', error: String(error) });
+    else await failure(String(error));
+  }
+}
 async function failure(message: string) {
+  if (resetActive) {
+    if (!stopping) {
+      deferredFailure = message;
+      log(message);
+    }
+    return;
+  }
   if (failureOpen || stopping) return;
   failureOpen = true;
   ready = false;
@@ -52,21 +211,28 @@ async function failure(message: string) {
     type: 'error',
     title: 'Mapatz — שגיאת הפעלה',
     message,
-    detail: `הנתונים נשמרו. פרטי אבחון: ${join(directory, 'desktop.log')}`,
-    buttons: ['נסה שוב', 'יציאה'],
+    detail: `פרטי אבחון: ${join(directory, 'desktop.log')}`,
+    buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'],
     defaultId: 0,
     cancelId: 1,
   };
   log(JSON.stringify({ event: 'failure-dialog', options }));
   const result = await dialog.showMessageBox(options);
-  if (result.response === 0) {
-    app.relaunch();
-    approvedClose = true;
-    app.quit();
-  } else {
-    approvedClose = true;
-    app.quit();
+  failureOpen = false;
+  if (result.response === 2 || (result.response === 0 && resetFailed)) {
+    await requestReset();
+    return;
   }
+  if (result.response === 0) app.relaunch();
+  approvedClose = true;
+  if (result.response === 1 && resetFailed && backend && !backendExited) {
+    // Exit remains actionable when graceful stop failed; no deletion follows forced termination.
+    stopping = true;
+    log('Exiting after incomplete reset; terminating backend without deleting data');
+    if (!backend.kill()) app.exit(1);
+    return;
+  }
+  app.quit();
 }
 async function loadWindow(url: string) {
   try {
@@ -111,6 +277,11 @@ else {
     window?.focus();
   });
   app.on('before-quit', (event) => {
+    if (resetActive) {
+      event.preventDefault();
+      resetWindow?.focus();
+      return;
+    }
     log(
       `Quit requested: approved=${approvedClose}, stopping=${stopping}, backendExited=${backendExited}`,
     );
@@ -126,7 +297,9 @@ else {
       backend.postMessage({ type: 'stop' });
     }
   });
-  app.on('window-all-closed', () => app.quit());
+  app.on('window-all-closed', () => {
+    if (!resetActive) app.quit();
+  });
   void app.whenReady().then(async () => {
     try {
       const port = await profilePort(directory);
@@ -180,6 +353,11 @@ else {
         if (!url.startsWith(`${origin}/`) && url !== setupURL) event.preventDefault();
       });
       window.on('close', (event) => {
+        if (resetActive) {
+          event.preventDefault();
+          resetWindow?.focus();
+          return;
+        }
         if (approvedClose) return;
         if (!ready) {
           approvedClose = true;
@@ -191,6 +369,7 @@ else {
       window.on('closed', () => {
         log('Window closed; sending backend stop');
         window = undefined;
+        if (resetActive) return;
         stopping = true;
         backend?.postMessage({ type: 'stop' });
       });
@@ -237,12 +416,21 @@ else {
         30_000,
       );
       backend.on('message', (message: { type: string; message?: string }) => {
+        if (message.type === 'reset-request') {
+          void requestReset(true);
+          return;
+        }
         if (message.type === 'diagnostic') {
           log(message.message ?? 'Backend diagnostic');
           return;
         }
         clearTimeout(startupTimer);
         startupTimer = undefined;
+        if (message.type === 'failure') {
+          void failure(message.message ?? 'Backend failed');
+          return;
+        }
+        if (resetActive || stopping) return;
         try {
           if (message.type === 'setup') void loadWindow(setupURL);
           if (message.type === 'ready') {
@@ -251,7 +439,6 @@ else {
             ready = true;
             void loadWindow(origin);
           }
-          if (message.type === 'failure') void failure(message.message ?? 'Backend failed');
         } catch (error) {
           void failure(error instanceof Error ? error.message : 'Startup failed');
         }
@@ -259,6 +446,11 @@ else {
       backend.on('exit', (code) => {
         log(`Backend exited: ${code}`);
         backendExited = true;
+        if (resetActive) {
+          if (!stopping)
+            void failure(`Backend stopped (${code}). Restart to reconcile saved commands.`);
+          return;
+        }
         if (stopping) {
           app.quit();
           return;

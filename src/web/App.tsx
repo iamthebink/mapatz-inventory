@@ -180,6 +180,8 @@ export function App() {
       readFrozenManagementAttempt(safeWindowStorage(), BORROWER_DELETION_STORAGE_KEY),
     );
   const [adminPasswordError, setAdminPasswordError] = useState('');
+  const [systemResetPending, setSystemResetPending] = useState(false);
+  const systemResetPendingRef = useRef(false);
   const [sessionReconciling, setSessionReconciling] = useState(false);
   const [announcement, setAnnouncement] = useState({ id: 0, text: '' });
   const pendingRef = useRef(false);
@@ -1224,6 +1226,27 @@ export function App() {
                     sessionReconciling={sessionReconciling}
                     showToast={showToast}
                   />
+                  {desktop && (
+                    <button
+                      className="danger-button"
+                      disabled={!adminActionsEnabled || pending || systemResetPending}
+                      onClick={async () => {
+                        if (!adminActionsEnabled || systemResetPendingRef.current) return;
+                        systemResetPendingRef.current = true;
+                        setSystemResetPending(true);
+                        try {
+                          await api('/system/reset', { method: 'POST' });
+                        } catch (error) {
+                          showError('איפוס מערכת', error);
+                        } finally {
+                          systemResetPendingRef.current = false;
+                          setSystemResetPending(false);
+                        }
+                      }}
+                    >
+                      {systemResetPending ? 'ממתין לאישור…' : 'איפוס מערכת'}
+                    </button>
+                  )}
                   {!isAdmin && <PermissionNote />}
                 </div>
               )}

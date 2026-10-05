@@ -17,6 +17,7 @@ export interface AppOptions {
   serveWeb?: boolean;
   accessToken?: string;
   desktopRecovery?: boolean;
+  desktopReset?: () => Promise<'confirmed' | 'cancelled'>;
   developmentRecovery?: boolean;
 }
 
@@ -68,7 +69,14 @@ export function createApp(options: AppOptions): Express {
       res.locals.session = session;
       next();
     },
-    apiRouter(service, transfers, sessions, recoveryEnabled, radios),
+    apiRouter(
+      service,
+      transfers,
+      sessions,
+      recoveryEnabled,
+      radios,
+      options.accessToken ? options.desktopReset : undefined,
+    ),
     (_req, res) => {
       res.status(404).json({ error: 'not_found', message: 'נתיב API לא נמצא' });
     },

@@ -467,7 +467,7 @@ test('port collision and newer schema fail visibly without replacing data', asyn
       .find((line) => line.includes('"event":"failure-dialog"'))!;
     expect(JSON.parse(dialogLine.slice(dialogLine.indexOf('{'))).options).toMatchObject({
       type: 'error',
-      buttons: ['נסה שוב', 'יציאה'],
+      buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'],
       defaultId: 0,
       cancelId: 1,
     });
@@ -609,7 +609,12 @@ for (const response of [0, 1])
             () => (globalThis as typeof globalThis & { failureOptions?: unknown }).failureOptions,
           ),
         )
-        .toMatchObject({ type: 'error', buttons: ['נסה שוב', 'יציאה'], defaultId: 0, cancelId: 1 });
+        .toMatchObject({
+          type: 'error',
+          buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'],
+          defaultId: 0,
+          cancelId: 1,
+        });
       const options = await application.evaluate(
         () =>
           (globalThis as typeof globalThis & { failureOptions: { detail: string } }).failureOptions,
@@ -841,7 +846,7 @@ for (const fault of ['profile-write', 'renderer-load'])
             () => (globalThis as typeof globalThis & { failureOptions?: unknown }).failureOptions,
           ),
         )
-        .toMatchObject({ buttons: ['נסה שוב', 'יציאה'], cancelId: 1 });
+        .toMatchObject({ buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'], cancelId: 1 });
       const child = application.process();
       await saveDiagnostics(application);
       await application
@@ -956,5 +961,723 @@ test('normal quit lets an accepted command finish before closing SQLite', async 
     socket.destroy();
     await closing;
     await cleanupProfile(profile);
+  }
+});
+
+async function interceptResetRestart(
+  application: Awaited<ReturnType<typeof launchElectron>>,
+  profile: string,
+) {
+  await application.evaluate(({ app }, profile) => {
+    app.relaunch = () =>
+      process
+        .getBuiltinModule('fs')
+        .writeFileSync(process.getBuiltinModule('path').join(profile, 'reset-relaunch'), 'yes');
+  }, profile);
+}
+
+async function initiateReset(
+  page: Awaited<ReturnType<Awaited<ReturnType<typeof launchElectron>>['firstWindow']>>,
+) {
+  await page.evaluate(() => {
+    void fetch('/api/system/reset', { method: 'POST' }).then(async (response) => {
+      (window as typeof window & { resetResponse?: unknown }).resetResponse = {
+        status: response.status,
+        body: await response.json(),
+      };
+    });
+  });
+}
+
+test('factory reset cancels unchanged, rejects renderer IPC, drains and clears pending state, then supports workbook recovery', async () => {
+  test.setTimeout(90_000);
+  const context = await freshApp();
+  let application = context.application;
+  try {
+    const workbook = await context.page.evaluate(async () => {
+      await fetch('/api/session/role', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
+      });
+      const item = await (
+        await fetch('/api/items', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'ציוד לשחזור', kind: 'non_consumable' }),
+        })
+      ).json();
+      await fetch('/api/stock/add', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ itemId: item.id, quantity: 7 }),
+      });
+      localStorage.setItem('mapatz:frozen-attempt:v1:broken', '{}');
+      return Array.from(new Uint8Array(await (await fetch('/api/workbook')).arrayBuffer()));
+    });
+    await writeFile(join(context.profile, 'preserved.xlsx'), Buffer.from(workbook));
+    const { mkdir, readFile, stat } = await import('node:fs/promises');
+    await mkdir(join(context.profile, 'backups'), { recursive: true });
+    await writeFile(join(context.profile, 'backups', 'internal.sqlite'), 'old');
+    const originalProfile = await readFile(join(context.profile, 'profile.json'), 'utf8');
+    await initiateReset(context.page);
+    let confirmation = await application.waitForEvent('window');
+    await confirmation.waitForURL('**/reset.html');
+    await expect(confirmation.locator('body')).toContainText(
+      'קבצים בתיקיית הגיבויים הפנימיים יימחקו',
+    );
+    await expect(confirmation.locator('body')).toContainText('קבצים שיוצאו מחוץ לתיקייה זו יישמרו');
+    // Application renderer has the bridge but cannot authorize local confirmation IPC.
+    expect(
+      await context.page.evaluate(async () => {
+        try {
+          await (
+            window.mapatzDesktop as unknown as { confirmReset(phrase: string): Promise<void> }
+          ).confirmReset('איפוס מערכת');
+          return 'accepted';
+        } catch {
+          return 'rejected';
+        }
+      }),
+    ).toBe('rejected');
+    await confirmation.locator('#phrase').fill('איפוס מערכת ');
+    await expect(confirmation.locator('#confirm')).toBeDisabled();
+    await confirmation.getByRole('button', { name: 'ביטול', exact: true }).click();
+    await expect
+      .poll(() =>
+        context.page.evaluate(
+          () => (window as typeof window & { resetResponse?: unknown }).resetResponse,
+        ),
+      )
+      .toEqual({ status: 200, body: { outcome: 'cancelled' } });
+    expect(await readFile(join(context.profile, 'profile.json'), 'utf8')).toBe(originalProfile);
+    expect(
+      await context.page.evaluate(() => localStorage.getItem('mapatz:frozen-attempt:v1:broken')),
+    ).toBe('{}');
+    await interceptResetRestart(application, context.profile);
+    const child = application.process();
+    await initiateReset(context.page);
+    confirmation = await application.waitForEvent('window');
+    await confirmation.waitForURL('**/reset.html');
+    await confirmation.locator('#phrase').fill('איפוס מערכת');
+    await saveDiagnostics(application);
+    await confirmation.locator('#confirm').click();
+    await expect.poll(() => child.exitCode).toBe(0);
+    const log = await readFile(join(context.profile, 'desktop.log'), 'utf8');
+    expect(log.indexOf('Backend database closed')).toBeLessThan(
+      log.indexOf('System reset complete'),
+    );
+    expect(await readFile(join(context.profile, 'reset-relaunch'), 'utf8')).toBe('yes');
+    await expect(stat(join(context.profile, 'inventory.sqlite'))).rejects.toThrow();
+    await expect(stat(join(context.profile, 'backups'))).rejects.toThrow();
+    expect(await readFile(join(context.profile, 'preserved.xlsx'))).toEqual(Buffer.from(workbook));
+    await expect(stat(join(context.profile, 'profile.json'))).rejects.toThrow();
+    // Reuse the old origin only in this fresh, uninitialized test profile to prove its storage was cleared.
+    await writeFile(
+      join(context.profile, 'profile.json'),
+      JSON.stringify({ port: JSON.parse(originalProfile).port }),
+    );
+    application = await context.launch();
+    const setup = await application.firstWindow();
+    await setup.locator('#password').fill('new-password-123');
+    await setup.locator('#confirmation').fill('new-password-123');
+    await setup.getByRole('button', { name: 'שמירה ופתיחה' }).click();
+    await setup.waitForURL('http://127.0.0.1:*/');
+    expect(new URL(setup.url()).port).toBe(String(JSON.parse(originalProfile).port));
+    expect(
+      await setup.evaluate(() => localStorage.getItem('mapatz:frozen-attempt:v1:broken')),
+    ).toBeNull();
+    expect(await setup.evaluate(async () => (await fetch('/api/items')).json())).toEqual([]);
+    const restored = await setup.evaluate(async (workbook) => {
+      const post = async (password: string) =>
+        (
+          await fetch('/api/session/role', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ role: 'admin', password }),
+          })
+        ).status;
+      const oldPassword = await post('camp-password-123');
+      const newPassword = await post('new-password-123');
+      const imported = await fetch('/api/workbook/recovery', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'x-mapatz-confirmed': 'true',
+        },
+        body: new Uint8Array(workbook),
+      });
+      return {
+        oldPassword,
+        newPassword,
+        imported: imported.status,
+        items: await (await fetch('/api/items')).json(),
+      };
+    }, workbook);
+    expect(restored).toMatchObject({
+      oldPassword: 401,
+      newPassword: 200,
+      imported: 204,
+      items: [{ name: 'ציוד לשחזור', available: 7 }],
+    });
+  } finally {
+    await finishApplication(application);
+    await cleanupProfile(context.profile);
+  }
+});
+
+for (const corrupt of [false, true])
+  test(`failure recovery factory reset works with ${corrupt ? 'corrupt SQLite' : 'incompatible SQLite'}`, async () => {
+    const context = await freshApp();
+    let application = context.application;
+    try {
+      await application.evaluate(({ app, dialog }) => {
+        const state = globalThis as typeof globalThis & {
+          resetFailure?: unknown;
+          selectReset?: (result: { response: number; checkboxChecked: boolean }) => void;
+        };
+        dialog.showMessageBox = async (options: unknown) => {
+          state.resetFailure = options;
+          return new Promise((resolve) => {
+            state.selectReset = resolve;
+          });
+        };
+        const backend = app
+          .getAppMetrics()
+          .find(
+            (metric) => metric.type === 'Utility' && metric.serviceName?.includes('NodeService'),
+          );
+        if (!backend) throw new Error('Backend missing');
+        process.kill(backend.pid);
+      });
+      await expect
+        .poll(() =>
+          application.evaluate(
+            () => (globalThis as typeof globalThis & { resetFailure?: unknown }).resetFailure,
+          ),
+        )
+        .toMatchObject({ buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'] });
+      if (corrupt) await writeFile(join(context.profile, 'inventory.sqlite'), 'corrupt SQLite');
+      else {
+        const { DatabaseSync } = await import('node:sqlite');
+        const db = new DatabaseSync(join(context.profile, 'inventory.sqlite'));
+        db.exec('INSERT INTO migrations(version) VALUES (9999)');
+        db.close();
+      }
+      await interceptResetRestart(application, context.profile);
+      const child = application.process();
+      await application.evaluate(() =>
+        (
+          globalThis as typeof globalThis & {
+            selectReset: (result: { response: number; checkboxChecked: boolean }) => void;
+          }
+        ).selectReset({ response: 2, checkboxChecked: false }),
+      );
+      const confirmation = await application.waitForEvent('window');
+      await confirmation.waitForURL('**/reset.html');
+      await confirmation.locator('#phrase').fill('איפוס מערכת');
+      await saveDiagnostics(application);
+      await confirmation.locator('#confirm').click();
+      await expect.poll(() => child.exitCode).toBe(0);
+      application = await context.launch();
+      const setup = await application.firstWindow();
+      await expect(setup.locator('#password')).toBeVisible();
+    } finally {
+      await finishApplication(application);
+      await cleanupProfile(context.profile);
+    }
+  });
+
+for (const fault of ['invalid-profile', 'missing-profile', 'corrupt-database', 'newer-database'])
+  test(`built Electron runtime resets startup ${fault} independently of main window`, async () => {
+    const profile = await mkdtemp(join(tmpdir(), 'mapatz-reset-pre-window-'));
+    const bootstrap = await mkdtemp(join(tmpdir(), 'mapatz-reset-bootstrap-'));
+    if (fault === 'invalid-profile')
+      await writeFile(join(profile, 'profile.json'), '{broken-profile');
+    if (fault === 'corrupt-database' || fault === 'newer-database')
+      await writeFile(
+        join(profile, 'profile.json'),
+        JSON.stringify({ port: 23456, initialized: fault === 'corrupt-database' }),
+      );
+    if (fault === 'newer-database') {
+      const { DatabaseSync } = await import('node:sqlite');
+      const db = new DatabaseSync(join(profile, 'inventory.sqlite'));
+      db.exec(
+        'CREATE TABLE migrations(version INTEGER); INSERT INTO migrations(version) VALUES (9999)',
+      );
+      db.close();
+    } else await writeFile(join(profile, 'inventory.sqlite'), 'corrupt database');
+    await writeFile(
+      join(bootstrap, 'package.json'),
+      JSON.stringify({ type: 'module', main: 'bootstrap.mjs' }),
+    );
+    await writeFile(
+      join(bootstrap, 'bootstrap.mjs'),
+      `import { app, dialog } from 'electron';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+dialog.showMessageBox = async options => {
+  globalThis.startupResetFailure = options;
+  return new Promise(resolve => { globalThis.selectStartupReset = resolve; });
+};
+app.relaunch = () => writeFileSync(join(app.getPath('userData'), 'reset-relaunch'), 'yes');
+await import(${JSON.stringify(new URL('file://' + resolve('desktop-stage/dist/desktop/main.js')).href)});`,
+    );
+    // The test bootstrap installs native-dialog control before importing the exact staged main/assets.
+    // Packaged-binary tests above cover the normal launch; this covers failure before any main window.
+    let application = await launchElectron({
+      args: [bootstrap],
+      cwd: tmpdir(),
+      env: { ...process.env, MAPATZ_PROFILE: profile },
+    });
+    try {
+      await expect
+        .poll(() =>
+          application.evaluate(
+            () =>
+              (globalThis as typeof globalThis & { startupResetFailure?: unknown })
+                .startupResetFailure,
+          ),
+        )
+        .toMatchObject({ buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'] });
+      expect(
+        await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+      ).toBe(fault.endsWith('profile') ? 0 : 1);
+      const confirmationOpened = application.waitForEvent('window');
+      await application.evaluate(() =>
+        (
+          globalThis as typeof globalThis & {
+            selectStartupReset: (result: { response: number; checkboxChecked: boolean }) => void;
+          }
+        ).selectStartupReset({ response: 2, checkboxChecked: false }),
+      );
+      let confirmation = await confirmationOpened;
+      await confirmation.waitForURL('**/reset.html');
+      if (fault === 'invalid-profile') {
+        await confirmation.locator('#phrase').fill('איפוס');
+        await expect(confirmation.locator('#confirm')).toBeDisabled();
+        await confirmation.locator('#cancel').click();
+        await expect
+          .poll(() =>
+            application.evaluate(
+              () =>
+                (globalThis as typeof globalThis & { startupResetFailure?: { message: string } })
+                  .startupResetFailure?.message,
+            ),
+          )
+          .toContain('בוטל');
+        const { readFile } = await import('node:fs/promises');
+        expect(await readFile(join(profile, 'profile.json'), 'utf8')).toBe('{broken-profile');
+        expect(await readFile(join(profile, 'inventory.sqlite'), 'utf8')).toBe('corrupt database');
+        const retryOpened = application.waitForEvent('window');
+        await application.evaluate(() =>
+          (
+            globalThis as typeof globalThis & {
+              selectStartupReset: (result: { response: number; checkboxChecked: boolean }) => void;
+            }
+          ).selectStartupReset({ response: 2, checkboxChecked: false }),
+        );
+        confirmation = await retryOpened;
+        await confirmation.waitForURL('**/reset.html');
+      }
+      await confirmation.locator('#phrase').fill('איפוס מערכת');
+      const child = application.process();
+      await saveDiagnostics(application);
+      await confirmation.locator('#confirm').click();
+      await expect.poll(() => child.exitCode).toBe(0);
+      application = await launchElectron({
+        executablePath: await executable(),
+        cwd: tmpdir(),
+        env: { ...process.env, MAPATZ_PROFILE: profile },
+      });
+      await expect((await application.firstWindow()).locator('#password')).toBeVisible();
+    } finally {
+      await finishApplication(application);
+      await cleanupProfile(profile);
+      await rm(bootstrap, { recursive: true, force: true });
+    }
+  });
+
+test('storage-clear failure preserves database and offers retry that completes', async () => {
+  const context = await freshApp();
+  let application = context.application;
+  try {
+    await context.page.evaluate(async () => {
+      await fetch('/api/session/role', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
+      });
+    });
+    await application.evaluate(({ session, dialog }) => {
+      const state = globalThis as typeof globalThis & {
+        clearFailure?: unknown;
+        retryReset?: (result: { response: number; checkboxChecked: boolean }) => void;
+        restoreClear?: () => void;
+      };
+      const original = session.defaultSession.clearStorageData.bind(session.defaultSession);
+      session.defaultSession.clearStorageData = async () => {
+        throw new Error('Simulated storage failure');
+      };
+      state.restoreClear = () => {
+        session.defaultSession.clearStorageData = original;
+      };
+      dialog.showMessageBox = async (options: unknown) => {
+        state.clearFailure = options;
+        return new Promise((resolve) => {
+          state.retryReset = resolve;
+        });
+      };
+    });
+    await interceptResetRestart(application, context.profile);
+    const firstOpened = application.waitForEvent('window');
+    await initiateReset(context.page);
+    const first = await firstOpened;
+    await first.waitForURL('**/reset.html');
+    await first.locator('#phrase').fill('איפוס מערכת');
+    await first.locator('#confirm').click();
+    await expect
+      .poll(() =>
+        application.evaluate(
+          () => (globalThis as typeof globalThis & { clearFailure?: unknown }).clearFailure,
+        ),
+      )
+      .toMatchObject({
+        message: expect.stringContaining('Simulated storage failure'),
+        buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'],
+      });
+    const { stat } = await import('node:fs/promises');
+    expect((await stat(join(context.profile, 'inventory.sqlite'))).size).toBeGreaterThan(0);
+    expect(application.windows()).toHaveLength(0);
+    const retryOpened = application.waitForEvent('window');
+    await application.evaluate(() => {
+      const state = globalThis as typeof globalThis & {
+        restoreClear: () => void;
+        retryReset: (result: { response: number; checkboxChecked: boolean }) => void;
+      };
+      state.restoreClear();
+      state.retryReset({ response: 0, checkboxChecked: false });
+    });
+    let retry = await retryOpened;
+    await retry.waitForURL('**/reset.html');
+    await retry.locator('#cancel').click();
+    await expect
+      .poll(() =>
+        application.evaluate(
+          () =>
+            (globalThis as typeof globalThis & { clearFailure?: { message: string } }).clearFailure
+              ?.message,
+        ),
+      )
+      .toContain('ייתכן שחלק מהנתונים כבר נמחקו');
+    expect(
+      await application.evaluate(
+        () =>
+          (globalThis as typeof globalThis & { clearFailure?: { message: string } }).clearFailure
+            ?.message,
+      ),
+    ).not.toContain('הנתונים נשמרו');
+    const confirmedRetryOpened = application.waitForEvent('window');
+    await application.evaluate(() =>
+      (
+        globalThis as typeof globalThis & {
+          retryReset: (result: { response: number; checkboxChecked: boolean }) => void;
+        }
+      ).retryReset({ response: 0, checkboxChecked: false }),
+    );
+    retry = await confirmedRetryOpened;
+    await retry.waitForURL('**/reset.html');
+    await retry.locator('#phrase').fill('איפוס מערכת');
+    const child = application.process();
+    await saveDiagnostics(application);
+    await retry.locator('#confirm').click();
+    await expect.poll(() => child.exitCode).toBe(0);
+    application = await context.launch();
+    await expect((await application.firstWindow()).locator('#password')).toBeVisible();
+  } finally {
+    await finishApplication(application);
+    await cleanupProfile(context.profile);
+  }
+});
+
+for (const outcome of ['retry', 'exit'])
+  test(`backend stop timeout never deletes a live owner and permits ${outcome}`, async () => {
+    test.skip(process.platform === 'win32', 'SIGSTOP is available on the local Unix runtime');
+    test.setTimeout(90_000);
+    const context = await freshApp();
+    let application = context.application;
+    let backendPid: number | undefined;
+    try {
+      await context.page.evaluate(async () => {
+        await fetch('/api/session/role', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
+        });
+      });
+      await application.evaluate(({ dialog }) => {
+        const state = globalThis as typeof globalThis & {
+          stopFailure?: unknown;
+          retryStoppedReset?: (result: { response: number; checkboxChecked: boolean }) => void;
+        };
+        dialog.showMessageBox = async (options: unknown) => {
+          state.stopFailure = options;
+          return new Promise((resolve) => {
+            state.retryStoppedReset = resolve;
+          });
+        };
+      });
+      await interceptResetRestart(application, context.profile);
+      const opened = application.waitForEvent('window');
+      await initiateReset(context.page);
+      const confirmation = await opened;
+      await confirmation.waitForURL('**/reset.html');
+      backendPid = await application.evaluate(({ app }) => {
+        const backend = app
+          .getAppMetrics()
+          .find(
+            (metric) => metric.type === 'Utility' && metric.serviceName?.includes('NodeService'),
+          );
+        if (!backend) throw new Error('Backend missing');
+        process.kill(backend.pid, 'SIGSTOP');
+        return backend.pid;
+      });
+      await confirmation.locator('#phrase').fill('איפוס מערכת');
+      await confirmation.locator('#confirm').click();
+      await expect
+        .poll(
+          () =>
+            application.evaluate(
+              () => (globalThis as typeof globalThis & { stopFailure?: unknown }).stopFailure,
+            ),
+          { timeout: 40_000 },
+        )
+        .toMatchObject({
+          message: expect.stringContaining('no files were deleted'),
+          buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'],
+        });
+      const { stat } = await import('node:fs/promises');
+      expect((await stat(join(context.profile, 'inventory.sqlite'))).size).toBeGreaterThan(0);
+      if (outcome === 'exit') {
+        const child = application.process();
+        await saveDiagnostics(application);
+        await application
+          .evaluate(() =>
+            (
+              globalThis as typeof globalThis & {
+                retryStoppedReset: (result: { response: number; checkboxChecked: boolean }) => void;
+              }
+            ).retryStoppedReset({ response: 1, checkboxChecked: false }),
+          )
+          .catch(() => {});
+        await expect.poll(() => child.exitCode).toBe(0);
+        backendPid = undefined;
+        expect((await stat(join(context.profile, 'inventory.sqlite'))).size).toBeGreaterThan(0);
+        return;
+      }
+      await application.evaluate((_electron, pid) => process.kill(pid, 'SIGCONT'), backendPid);
+      backendPid = undefined;
+      await expect
+        .poll(() =>
+          application.evaluate(({ app }) =>
+            app
+              .getAppMetrics()
+              .some(
+                (metric) =>
+                  metric.type === 'Utility' && metric.serviceName?.includes('NodeService'),
+              ),
+          ),
+        )
+        .toBe(false);
+      const retryOpened = application.waitForEvent('window');
+      await application.evaluate(() =>
+        (
+          globalThis as typeof globalThis & {
+            retryStoppedReset: (result: { response: number; checkboxChecked: boolean }) => void;
+          }
+        ).retryStoppedReset({ response: 0, checkboxChecked: false }),
+      );
+      const retry = await retryOpened;
+      await retry.waitForURL('**/reset.html');
+      await retry.locator('#phrase').fill('איפוס מערכת');
+      const child = application.process();
+      await saveDiagnostics(application);
+      await retry.locator('#confirm').click();
+      await expect.poll(() => child.exitCode).toBe(0);
+      application = await context.launch();
+      await expect((await application.firstWindow()).locator('#password')).toBeVisible();
+    } finally {
+      if (backendPid)
+        await application
+          .evaluate((_electron, pid) => process.kill(pid, 'SIGCONT'), backendPid)
+          .catch(() => {});
+      await finishApplication(application);
+      await cleanupProfile(context.profile);
+    }
+  });
+
+test('admin settings reset button requires admin and returns from local cancellation', async () => {
+  const context = await freshApp();
+  try {
+    await context.page.getByRole('link', { name: 'ניהול', exact: true }).click();
+    await context.page.getByRole('tab', { name: /הרשאות והגדרות/ }).click();
+    await expect(
+      context.page.getByRole('button', { name: 'איפוס מערכת', exact: true }),
+    ).toBeDisabled();
+    await context.page.evaluate(async () => {
+      await fetch('/api/session/role', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
+      });
+    });
+    await context.page.reload();
+    await context.page.getByRole('tab', { name: /הרשאות והגדרות/ }).click();
+    const reset = context.page.getByRole('button', { name: 'איפוס מערכת', exact: true });
+    await expect(reset).toBeEnabled();
+    const opened = context.application.waitForEvent('window');
+    await reset.click();
+    const confirmation = await opened;
+    await confirmation.waitForURL('**/reset.html');
+    await expect(context.page.getByRole('button', { name: 'ממתין לאישור…' })).toBeDisabled();
+    await confirmation.locator('#cancel').click();
+    await expect(reset).toBeEnabled();
+    expect(await context.page.evaluate(async () => (await fetch('/api/items')).status)).toBe(200);
+  } finally {
+    await finishApplication(context.application);
+    await cleanupProfile(context.profile);
+  }
+});
+
+test('confirmation renderer crash cancels and permits another confirmation and ordinary exit', async () => {
+  const context = await freshApp();
+  try {
+    await context.page.evaluate(async () => {
+      await fetch('/api/session/role', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
+      });
+    });
+    const opened = context.application.waitForEvent('window');
+    await initiateReset(context.page);
+    await (await opened).waitForURL('**/reset.html');
+    await context.application.evaluate(({ BrowserWindow }) => {
+      const confirmation = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().endsWith('/reset.html'),
+      );
+      if (!confirmation) throw new Error('Reset confirmation missing');
+      confirmation.webContents.forcefullyCrashRenderer();
+    });
+    await expect
+      .poll(() =>
+        context.page.evaluate(
+          () => (window as typeof window & { resetResponse?: unknown }).resetResponse,
+        ),
+      )
+      .toEqual({ status: 200, body: { outcome: 'cancelled' } });
+    expect(
+      await context.application.evaluate(
+        ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+      ),
+    ).toBe(1);
+    const retryOpened = context.application.waitForEvent('window');
+    await initiateReset(context.page);
+    const retry = await retryOpened;
+    await retry.waitForURL('**/reset.html');
+    await retry.locator('#cancel').click();
+    await expect
+      .poll(() =>
+        context.application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+      )
+      .toBe(1);
+    const child = context.application.process();
+    await saveDiagnostics(context.application);
+    await context.application
+      .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close())
+      .catch(() => {});
+    await expect.poll(() => child.exitCode).toBe(0);
+    const { stat } = await import('node:fs/promises');
+    expect((await stat(join(context.profile, 'inventory.sqlite'))).size).toBeGreaterThan(0);
+  } finally {
+    await finishApplication(context.application);
+    await cleanupProfile(context.profile);
+  }
+});
+
+test('backend death while confirmation is open surfaces failure after cancellation and permits exit', async () => {
+  const context = await freshApp();
+  try {
+    await context.page.evaluate(async () => {
+      await fetch('/api/session/role', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
+      });
+    });
+    await context.application.evaluate(({ dialog }) => {
+      const state = globalThis as typeof globalThis & {
+        deferredBackendFailure?: unknown;
+        finishDeferredFailure?: (result: { response: number; checkboxChecked: boolean }) => void;
+      };
+      dialog.showMessageBox = async (options: unknown) => {
+        state.deferredBackendFailure = options;
+        return new Promise((resolve) => {
+          state.finishDeferredFailure = resolve;
+        });
+      };
+    });
+    const opened = context.application.waitForEvent('window');
+    await initiateReset(context.page);
+    const confirmation = await opened;
+    await confirmation.waitForURL('**/reset.html');
+    await context.application.evaluate(({ app }) => {
+      const owner = app
+        .getAppMetrics()
+        .find((metric) => metric.type === 'Utility' && metric.serviceName?.includes('NodeService'));
+      if (!owner) throw new Error('Backend missing');
+      process.kill(owner.pid);
+    });
+    await expect
+      .poll(() =>
+        context.application.evaluate(({ app }) =>
+          app
+            .getAppMetrics()
+            .some(
+              (metric) => metric.type === 'Utility' && metric.serviceName?.includes('NodeService'),
+            ),
+        ),
+      )
+      .toBe(false);
+    await confirmation.locator('#cancel').click();
+    await expect
+      .poll(() =>
+        context.application.evaluate(
+          () =>
+            (globalThis as typeof globalThis & { deferredBackendFailure?: unknown })
+              .deferredBackendFailure,
+        ),
+      )
+      .toMatchObject({
+        message: expect.stringContaining('Backend stopped'),
+        buttons: ['נסה שוב', 'יציאה', 'איפוס מערכת'],
+      });
+    const { stat } = await import('node:fs/promises');
+    expect((await stat(join(context.profile, 'inventory.sqlite'))).size).toBeGreaterThan(0);
+    const child = context.application.process();
+    await saveDiagnostics(context.application);
+    await context.application
+      .evaluate(() =>
+        (
+          globalThis as typeof globalThis & {
+            finishDeferredFailure: (result: { response: number; checkboxChecked: boolean }) => void;
+          }
+        ).finishDeferredFailure({ response: 1, checkboxChecked: false }),
+      )
+      .catch(() => {});
+    await expect.poll(() => child.exitCode).toBe(0);
+  } finally {
+    await finishApplication(context.application);
+    await cleanupProfile(context.profile);
   }
 });

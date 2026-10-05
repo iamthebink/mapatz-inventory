@@ -29,7 +29,7 @@ execFileSync(pnpm, ['build'], { stdio: 'inherit', shell: process.platform === 'w
 rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage);
 cpSync('dist', `${stage}/dist`, { recursive: true });
-for (const file of ['preload.cjs', 'setup.html', 'setup.js'])
+for (const file of ['preload.cjs', 'setup.html', 'setup.js', 'reset.html', 'reset.js'])
   cpSync(`src/desktop/${file}`, `${stage}/dist/desktop/${file}`);
 cpSync('forge.config.cjs', `${stage}/forge.config.cjs`);
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));

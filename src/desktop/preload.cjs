@@ -6,6 +6,8 @@ const subscribe = (channel, listener) => {
   return () => ipcRenderer.removeListener(channel, handler);
 };
 contextBridge.exposeInMainWorld('mapatzDesktop', {
+  confirmReset: (phrase) => ipcRenderer.invoke('desktop:reset-confirm', phrase),
+  cancelReset: () => ipcRenderer.send('desktop:reset-cancel'),
   setup: (password) => ipcRenderer.invoke('desktop:setup', password),
   saveWorkbook: (bytes) => ipcRenderer.invoke('desktop:save', bytes),
   onCloseRequest: (listener) => subscribe('desktop:close-request', listener),
