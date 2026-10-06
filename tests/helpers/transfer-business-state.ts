@@ -36,7 +36,12 @@ export function transferBusinessState(snapshot: InventoryTransferSnapshot | Reco
         void _id;
         return item;
       })
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+      .sort((a, b) => {
+        if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+        const left = a.location ?? '';
+        const right = b.location ?? '';
+        return left < right ? -1 : left > right ? 1 : 0;
+      }),
     events: events.map(({ itemId, borrowerId, ...event }) => ({
       ...event,
       itemName: itemName(itemId),

@@ -26,7 +26,24 @@ describe('field-scale sample workbook', () => {
         { name: 'מפלצת', archived: false, isDefault: false },
       ]),
     });
-    expect(payload.items).toHaveLength(72);
+    expect(payload.items).toHaveLength(78);
+    const placements = new Map<number, typeof payload.items>();
+    for (const item of payload.items)
+      placements.set(item.id, [...(placements.get(item.id) ?? []), item]);
+    expect(placements.size).toBe(72);
+    expect(
+      [...placements.values()].filter((rows) => rows.length > 1).map((rows) => rows[0]!.name),
+    ).toEqual(['טושים', 'ברגים', 'פטיש 1 קילו', 'פטיש גומי', 'פלייר', 'פלס']);
+    expect(payload.items.reduce((total, row) => total + row.available, 0)).toBe(4022);
+    expect(payload.items.reduce((total, row) => total + row.damaged, 0)).toBe(7);
+    expect(
+      payload.items
+        .filter((row) => row.name === 'פלס')
+        .map((row) => [row.location, row.available, row.damaged]),
+    ).toEqual([
+      ['צוללת', 4, 1],
+      ['מפלצת', 2, 1],
+    ]);
     expect(payload.radioCount).toBe(40);
     expect(payload.radios).toHaveLength(40);
     expect(payload.radios.slice(15)).toEqual(
@@ -38,7 +55,7 @@ describe('field-scale sample workbook', () => {
       })),
     );
     expect(payload.borrowers).toHaveLength(12);
-    expect(payload.events).toHaveLength(483);
+    expect(payload.events).toHaveLength(497);
     const eventsByDay = new Map<string, number>();
     for (const event of payload.events) {
       const day = event.createdAt.slice(0, 10);
@@ -46,11 +63,27 @@ describe('field-scale sample workbook', () => {
     }
     expect(eventsByDay.size).toBe(14);
     expect([...eventsByDay.values()].every((count) => count >= 25)).toBe(true);
-    expect(payload.events.at(-1)).toMatchObject({
+    expect(payload.events.find((event) => event.id === 483)).toMatchObject({
       id: 483,
       kind: 'stock_removed',
       createdAt: '2026-01-14 14:46:00',
     });
+    expect(payload.events.at(-1)).toMatchObject({
+      id: 497,
+      kind: 'damaged_transferred_in',
+      createdAt: '2026-01-14 15:13:00',
+      locationName: 'מפלצת',
+    });
+    const transfers = payload.events.filter((event) => event.kind.includes('transferred'));
+    expect(transfers).toHaveLength(14);
+    for (let index = 0; index < transfers.length; index += 2) {
+      const outgoing = transfers[index]!;
+      const incoming = transfers[index + 1]!;
+      expect(incoming.kind).toBe(outgoing.kind.replace('_out', '_in'));
+      expect(incoming.itemId).toBe(outgoing.itemId);
+      expect(incoming.quantity).toBe(outgoing.quantity);
+      expect(incoming.locationName).not.toBe(outgoing.locationName);
+    }
     // Three deliberately authored histories each return one outstanding and recover one lost unit.
     for (const [checkout, recovered, ordinary] of [
       [135, 137, 138],
@@ -74,9 +107,9 @@ describe('field-scale sample workbook', () => {
         .reduce((sum, event) => sum + event.quantity, 0),
     ).toBe(3);
     const db = openDatabase(':memory:');
-    const transfers = new InventoryTransferService(db);
-    transfers.replaceWithRecovery(payload);
-    const snapshot = transfers.snapshot();
+    const transferService = new InventoryTransferService(db);
+    transferService.replaceWithRecovery(payload);
+    const snapshot = transferService.snapshot();
     expect(snapshot.locations).toEqual(payload.locations);
     expect(snapshot.radioCount).toBe(40);
     expect(snapshot.radios).toEqual(payload.radios);
@@ -96,6 +129,10 @@ describe('field-scale sample workbook', () => {
         'found_returned',
         'repaired',
         'written_off',
+        'transferred_out',
+        'transferred_in',
+        'damaged_transferred_out',
+        'damaged_transferred_in',
       ]),
     );
     expect(transferBusinessState(snapshot).items).toMatchObject(
@@ -105,13 +142,14 @@ describe('field-scale sample workbook', () => {
     expect(snapshot.stateRevision).toBe(payload.stateRevision);
     const inventory = new InventoryService(db);
     const items = inventory.listItems('', true);
+    expect(items.filter((item) => item.balances.length > 1)).toHaveLength(6);
     const loans = inventory.listLoans();
     expect(items.filter((item) => item.kind === 'consumable')).toHaveLength(36);
     expect(items.filter((item) => item.kind === 'non_consumable')).toHaveLength(36);
     expect(items.filter((item) => item.archived)).toHaveLength(8);
     expect(loans).toHaveLength(34);
     expect(loans.reduce((total, loan) => total + loan.outstanding, 0)).toBe(55);
-    expect(unresolvedDamageReport(snapshot)).toHaveLength(6);
+    expect(unresolvedDamageReport(snapshot)).toHaveLength(7);
     expect(consumablesUsageReport(snapshot)).toHaveLength(36);
     db.close();
   });
