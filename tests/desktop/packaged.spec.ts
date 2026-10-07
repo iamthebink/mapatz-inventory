@@ -497,8 +497,11 @@ test('packaged inventory borrow/return, failed command rollback, and recovery wo
         return { status: response.status, body: await response.json() };
       };
       await post('/session/role', { role: 'admin', password: 'camp-password-123' });
-      const item = (await post('/items', { name: 'אוהל', kind: 'non_consumable' })).body;
-      await post('/stock/add', { itemId: item.id, quantity: 5 });
+      const created = await post('/items', { name: 'אוהל', kind: 'non_consumable', locationId: 1 });
+      if (created.status !== 201) throw new Error(`Item setup failed: ${JSON.stringify(created)}`);
+      const item = created.body;
+      const stock = await post('/stock/add', { itemId: item.id, quantity: 5, locationId: 1 });
+      if (stock.status !== 201) throw new Error(`Stock setup failed: ${JSON.stringify(stock)}`);
       const borrower = (
         await post(
           '/borrowers',
@@ -668,8 +671,20 @@ test('dirty staged quit requires discard and saving quit keeps backend alive', a
           })
         ).json();
       await post('/session/role', { role: 'admin', password: 'camp-password-123' });
-      const item = await post('/items', { name: 'ציוד לבדיקה', kind: 'non_consumable' });
-      await post('/stock/add', { itemId: item.id, quantity: 5 });
+      const item = await post('/items', {
+        name: 'ציוד לבדיקה',
+        kind: 'non_consumable',
+        locationId: 1,
+      });
+      if (!Number.isSafeInteger(item.id))
+        throw new Error(`Item setup failed: ${JSON.stringify(item)}`);
+      const stock = await fetch('/api/stock/add', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ itemId: item.id, quantity: 5, locationId: 1 }),
+      });
+      if (stock.status !== 201)
+        throw new Error(`Stock setup failed (${stock.status}): ${await stock.text()}`);
       await post(
         '/borrowers',
         {
@@ -692,8 +707,10 @@ test('dirty staged quit requires discard and saving quit keeps backend alive', a
     await search.press('ArrowDown');
     await search.press('Enter');
     const quantity = page.getByRole('dialog', { name: 'הוספת השאלה' });
+    await quantity.getByRole('combobox', { name: 'מיקום מקור' }).selectOption('1');
     await quantity.getByRole('spinbutton', { name: 'כמות' }).fill('1');
     await quantity.getByRole('button', { name: 'אישור' }).click();
+    await expect(quantity).not.toBeVisible();
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
     const discard = page.getByRole('alertdialog', { name: 'ביטול פעולות ממתינות?' });
     await expect(discard).toBeVisible();
@@ -1008,18 +1025,21 @@ test('factory reset cancels unchanged, rejects renderer IPC, drains and clears p
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role: 'admin', password: 'camp-password-123' }),
       });
-      const item = await (
-        await fetch('/api/items', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name: 'ציוד לשחזור', kind: 'non_consumable' }),
-        })
-      ).json();
-      await fetch('/api/stock/add', {
+      const created = await fetch('/api/items', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ itemId: item.id, quantity: 7 }),
+        body: JSON.stringify({ name: 'ציוד לשחזור', kind: 'non_consumable', locationId: 1 }),
       });
+      if (created.status !== 201)
+        throw new Error(`Item setup failed (${created.status}): ${await created.text()}`);
+      const item = await created.json();
+      const stock = await fetch('/api/stock/add', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ itemId: item.id, quantity: 7, locationId: 1 }),
+      });
+      if (stock.status !== 201)
+        throw new Error(`Stock setup failed (${stock.status}): ${await stock.text()}`);
       localStorage.setItem('mapatz:frozen-attempt:v1:broken', '{}');
       return Array.from(new Uint8Array(await (await fetch('/api/workbook')).arrayBuffer()));
     });
