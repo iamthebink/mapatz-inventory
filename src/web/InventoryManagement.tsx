@@ -159,7 +159,12 @@ export function InventoryManagement({
     setCurrentBalances(null);
     if (next.kind === 'item') {
       const initial = itemDraft(next.item);
-      const balance = !admin ? next.item?.balances[0] : undefined;
+      const defaultLocation = locations.find(
+        (location) => location.isDefault && !location.archived,
+      );
+      const balance =
+        next.item?.balances.find((placement) => placement.locationId === defaultLocation?.id) ??
+        next.item?.balances[0];
       setDraft(
         balance
           ? {
@@ -692,6 +697,12 @@ export function InventoryManagement({
       )
     : [];
   const lockedDraft = pending || !!unresolved || refreshRecovery;
+  const selectedBalance = selected?.balances.find(
+    (balance) => balance.locationId === Number(draft.locationId),
+  );
+  const availableChanged =
+    Boolean(draft.locationId) && draft.available !== String(selectedBalance?.available ?? 0);
+  const adjustment = Number(draft.available) - (selectedBalance?.available ?? 0);
   const field = (key: keyof Draft, label: string, disabled = false) => (
     <label className="field-label">
       {label}
@@ -936,147 +947,159 @@ export function InventoryManagement({
           returnFocusFallbackRef={fallbackRef}
         >
           {editor.kind === 'item' && (
-            <form className="dialog-form" onSubmit={saveItem}>
-              <div className="dialog-fields">
-                {selected && <p>סוג: {kinds[selected.kind]}</p>}
-                {!selected && (
-                  <label className="field-label">
-                    סוג
-                    <select
-                      className="input-field"
-                      value={draft.kind}
+            <form className="dialog-form item-editor-form" onSubmit={saveItem}>
+              <section className="item-editor-section" aria-labelledby="item-details-heading">
+                <div className="item-editor-section-heading">
+                  <h3 id="item-details-heading">פרטי פריט</h3>
+                  {selected && (
+                    <span className={`status-badge ${kindTones[selected.kind]}`}>
+                      {kinds[selected.kind]}
+                    </span>
+                  )}
+                </div>
+                <div className="item-editor-fields">
+                  {!selected && (
+                    <label className="field-label">
+                      סוג
+                      <select
+                        className="input-field"
+                        value={draft.kind}
+                        disabled={lockedDraft}
+                        onChange={(event) => {
+                          setDraft({
+                            ...draft,
+                            kind: event.target.value as Item['kind'],
+                            lotSize: '',
+                          });
+                          setDirty(true);
+                        }}
+                      >
+                        {Object.entries(kinds).map(([kind, name]) => (
+                          <option key={kind} value={kind}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {field('name', 'שם פריט', !admin || !!selected?.archived)}
+                  {field('aliases', 'כינויים, מופרדים בפסיק', !admin || !!selected?.archived)}
+                  {draft.kind === 'consumable' &&
+                    field('lotSize', 'גודל מארז', !admin || !!selected?.archived)}
+                </div>
+              </section>
+              <section className="item-editor-section" aria-labelledby="item-stock-heading">
+                <div className="item-editor-section-heading">
+                  <h3 id="item-stock-heading">מלאי לפי מיקום</h3>
+                  {selected && admin && !selected.archived && (
+                    <button
+                      type="button"
+                      className="small-button"
                       disabled={lockedDraft}
-                      onChange={(event) => {
-                        setDraft({
-                          ...draft,
-                          kind: event.target.value as Item['kind'],
-                          lotSize: '',
-                        });
-                        setDirty(true);
-                      }}
+                      onClick={() => open({ kind: 'transfer', item: selected })}
                     >
-                      {Object.entries(kinds).map(([kind, name]) => (
-                        <option key={kind} value={kind}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {field('name', 'שם פריט', !admin || !!selected?.archived)}
-                {field('aliases', 'כינויים, מופרדים בפסיק', !admin || !!selected?.archived)}
-                {draft.kind === 'consumable' &&
-                  field('lotSize', 'גודל מארז', !admin || !!selected?.archived)}
-                <label className="field-label">
-                  מיקום
-                  <select
-                    className="input-field"
-                    value={draft.locationId}
-                    disabled={lockedDraft}
-                    onChange={(event) => {
-                      const locationId = event.target.value;
-                      const apply = () => {
-                        setDraft((current) => ({
-                          ...current,
-                          locationId,
-                          available: String(
-                            selected?.balances.find(
-                              (balance) => balance.locationId === Number(locationId),
-                            )?.available ?? 0,
-                          ),
-                        }));
-                        setReviewRequired(false);
-                        setReviewSnapshot(null);
-                        setCurrentBalances(null);
-                        setDirty(
-                          admin &&
-                            (!selected ||
-                              draft.name !== selected.name ||
-                              draft.aliases !== selected.aliases.join(', ') ||
-                              draft.lotSize !== (selected.lotSize?.toString() ?? '') ||
-                              draft.note !== '' ||
-                              !selected.balances.some(
-                                (balance) => balance.locationId === Number(locationId),
-                              )),
-                        );
-                      };
-                      const original =
-                        selected?.balances.find(
-                          (balance) => balance.locationId === Number(draft.locationId),
-                        )?.available ?? 0;
-                      if (admin && draft.locationId && draft.available !== String(original)) {
-                        pendingEditorChangeRef.current = apply;
-                        setDiscardOpen(true);
-                      } else apply();
-                    }}
-                  >
-                    <option value="">בחרו מיקום לעריכת היתרה</option>
-                    {locations
-                      .filter((location) => !location.archived)
-                      .map((location) => (
-                        <option key={location.id} value={location.id}>
-                          {location.name}
-                          {location.archived ? ' (בארכיון)' : ''}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                {selected && (
-                  <div>
-                    {selected.balances.map((p) => (
-                      <p key={p.locationId}>
-                        {locations.find((l) => l.id === p.locationId)?.name} · זמין {p.available} ·
-                        פגום {p.damaged}
-                      </p>
-                    ))}
+                      העברת מלאי בין מיקומים
+                    </button>
+                  )}
+                </div>
+                {selected && selected.balances.length > 1 && (
+                  <div className="item-stock-overview">
+                    <table className="item-stock-table" aria-label="יתרות מלאי לפי מיקום">
+                      <thead>
+                        <tr>
+                          <th scope="col">מיקום</th>
+                          <th scope="col">זמין</th>
+                          <th scope="col">פגום</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selected.balances.map((balance) => (
+                          <tr key={balance.locationId}>
+                            <th scope="row">
+                              {
+                                locations.find((location) => location.id === balance.locationId)
+                                  ?.name
+                              }
+                            </th>
+                            <td>{balance.available}</td>
+                            <td>{balance.damaged}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
-                {field('available', 'זמין', !admin || !!selected?.archived)}
-                {selected && admin && !selected.archived && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={lockedDraft}
-                    onClick={() => open({ kind: 'transfer', item: selected })}
-                  >
-                    העברת מלאי בין מיקומים
-                  </button>
+                <div className="item-stock-fields">
+                  <label className="field-label">
+                    מיקום
+                    <select
+                      className="input-field"
+                      value={draft.locationId}
+                      disabled={lockedDraft}
+                      onChange={(event) => {
+                        const locationId = event.target.value;
+                        const apply = () => {
+                          setDraft((current) => ({
+                            ...current,
+                            locationId,
+                            available: String(
+                              selected?.balances.find(
+                                (balance) => balance.locationId === Number(locationId),
+                              )?.available ?? 0,
+                            ),
+                          }));
+                          setReviewRequired(false);
+                          setReviewSnapshot(null);
+                          setCurrentBalances(null);
+                          setDirty(
+                            admin &&
+                              (!selected ||
+                                draft.name !== selected.name ||
+                                draft.aliases !== selected.aliases.join(', ') ||
+                                draft.lotSize !== (selected.lotSize?.toString() ?? '') ||
+                                draft.note !== '' ||
+                                !selected.balances.some(
+                                  (balance) => balance.locationId === Number(locationId),
+                                )),
+                          );
+                        };
+                        const original =
+                          selected?.balances.find(
+                            (balance) => balance.locationId === Number(draft.locationId),
+                          )?.available ?? 0;
+                        if (admin && draft.locationId && draft.available !== String(original)) {
+                          pendingEditorChangeRef.current = apply;
+                          setDiscardOpen(true);
+                        } else apply();
+                      }}
+                    >
+                      <option value="">בחרו מיקום לעריכת היתרה</option>
+                      {locations
+                        .filter((location) => !location.archived)
+                        .map((location) => (
+                          <option key={location.id} value={location.id}>
+                            {location.name}
+                            {location.archived ? ' (בארכיון)' : ''}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+
+                  {field('available', 'זמין', !admin || !!selected?.archived || !draft.locationId)}
+                </div>
+                {selected && selected.kind !== 'consumable' && (
+                  <p className="item-stock-summary">
+                    פגום במיקום: {selectedBalance?.damaged ?? 0} · מושאל: {selected.borrowed} ·
+                    אבוד: {selected.lost}
+                  </p>
                 )}
-                <p>
-                  מושאל: {selected?.borrowed ?? 0} · אבוד: {selected?.lost ?? 0} · פגום:{' '}
-                  {selected?.damaged ?? 0}
-                </p>
-                {selected &&
-                  !selected.archived &&
-                  !!(selected.borrowed || selected.lost || selected.damaged) && (
-                    <p>
-                      ארכוב חסום כל עוד יש יתרות מושאלות, אבודות או פגומות: מושאל{' '}
-                      {selected.borrowed}, אבוד {selected.lost}, פגום {selected.damaged}.
-                    </p>
-                  )}
-                {selected &&
-                  safeInteger(draft.available, 0) &&
-                  Number(draft.available) !==
-                    (selected.balances.find((p) => p.locationId === Number(draft.locationId))
-                      ?.available ?? 0) && (
-                    <p>
-                      התאמה:{' '}
-                      {Number(draft.available) -
-                        (selected.balances.find((p) => p.locationId === Number(draft.locationId))
-                          ?.available ?? 0) >
-                      0
-                        ? '+'
-                        : ''}
-                      {Number(draft.available) -
-                        (selected.balances.find((p) => p.locationId === Number(draft.locationId))
-                          ?.available ?? 0)}
-                    </p>
-                  )}
-                {draft.available !==
-                  String(
-                    selected?.balances.find((p) => p.locationId === Number(draft.locationId))
-                      ?.available ?? 0,
-                  ) && field('note', 'הערת התאמה (רשות)', !admin)}
+                {selected && availableChanged && safeInteger(draft.available, 0) && (
+                  <p className="item-stock-adjustment">
+                    התאמה: {adjustment > 0 ? '+' : ''}
+                    {adjustment}
+                  </p>
+                )}
+                {availableChanged && field('note', 'הערת התאמה (רשות)', !admin)}
                 {reviewRequired && (
                   <div>
                     {currentBalances ? (
@@ -1138,45 +1161,65 @@ export function InventoryManagement({
                     )}
                   </div>
                 )}
-              </div>
-              <div className="dialog-actions">
-                {!selected?.archived && (
+              </section>
+              {selected && admin && (
+                <details className="item-editor-more">
+                  <summary>פעולות נוספות</summary>
+                  <div className="item-editor-more-actions">
+                    {!selected.archived && (
+                      <button
+                        type="button"
+                        className="small-button"
+                        disabled={
+                          pending ||
+                          dirty ||
+                          !!unresolved ||
+                          refreshRecovery ||
+                          !!(selected.borrowed || selected.lost || selected.damaged)
+                        }
+                        onClick={() => setArchiveConfirm(selected)}
+                      >
+                        <Archive className="size-3.5" aria-hidden="true" />
+                        העברה לארכיון
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="small-button"
+                      data-tone="destructive"
+                      disabled={pending || !!unresolved || refreshRecovery}
+                      onClick={() => setDeleteConfirm(selected)}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                      מחיקה לצמיתות
+                    </button>
+                  </div>
+                  {!selected.archived &&
+                    !!(selected.borrowed || selected.lost || selected.damaged) && (
+                      <p className="item-stock-summary">
+                        ארכוב חסום כל עוד יש יתרות מושאלות, אבודות או פגומות: מושאל{' '}
+                        {selected.borrowed}, אבוד {selected.lost}, פגום {selected.damaged}.
+                      </p>
+                    )}
+                </details>
+              )}
+              <div className="dialog-actions item-editor-actions">
+                {selected?.archived ? (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={!admin || pending || !!unresolved || refreshRecovery}
+                    onClick={() => archiveItem(selected)}
+                  >
+                    שחזור פריט
+                  </button>
+                ) : (
                   <button
                     className="primary-button"
                     type="submit"
                     disabled={!admin || pending || !!unresolved || refreshRecovery}
                   >
                     שמירה
-                  </button>
-                )}
-                {selected && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={
-                      !admin ||
-                      pending ||
-                      (dirty && !selected.archived) ||
-                      !!unresolved ||
-                      refreshRecovery ||
-                      (!selected.archived &&
-                        !!(selected.borrowed || selected.lost || selected.damaged))
-                    }
-                    onClick={() =>
-                      selected.archived ? archiveItem(selected) : setArchiveConfirm(selected)
-                    }
-                  >
-                    {selected.archived ? 'שחזור פריט' : 'העברה לארכיון'}
-                  </button>
-                )}
-                {selected && (
-                  <button
-                    type="button"
-                    className="danger-button"
-                    disabled={!admin || pending || !!unresolved || refreshRecovery}
-                    onClick={() => setDeleteConfirm(selected)}
-                  >
-                    מחיקה לצמיתות
                   </button>
                 )}
                 <button type="button" className="secondary-button" onClick={close}>
@@ -1401,7 +1444,7 @@ export function InventoryManagement({
           )}
           {editor.kind === 'locations' && locationEdit && (
             <form className="dialog-form" onSubmit={saveLocation}>
-              <label className="field-label">
+              <label className="checkbox-label">
                 <input
                   type="checkbox"
                   checked={locationDefault}
@@ -1411,7 +1454,7 @@ export function InventoryManagement({
                     setDirty(true);
                   }}
                 />
-                מיקום ברירת מחדל
+                <span>מיקום ברירת מחדל</span>
               </label>
               <label className="field-label">
                 שם

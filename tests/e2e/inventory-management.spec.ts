@@ -57,6 +57,7 @@ test('administrator creates, adjusts, zeros and archives an item', async ({ page
   await expect(dialog).toBeHidden();
   await row.getByRole('button', { name }).click();
   dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
+  await dialog.getByText('פעולות נוספות').click();
   await dialog.getByRole('button', { name: 'העברה לארכיון' }).click();
   await page
     .getByRole('alertdialog', { name: 'לארכב את פריט ניהול בדיקה?' })

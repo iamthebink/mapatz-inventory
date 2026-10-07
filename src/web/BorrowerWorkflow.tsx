@@ -1355,6 +1355,34 @@ export const BorrowerWorkflow = forwardRef<
   const locked = operation ? operationLocks(operation).mutation : true;
   const deskBlocked = Boolean(operation && !operationPresentation(operation).searchEnabled);
   const directoryResolved = resolvedSearch === search;
+  const quantityLocationField = quantity && operation && quantity.condition !== 'mark-lost' && (
+    <label className="field-label">
+      {quantity.direction === 'return' ? 'מיקום קבלה' : 'מיקום מקור'}
+      <select
+        className="input-field"
+        value={quantity.locationId}
+        onChange={(event) =>
+          setQuantity({ ...quantity, locationId: event.target.value, error: '' })
+        }
+      >
+        <option value="">בחרו מיקום</option>
+        {operation.snapshot.locations
+          .filter(
+            (location) =>
+              quantity.direction === 'return' ||
+              projectedLocationAvailability(operation, quantity.itemId, location.id) > 0,
+          )
+          .map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+              {quantity.direction === 'return'
+                ? ''
+                : ` · זמין ${projectedLocationAvailability(operation, quantity.itemId, location.id)}`}
+            </option>
+          ))}
+      </select>
+    </label>
+  );
   return (
     <section className="borrower-workflow-entry" aria-labelledby="borrower-workflow-title">
       <div className="borrower-workflow-header">
@@ -1763,34 +1791,7 @@ export const BorrowerWorkflow = forwardRef<
             className="dialog-form"
             noValidate
           >
-            {quantity.condition !== 'mark-lost' && (
-              <label className="field-label">
-                {quantity.direction === 'return' ? 'מיקום קבלה' : 'מיקום מקור'}
-                <select
-                  className="input-field"
-                  value={quantity.locationId}
-                  onChange={(event) =>
-                    setQuantity({ ...quantity, locationId: event.target.value, error: '' })
-                  }
-                >
-                  <option value="">בחרו מיקום</option>
-                  {operation.snapshot.locations
-                    .filter(
-                      (l) =>
-                        quantity.direction === 'return' ||
-                        projectedLocationAvailability(operation, quantity.itemId, l.id) > 0,
-                    )
-                    .map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                        {quantity.direction === 'return'
-                          ? ''
-                          : ` · זמין ${projectedLocationAvailability(operation, quantity.itemId, l.id)}`}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
+            {quantity.direction !== 'return' && quantityLocationField}
             <label className="field-label">
               כמות
               <input
@@ -1819,7 +1820,7 @@ export const BorrowerWorkflow = forwardRef<
               />
             </label>
             {quantity.direction === 'return' && quantity.condition !== 'mark-lost' && (
-              <label className="quantity-condition-checkbox">
+              <label className="checkbox-label">
                 <input
                   type="checkbox"
                   checked={quantity.damaged}
@@ -1838,6 +1839,7 @@ export const BorrowerWorkflow = forwardRef<
                 onChange={(event) => setQuantity({ ...quantity, note: event.target.value })}
               />
             </label>
+            {quantity.direction === 'return' && quantityLocationField}
             {quantity.error && (
               <p className="field-error" role="alert">
                 {quantity.error}

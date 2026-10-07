@@ -321,6 +321,7 @@ describe('inventory management UI', () => {
     const user = userEvent.setup();
     view(true, [{ ...item, damaged: 0, balances: [{ locationId: 1, available: 20, damaged: 0 }] }]);
     await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    await user.click(screen.getByText('פעולות נוספות'));
     await user.click(screen.getByRole('button', { name: 'העברה לארכיון' }));
     expect(screen.getByRole('alertdialog').textContent).toContain('יאפס את כל המלאי הזמין');
     expect(fetch).not.toHaveBeenCalled();
@@ -597,6 +598,40 @@ const splitItem: Item = {
     { locationId: 2, available: 30, damaged: 6 },
   ],
 };
+it.each([true, false])(
+  'opens an existing balance and saves metadata without a stock adjustment (default has stock: %s)',
+  async (defaultHasStock) => {
+    const save = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond(splitItem));
+    const user = userEvent.setup();
+    const locations = splitLocations.map((location) => ({ ...location, isDefault: false }));
+    locations.push({
+      id: 3,
+      name: 'Front desk',
+      code: 'desk',
+      archived: false,
+      isDefault: !defaultHasStock,
+    });
+    locations[1]!.isDefault = defaultHasStock;
+    view(true, [splitItem], locations);
+    await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByLabelText('מיקום')).toHaveProperty(
+      'value',
+      defaultHasStock ? '2' : '1',
+    );
+    expect(within(dialog).getByLabelText('זמין')).toHaveProperty(
+      'value',
+      defaultHasStock ? '30' : '20',
+    );
+    await user.type(within(dialog).getByLabelText('שם פריט'), ' renamed');
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    const command = JSON.parse(String(save.mock.calls[0]?.[1]?.body));
+    expect(command.name).toBe('Hammer renamed');
+    expect(command).not.toHaveProperty('targetAvailable');
+    expect(command).not.toHaveProperty('stockRevision');
+  },
+);
 it('readonly details show a real balance and permit inspection of other balances without edits', async () => {
   const user = userEvent.setup();
   view(false, [splitItem], splitLocations);

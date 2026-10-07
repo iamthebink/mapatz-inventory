@@ -377,6 +377,68 @@
   .inventory-location-recovery {
     @apply mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-ctp-subtext;
   }
+  .item-editor-section {
+    @apply grid min-w-0 gap-3;
+  }
+  .item-editor-section + .item-editor-section {
+    @apply border-t border-ctp-surface pt-4;
+  }
+  .item-editor-section-heading {
+    @apply flex flex-wrap items-center justify-between gap-2;
+  }
+  .item-editor-section-heading h3 {
+    @apply text-sm font-semibold text-ctp-text;
+  }
+  .item-editor-fields {
+    @apply grid gap-3 sm:grid-cols-2;
+  }
+  .item-stock-fields {
+    @apply grid grid-cols-[minmax(0,1fr)_6rem] gap-3 sm:grid-cols-[minmax(0,1fr)_9rem];
+  }
+  .item-stock-overview {
+    @apply overflow-x-auto rounded-xl border border-ctp-surface;
+  }
+  .item-stock-table {
+    @apply w-full text-sm;
+  }
+  .item-stock-table th,
+  .item-stock-table td {
+    @apply px-3 py-2.5 text-start;
+  }
+  .item-stock-table thead {
+    @apply bg-ctp-base text-ctp-subtext;
+  }
+  .item-stock-table tbody th {
+    @apply font-normal;
+  }
+  .item-stock-table tbody tr + tr {
+    @apply border-t border-ctp-surface;
+  }
+  .item-stock-table th:not(:first-child),
+  .item-stock-table td {
+    @apply text-end tabular-nums;
+  }
+  .item-stock-summary {
+    @apply text-xs leading-relaxed text-ctp-subtext;
+  }
+  .item-stock-adjustment {
+    @apply text-sm font-medium text-ctp-blue;
+  }
+  .item-editor-more {
+    @apply border-t border-ctp-surface pt-2 text-sm;
+  }
+  .item-editor-more summary {
+    @apply cursor-pointer py-2 font-medium text-ctp-subtext;
+  }
+  .item-editor-more-actions {
+    @apply mt-2 flex flex-wrap gap-2;
+  }
+  .item-editor-more .item-stock-summary {
+    @apply mt-2;
+  }
+  .dialog-actions.item-editor-actions {
+    @apply mt-1 flex-row;
+  }
   .inventory-filter select {
     @apply w-auto min-w-28 max-w-48;
   }
@@ -855,11 +917,11 @@
   .borrower-action-menu button {
     @apply flex min-h-11 w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-right text-sm hover:bg-ctp-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ctp-blue;
   }
-  .quantity-condition-checkbox {
+  .checkbox-label {
     @apply flex min-h-11 cursor-pointer items-center gap-2 text-sm;
   }
-  .quantity-condition-checkbox input {
-    @apply size-4 accent-ctp-blue;
+  .checkbox-label input {
+    @apply size-4 shrink-0 accent-ctp-blue;
   }
   .borrower-pending-note,
   .borrower-review-row small {

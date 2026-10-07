@@ -458,9 +458,7 @@ describe('inventory management in App', () => {
     expect((screen.getByRole('button', { name: 'שמירה' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(
-      (screen.getByRole('button', { name: 'העברה לארכיון' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    expect(screen.queryByRole('button', { name: 'העברה לארכיון' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'ביטול' }));
     expect((screen.getByRole('textbox', { name: 'סינון הטבלה' }) as HTMLInputElement).value).toBe(
       'מקבת',
