@@ -23,8 +23,7 @@ export type Location = {
 };
 
 type ImportSelection =
-  | { kind: 'import'; mode: 'reset'; file: File; options: ResetOptions }
-  | { kind: 'import'; mode: 'recovery'; file: File };
+  { kind: 'import'; mode: 'reset'; file: File } | { kind: 'import'; mode: 'recovery'; file: File };
 
 export type ActiveDialog = { kind: 'edit-borrower'; borrower: Borrower } | ImportSelection;
 
@@ -37,7 +36,8 @@ export type DialogSubmission =
       phoneNumber: string;
       campDepartment: string;
     }
-  | ImportSelection;
+  | (Extract<ImportSelection, { mode: 'reset' }> & { options: ResetOptions })
+  | Extract<ImportSelection, { mode: 'recovery' }>;
 
 function value(form: FormData, name: string): string {
   return String(form.get(name) ?? '');
@@ -218,14 +218,18 @@ function ImportDialog({
   fallbackFocusRef,
 }: DialogProps<ImportSelection>) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const [resetBorrowers, setResetBorrowers] = useState(false);
+  const scopeId = useId();
   const reset = active.mode === 'reset';
   return (
     <Dialog
       title={reset ? 'אישור ייבוא איפוס' : 'אישור שחזור מלא'}
       description={
-        active.mode === 'reset'
-          ? resetImportConfirmation(active.options)
-          : RECOVERY_IMPORT_CONFIRMATION
+        active.mode === 'reset' ? (
+          <span id={scopeId}>{resetImportConfirmation({ resetBorrowers })}</span>
+        ) : (
+          RECOVERY_IMPORT_CONFIRMATION
+        )
       }
       level="root"
       role="alertdialog"
@@ -241,12 +245,27 @@ function ImportDialog({
       <p className="dialog-file-name">
         קובץ: <bdi>{active.file.name}</bdi>
       </p>
+      {reset && (
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={resetBorrowers}
+            aria-describedby={scopeId}
+            disabled={pending}
+            onChange={(event) => setResetBorrowers(event.target.checked)}
+          />
+          מחק גם את רשימת השואלים
+        </label>
+      )}
       <fieldset disabled={pending} className="dialog-actions dialog-actions-destructive">
         <button
           type="button"
           className="danger-button"
           onClick={() => {
-            if (!pending) void onSubmit(active);
+            if (!pending)
+              void onSubmit(
+                active.mode === 'reset' ? { ...active, options: { resetBorrowers } } : active,
+              );
           }}
         >
           {reset ? 'מחק וייבא' : 'החלף ושחזר'}

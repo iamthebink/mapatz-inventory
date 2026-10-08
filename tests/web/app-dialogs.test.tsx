@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/web/App';
-import { resetImportScope, resetImportConfirmation } from '../../src/web/import-confirmation';
+import { resetImportConfirmation } from '../../src/web/import-confirmation';
 import { DialogStackProvider } from '../../src/web/Dialog';
 import type { Item } from '../../src/web/InventoryDialogs';
 import type { Borrower } from '../../src/domain/types.js';
@@ -175,27 +175,25 @@ afterEach(() => {
 });
 describe('inventory management in App', () => {
   it.each([false, true])(
-    'freezes reviewed reset scope %s and cancels without submitting',
+    'selects reset scope %s inside confirmation and resets the choice after cancellation',
     async (resetBorrowers) => {
       const { user } = setup();
       await user.click(await screen.findByRole('tab', { name: /ייבוא וייצוא/ }));
-      const checkbox = (await screen.findByRole('checkbox', {
-        name: 'איפוס שואלים גם',
-      })) as HTMLInputElement;
-      expect(screen.getAllByRole('checkbox', { name: 'איפוס שואלים גם' })).toHaveLength(1);
-      expect(checkbox.checked).toBe(false);
-      expect(document.getElementById(checkbox.getAttribute('aria-describedby')!)?.textContent).toBe(
-        resetImportScope({ resetBorrowers: false }),
-      );
-      expect(screen.getByText(resetImportScope({ resetBorrowers: false }))).toBeTruthy();
-      if (resetBorrowers) await user.click(checkbox);
-      expect(screen.getByText(resetImportScope({ resetBorrowers }))).toBeTruthy();
+      expect(screen.queryByRole('checkbox', { name: 'מחק גם את רשימת השואלים' })).toBeNull();
       const input = screen.getByLabelText('בחירת קובץ לייבוא איפוס') as HTMLInputElement;
       const file = new File(['workbook'], 'reset.xlsx', {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       await user.upload(input, file);
       let dialog = screen.getByRole('alertdialog', { name: 'אישור ייבוא איפוס' });
+      let checkbox = within(dialog).getByRole('checkbox', {
+        name: 'מחק גם את רשימת השואלים',
+      }) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+      expect(document.getElementById(checkbox.getAttribute('aria-describedby')!)?.textContent).toBe(
+        resetImportConfirmation({ resetBorrowers: false }),
+      );
+      if (resetBorrowers) await user.click(checkbox);
       expect(within(dialog).getByText(resetImportConfirmation({ resetBorrowers }))).toBeTruthy();
       await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
       expect(
@@ -204,9 +202,11 @@ describe('inventory management in App', () => {
       expect(input.value).toBe('');
       await user.upload(input, file);
       dialog = screen.getByRole('alertdialog', { name: 'אישור ייבוא איפוס' });
-      // Simulate a background state change: submission must still use the reviewed selection.
-      fireEvent.click(checkbox);
-      expect(checkbox.checked).toBe(!resetBorrowers);
+      checkbox = within(dialog).getByRole('checkbox', {
+        name: 'מחק גם את רשימת השואלים',
+      }) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+      if (resetBorrowers) await user.click(checkbox);
       expect(within(dialog).getByText(resetImportConfirmation({ resetBorrowers }))).toBeTruthy();
       await user.click(within(dialog).getByRole('button', { name: 'מחק וייבא' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
