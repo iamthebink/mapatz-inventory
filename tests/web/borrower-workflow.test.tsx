@@ -2081,3 +2081,90 @@ it('preselects an active default for returns even when it has no balance', async
   const dialog = await screen.findByRole('dialog', { name: 'החזרת ציוד' });
   expect(within(dialog).getByLabelText('מיקום קבלה')).toHaveProperty('value', '2');
 });
+
+it.each(['borrow', 'return'] as const)(
+  'an individual %s location override does not replace the shared default',
+  async (direction) => {
+    const truth = {
+      ...desk(),
+      inventory: [
+        {
+          ...item,
+          available: 8,
+          balances: [
+            { locationId: 1, available: 4, damaged: 0 },
+            { locationId: 2, available: 4, damaged: 0 },
+          ],
+        },
+      ],
+      locations: [
+        { id: 1, name: 'Warehouse A', code: 'a', archived: false, isDefault: true },
+        { id: 2, name: 'Warehouse B', code: 'b', archived: false, isDefault: false },
+      ],
+    };
+    const fetch = vi.fn(async (input: string | URL | Request) =>
+      String(input).includes('desk-snapshot')
+        ? json(truth)
+        : json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    const openQuantity = async () => {
+      if (direction === 'borrow') {
+        const search = screen.getByRole('combobox', { name: 'חיפוש פריט' });
+        await userEvent.clear(search);
+        await userEvent.type(search, item.name);
+        fireEvent.keyDown(search, { key: 'ArrowDown' });
+        fireEvent.keyDown(search, { key: 'Enter' });
+      } else await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+      return screen.findByRole('dialog', {
+        name: direction === 'borrow' ? 'הוספת השאלה' : 'החזרת ציוד',
+      });
+    };
+    const dialog = await openQuantity();
+    const label = direction === 'borrow' ? 'מיקום מקור' : 'מיקום קבלה';
+    expect(within(dialog).getByLabelText(label)).toHaveProperty('value', '1');
+    await userEvent.selectOptions(within(dialog).getByLabelText(label), '2');
+    fireEvent.change(within(dialog).getByLabelText('כמות'), { target: { value: '1' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+    const reopened = await openQuantity();
+    expect(within(reopened).getByLabelText(label)).toHaveProperty('value', '1');
+    expect(truth.defaultLocationId).toBe(1);
+    expect(fetch.mock.calls.some(([input]) => String(input).includes('/inventory/locations'))).toBe(
+      false,
+    );
+  },
+);
+
+it('leaves a return destination unselected when no shared default exists', async () => {
+  const truth = {
+    ...desk(),
+    defaultLocationId: null,
+    locations: desk().locations.map((location) => ({ ...location, isDefault: false })),
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request) =>
+      String(input).includes('desk-snapshot')
+        ? json(truth)
+        : json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] }),
+    ),
+  );
+  render(
+    <DialogStackProvider>
+      <BorrowerWorkflow showToast={vi.fn()} />
+    </DialogStackProvider>,
+  );
+  await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+  await activateBorrowerAction();
+  await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+  expect(
+    within(screen.getByRole('dialog', { name: 'החזרת ציוד' })).getByLabelText('מיקום קבלה'),
+  ).toHaveProperty('value', '');
+});

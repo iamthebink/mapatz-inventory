@@ -36,6 +36,7 @@ const view = (
     { id: 1, code: 'monster', name: 'מפלצת', archived: false, isDefault: false },
   ],
   storageUnavailable = false,
+  ledgerEpoch: number | null = 1,
 ) => {
   installWindowStorage(true);
   if (storageUnavailable)
@@ -50,7 +51,7 @@ const view = (
       <InventoryManagement
         items={items}
         locations={locations}
-        ledgerEpoch={1}
+        ledgerEpoch={ledgerEpoch}
         admin={admin}
         onRefresh={onRefresh}
         showToast={showToast}
@@ -1017,4 +1018,187 @@ it('uncertain transfer retains exact frozen locations, condition and revision fo
     condition: 'damaged',
     stockRevision: 7,
   });
+});
+
+it('selects one shared default in the table and preserves it when editing metadata or reloading', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    const inventory = new InventoryService(db);
+    const a = inventory.createLocation('a', 'Warehouse A');
+    const b = inventory.createLocation('b', 'Warehouse B');
+    const archived = inventory.createLocation('old', 'Old warehouse');
+    inventory.saveInventoryLocation({
+      key: 'archive-old',
+      ledgerEpoch: 1,
+      locationId: archived.id,
+      code: archived.code,
+      name: archived.name,
+      archived: true,
+    });
+    const user = userEvent.setup();
+    installWindowStorage(true);
+    const element = () => (
+      <DialogStackProvider>
+        <InventoryManagement
+          items={[]}
+          locations={inventory.listLocations(true) as unknown as Location[]}
+          ledgerEpoch={1}
+          admin={true}
+          onRefresh={onRefresh}
+          showToast={showToast}
+          registerLeaveGuard={registerLeaveGuard}
+        />
+      </DialogStackProvider>
+    );
+    const rendered = render(element());
+    onRefresh.mockImplementation(async () => {
+      rendered.rerender(element());
+    });
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const locationId = Number(String(input).split('/').at(-1));
+      return respond(
+        inventory.saveInventoryLocation({ ...JSON.parse(String(init!.body)), locationId }),
+      );
+    });
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+    expect(screen.getByRole('columnheader', { name: 'ברירת מחדל' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'מיקום ברירת מחדל: Old warehouse' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    for (const location of [a, b]) {
+      await user.click(screen.getByRole('radio', { name: `מיקום ברירת מחדל: ${location.name}` }));
+      await waitFor(() =>
+        expect(
+          screen.getByRole('radio', { name: `מיקום ברירת מחדל: ${location.name}` }),
+        ).toHaveProperty('checked', true),
+      );
+      expect(
+        screen.getAllByRole('radio').filter((radio) => (radio as HTMLInputElement).checked),
+      ).toHaveLength(1);
+      expect(inventory.defaultLocationId()).toBe(location.id);
+    }
+    const row = screen.getByRole('radio', { name: `מיקום ברירת מחדל: ${b.name}` }).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'עריכה' }));
+    const dialog = screen.getByRole('dialog', { name: 'עריכת מיקום' });
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם' }), ' renamed');
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]!.body))).not.toHaveProperty('isDefault');
+    expect(inventory.defaultLocationId()).toBe(b.id);
+    rendered.unmount();
+    render(element());
+    await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+    expect(
+      screen.getByRole('radio', { name: 'מיקום ברירת מחדל: Warehouse B renamed' }),
+    ).toHaveProperty('checked', true);
+  } finally {
+    onRefresh.mockImplementation(async () => undefined);
+    db.close();
+  }
+});
+
+it('keeps the default unchanged when table selection is rejected', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    respond({ error: { code: 'not_found', message: 'Location removed' } }, 404),
+  );
+  const locations = [
+    { id: 1, code: 'a', name: 'A', archived: false, isDefault: true },
+    { id: 2, code: 'b', name: 'B', archived: false, isDefault: false },
+  ];
+  view(true, [], locations);
+  await userEvent.click(screen.getByRole('button', { name: 'מיקומים' }));
+  await userEvent.click(screen.getByRole('radio', { name: 'מיקום ברירת מחדל: B' }));
+  await waitFor(() =>
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'error'),
+  );
+  expect(screen.getByRole('radio', { name: 'מיקום ברירת מחדל: A' })).toHaveProperty(
+    'checked',
+    true,
+  );
+  expect(screen.getByRole('radio', { name: 'מיקום ברירת מחדל: B' })).toHaveProperty(
+    'checked',
+    false,
+  );
+});
+
+it('locks table radios during uncertainty and retries the exact selection before refresh-only recovery', async () => {
+  const fetch = vi.spyOn(globalThis, 'fetch');
+  fetch.mockRejectedValueOnce(new Error('response lost'));
+  fetch.mockResolvedValueOnce(respond({}));
+  onRefresh.mockRejectedValueOnce(new Error('refresh failed'));
+  const user = userEvent.setup();
+  view(
+    true,
+    [],
+    [
+      { id: 1, code: 'a', name: 'A', archived: false, isDefault: true },
+      { id: 2, code: 'b', name: 'B', archived: false, isDefault: false },
+    ],
+  );
+  await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+  await user.click(screen.getByRole('radio', { name: 'מיקום ברירת מחדל: B' }));
+  expect(screen.getAllByRole('radio').every((radio) => (radio as HTMLInputElement).disabled)).toBe(
+    true,
+  );
+  await user.click(await screen.findByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
+  await screen.findByRole('button', { name: 'רענון נתונים' });
+  expect(fetch.mock.calls[1]![1]!.body).toBe(fetch.mock.calls[0]![1]!.body);
+  expect(screen.getAllByRole('radio').every((radio) => (radio as HTMLInputElement).disabled)).toBe(
+    true,
+  );
+  await user.click(screen.getByRole('button', { name: 'רענון נתונים' }));
+  await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it('does not allow an operator to select a shared default', async () => {
+  const fetch = vi.spyOn(globalThis, 'fetch');
+  view(false);
+  await userEvent.click(screen.getByRole('button', { name: 'מיקומים' }));
+  const radio = screen.getByRole('radio');
+  expect(radio).toHaveProperty('disabled', true);
+  await userEvent.click(radio);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('disables default selection until the ledger epoch is known', async () => {
+  view(true, [], undefined, false, null);
+  await userEvent.click(screen.getByRole('button', { name: 'מיקומים' }));
+  expect(screen.getByRole('radio')).toHaveProperty('disabled', true);
+});
+
+it('supports keyboard default selection and blocks another change while saving', async () => {
+  let finish!: (response: Response) => void;
+  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(
+    () =>
+      new Promise<Response>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const user = userEvent.setup();
+  view(
+    true,
+    [],
+    [
+      { id: 1, code: 'a', name: 'A', archived: false, isDefault: true },
+      { id: 2, code: 'b', name: 'B', archived: false, isDefault: false },
+    ],
+  );
+  await user.click(screen.getByRole('button', { name: 'מיקומים' }));
+  screen.getByRole('radio', { name: 'מיקום ברירת מחדל: B' }).focus();
+  await user.keyboard('[Space]');
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toMatchObject({
+    code: 'b',
+    isDefault: true,
+  });
+  expect(screen.getAllByRole('radio').every((radio) => (radio as HTMLInputElement).disabled)).toBe(
+    true,
+  );
+  await user.click(screen.getByRole('radio', { name: 'מיקום ברירת מחדל: A' }));
+  expect(fetch).toHaveBeenCalledOnce();
+  finish(respond({}));
+  await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce());
 });

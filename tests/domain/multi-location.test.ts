@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -462,5 +463,126 @@ describe('multi-location invariants', () => {
       }),
     ).toThrow(expect.objectContaining({ code: 'invalid_workbook' }));
     expect(transfer.snapshot()).toEqual(before);
+  });
+});
+
+it.each(['reset', 'recovery'] as const)(
+  '%s workbook round-trips a named default and explicit absence',
+  async (mode) => {
+    const { db, service, b } = fixture();
+    const transfer = new InventoryTransferService(db);
+    for (const selected of [true, false]) {
+      service.saveInventoryLocation({
+        key: randomUUID(),
+        ledgerEpoch: 1,
+        locationId: b.id,
+        code: b.code,
+        name: b.name,
+        isDefault: selected,
+      });
+      const bytes = await exportWorkbook(transfer.snapshot());
+      const target = fixture();
+      // Ensure an absent imported default clears an existing destination default.
+      target.service.saveInventoryLocation({
+        key: randomUUID(),
+        ledgerEpoch: 1,
+        locationId: target.a.id,
+        code: target.a.code,
+        name: target.a.name,
+        isDefault: true,
+      });
+      const destination = new InventoryTransferService(target.db);
+      if (mode === 'reset') destination.replaceWithReset(await parseResetWorkbook(bytes));
+      else destination.replaceWithRecovery(await parseRecoveryWorkbook(bytes));
+      const defaults = target.service.listLocations().filter((location) => location.isDefault);
+      expect(defaults.map((location) => location.name)).toEqual(selected ? ['B'] : []);
+      expect(target.service.defaultLocationId()).toBe(selected ? defaults[0]!.id : null);
+      if (selected) expect(defaults[0]!.id).not.toBe(b.id);
+    }
+  },
+);
+
+it.each(['reset', 'recovery'] as const)(
+  '%s rejects multiple or archived defaults before mutation',
+  async (mode) => {
+    const { db, service } = fixture();
+    const b = service.createLocation('empty-default', 'Empty default');
+    service.saveInventoryLocation({
+      key: randomUUID(),
+      ledgerEpoch: 1,
+      locationId: b.id,
+      code: b.code,
+      name: b.name,
+      isDefault: true,
+    });
+    const transfer = new InventoryTransferService(db);
+    const before = transfer.snapshot();
+    const bytes = await exportWorkbook(before);
+    for (const invalid of ['multiple', 'archived'] as const) {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+      );
+      const sheet = workbook.getWorksheet(
+        mode === 'reset' ? 'Reset Locations' : 'Recovery Locations',
+      )!;
+      sheet.eachRow((row, index) => {
+        if (index === 1) return;
+        if (invalid === 'multiple') row.getCell(3).value = true;
+        else if (row.getCell(3).value === true) row.getCell(2).value = true;
+      });
+      const corrupted = Buffer.from(await workbook.xlsx.writeBuffer());
+      await expect(
+        mode === 'reset' ? parseResetWorkbook(corrupted) : parseRecoveryWorkbook(corrupted),
+      ).rejects.toThrow(/default/i);
+      expect(transfer.snapshot()).toEqual(before);
+    }
+  },
+);
+
+it.each(['missing', 'archived'] as const)(
+  'rejects a persisted %s default reference on reload',
+  (invalid) => {
+    const directory = mkdtempSync(join(tmpdir(), 'invalid-default-'));
+    const path = join(directory, 'inventory.sqlite');
+    const { db, b } = fixture(path);
+    db.exec('PRAGMA foreign_keys=OFF');
+    db.prepare('UPDATE inventory_settings SET default_location_id=?').run(
+      invalid === 'missing' ? 99999 : b.id,
+    );
+    if (invalid === 'archived') db.prepare('UPDATE locations SET archived=1 WHERE id=?').run(b.id);
+    db.close();
+    databases.splice(databases.indexOf(db), 1);
+    try {
+      expect(() => openDatabase(path)).toThrow(/default location/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+it('rejects a default selection from stale metadata without undoing a concurrent rename', () => {
+  const { service, b } = fixture();
+  service.saveInventoryLocation({
+    key: randomUUID(),
+    ledgerEpoch: 1,
+    locationId: b.id,
+    code: 'new-code',
+    name: 'New name',
+  });
+  expect(() =>
+    service.saveInventoryLocation({
+      key: randomUUID(),
+      ledgerEpoch: 1,
+      locationId: b.id,
+      code: b.code,
+      name: b.name,
+      isDefault: true,
+    }),
+  ).toThrow(expect.objectContaining({ code: 'confirmation_changed' }));
+  expect(service.defaultLocationId()).toBeNull();
+  expect(service.listLocations().find((location) => location.id === b.id)).toMatchObject({
+    name: 'New name',
+    code: 'new-code',
   });
 });

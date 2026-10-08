@@ -92,7 +92,6 @@ export function InventoryManagement({
   const [locationEdit, setLocationEdit] = useState<Location | 'new' | null>(null);
   const [locationName, setLocationName] = useState('');
   const [locationCode, setLocationCode] = useState('');
-  const [locationDefault, setLocationDefault] = useState(false);
   const [locationQuery, setLocationQuery] = useState('');
   const [dirty, setDirty] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
@@ -524,7 +523,6 @@ export function InventoryManagement({
     setLocationEdit(location);
     setLocationName(location === 'new' ? '' : location.name);
     setLocationCode(location === 'new' ? '' : location.code);
-    setLocationDefault(location !== 'new' && location.isDefault);
     setDirty(false);
   }
   function saveLocation(event: FormEvent<HTMLFormElement>) {
@@ -547,8 +545,31 @@ export function InventoryManagement({
         ledgerEpoch: editorEpoch,
         name: locationName.trim(),
         code: locationCode.trim(),
-        isDefault: locationDefault,
       },
+    });
+  }
+  function selectDefaultLocation(location: Location) {
+    if (
+      !admin ||
+      ledgerEpoch === null ||
+      location.archived ||
+      location.isDefault ||
+      pendingRef.current ||
+      unresolved ||
+      refreshRecovery
+    )
+      return;
+    void send({
+      path: `/inventory/locations/${location.id}`,
+      method: 'PUT',
+      body: {
+        key: crypto.randomUUID(),
+        ledgerEpoch,
+        name: location.name,
+        code: location.code,
+        isDefault: true,
+      },
+      description: `בחירת מיקום ברירת מחדל: ${location.name}`,
     });
   }
   function restoreLocation(location: Location) {
@@ -892,6 +913,7 @@ export function InventoryManagement({
                 <th scope="col">שם</th>
                 <th scope="col">קוד</th>
                 <th scope="col">מצב</th>
+                <th scope="col">ברירת מחדל</th>
                 <th scope="col">פעולות</th>
               </tr>
             </thead>
@@ -901,6 +923,25 @@ export function InventoryManagement({
                   <td>{location.name}</td>
                   <td>{location.code}</td>
                   <td>{location.archived ? 'בארכיון' : 'פעיל'}</td>
+                  <td>
+                    <label className="checkbox-label">
+                      <input
+                        type="radio"
+                        name="default-location"
+                        aria-label={`מיקום ברירת מחדל: ${location.name}`}
+                        checked={location.isDefault}
+                        disabled={
+                          !admin ||
+                          location.archived ||
+                          ledgerEpoch === null ||
+                          pending ||
+                          !!unresolved ||
+                          refreshRecovery
+                        }
+                        onChange={() => selectDefaultLocation(location)}
+                      />
+                    </label>
+                  </td>
                   <td>
                     <div className="inventory-location-actions">
                       <button
@@ -1486,18 +1527,6 @@ export function InventoryManagement({
           )}
           {editor.kind === 'locations' && locationEdit && (
             <form className="dialog-form" onSubmit={saveLocation}>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={locationDefault}
-                  disabled={lockedDraft}
-                  onChange={(event) => {
-                    setLocationDefault(event.target.checked);
-                    setDirty(true);
-                  }}
-                />
-                <span>מיקום ברירת מחדל</span>
-              </label>
               <label className="field-label">
                 שם
                 <input

@@ -339,9 +339,18 @@ export class InventoryService {
           .prepare('INSERT INTO locations(id,code,name) VALUES (?,?,?)')
           .run(locationId, code, name);
       } else {
-        const current = this.db.prepare('SELECT id FROM locations WHERE id=?').get(locationId) as
-          Row | undefined;
+        const current = this.db
+          .prepare('SELECT id,code,name FROM locations WHERE id=?')
+          .get(locationId) as Row | undefined;
         if (!current) throw new DomainError('not_found', 'Location not found', 404);
+        // Default selection uses the table's captured metadata as confirmation,
+        // never as authority to overwrite a concurrent rename.
+        if (input.isDefault !== undefined && (current.code !== code || current.name !== name))
+          throw new DomainError(
+            'confirmation_changed',
+            'פרטי המיקום השתנו; יש לרענן את הנתונים ולבחור שוב',
+            409,
+          );
         if (input.archived) {
           const blockers = this.db
             .prepare(
