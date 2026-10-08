@@ -1,6 +1,7 @@
+import type { ResetOptions } from '../domain/import-export';
 import { useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { Dialog } from './Dialog';
-import { RECOVERY_IMPORT_CONFIRMATION, RESET_IMPORT_CONFIRMATION } from './import-confirmation';
+import { RECOVERY_IMPORT_CONFIRMATION, resetImportConfirmation } from './import-confirmation';
 
 export type { Item } from '../domain/types';
 
@@ -21,9 +22,11 @@ export type Location = {
   isDefault: boolean;
 };
 
-export type ActiveDialog =
-  | { kind: 'edit-borrower'; borrower: Borrower }
-  | { kind: 'import'; mode: 'reset' | 'recovery'; file: File };
+type ImportSelection =
+  | { kind: 'import'; mode: 'reset'; file: File; options: ResetOptions }
+  | { kind: 'import'; mode: 'recovery'; file: File };
+
+export type ActiveDialog = { kind: 'edit-borrower'; borrower: Borrower } | ImportSelection;
 
 export type DialogSubmission =
   | {
@@ -34,7 +37,7 @@ export type DialogSubmission =
       phoneNumber: string;
       campDepartment: string;
     }
-  | { kind: 'import'; mode: 'reset' | 'recovery'; file: File };
+  | ImportSelection;
 
 function value(form: FormData, name: string): string {
   return String(form.get(name) ?? '');
@@ -213,13 +216,17 @@ function ImportDialog({
   onSubmit,
   returnFocusRef,
   fallbackFocusRef,
-}: DialogProps<{ kind: 'import'; mode: 'reset' | 'recovery'; file: File }>) {
+}: DialogProps<ImportSelection>) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const reset = active.mode === 'reset';
   return (
     <Dialog
       title={reset ? 'אישור ייבוא איפוס' : 'אישור שחזור מלא'}
-      description={reset ? RESET_IMPORT_CONFIRMATION : RECOVERY_IMPORT_CONFIRMATION}
+      description={
+        active.mode === 'reset'
+          ? resetImportConfirmation(active.options)
+          : RECOVERY_IMPORT_CONFIRMATION
+      }
       level="root"
       role="alertdialog"
       variant="destructive"
@@ -239,7 +246,7 @@ function ImportDialog({
           type="button"
           className="danger-button"
           onClick={() => {
-            if (!pending) void onSubmit({ kind: 'import', mode: active.mode, file: active.file });
+            if (!pending) void onSubmit(active);
           }}
         >
           {reset ? 'מחק וייבא' : 'החלף ושחזר'}

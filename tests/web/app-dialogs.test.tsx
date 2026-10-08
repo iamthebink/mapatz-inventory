@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/web/App';
+import { resetImportScope, resetImportConfirmation } from '../../src/web/import-confirmation';
 import { DialogStackProvider } from '../../src/web/Dialog';
 import type { Item } from '../../src/web/InventoryDialogs';
 import type { Borrower } from '../../src/domain/types.js';
@@ -48,6 +49,7 @@ function setup(
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input);
     const method = init?.method ?? 'GET';
+    if (path === '/api/workbook/reset') return response(null, 204);
     if (method !== 'GET')
       requests.push({
         path,
@@ -172,6 +174,54 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('inventory management in App', () => {
+  it.each([false, true])(
+    'freezes reviewed reset scope %s and cancels without submitting',
+    async (resetBorrowers) => {
+      const { user } = setup();
+      await user.click(await screen.findByRole('tab', { name: /ייבוא וייצוא/ }));
+      const checkbox = (await screen.findByRole('checkbox', {
+        name: 'איפוס שואלים גם',
+      })) as HTMLInputElement;
+      expect(screen.getAllByRole('checkbox', { name: 'איפוס שואלים גם' })).toHaveLength(1);
+      expect(checkbox.checked).toBe(false);
+      expect(document.getElementById(checkbox.getAttribute('aria-describedby')!)?.textContent).toBe(
+        resetImportScope({ resetBorrowers: false }),
+      );
+      expect(screen.getByText(resetImportScope({ resetBorrowers: false }))).toBeTruthy();
+      if (resetBorrowers) await user.click(checkbox);
+      expect(screen.getByText(resetImportScope({ resetBorrowers }))).toBeTruthy();
+      const input = screen.getByLabelText('בחירת קובץ לייבוא איפוס') as HTMLInputElement;
+      const file = new File(['workbook'], 'reset.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      await user.upload(input, file);
+      let dialog = screen.getByRole('alertdialog', { name: 'אישור ייבוא איפוס' });
+      expect(within(dialog).getByText(resetImportConfirmation({ resetBorrowers }))).toBeTruthy();
+      await user.click(within(dialog).getByRole('button', { name: 'ביטול' }));
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([path]) => path === '/api/workbook/reset'),
+      ).toHaveLength(0);
+      expect(input.value).toBe('');
+      await user.upload(input, file);
+      dialog = screen.getByRole('alertdialog', { name: 'אישור ייבוא איפוס' });
+      // Simulate a background state change: submission must still use the reviewed selection.
+      fireEvent.click(checkbox);
+      expect(checkbox.checked).toBe(!resetBorrowers);
+      expect(within(dialog).getByText(resetImportConfirmation({ resetBorrowers }))).toBeTruthy();
+      await user.click(within(dialog).getByRole('button', { name: 'מחק וייבא' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      const calls = vi.mocked(fetch).mock.calls.filter(([path]) => path === '/api/workbook/reset');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![1]).toMatchObject({
+        body: file,
+        headers: {
+          'x-mapatz-reset-borrowers': String(resetBorrowers),
+          'x-mapatz-confirmed': 'true',
+        },
+      });
+    },
+  );
+
   it.each([false, true])(
     'respects dialog focus restoration over the desk (disabled: %s)',
     async (disabled) => {

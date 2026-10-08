@@ -100,6 +100,10 @@ export interface ResetItem {
   total: number;
 }
 
+export interface ResetOptions {
+  resetBorrowers: boolean;
+}
+
 export interface ResetPayload {
   locations: TransferLocation[];
   items: ResetItem[];
@@ -697,7 +701,9 @@ export class InventoryTransferService {
     };
   }
 
-  replaceWithReset(payload: ResetPayload): void {
+  replaceWithReset(payload: ResetPayload, options: ResetOptions = { resetBorrowers: false }): void {
+    if (typeof options.resetBorrowers !== 'boolean')
+      throw new DomainError('invalid_request', 'Invalid reset borrower scope');
     payload = validateResetPayload(payload);
     transaction(this.db, () => {
       const previousHighWater = getIdentityHighWater(this.db);
@@ -716,7 +722,7 @@ export class InventoryTransferService {
       this.db.prepare('DELETE FROM inventory_baselines').run();
       this.db.prepare('DELETE FROM item_aliases').run();
       this.db.prepare('DELETE FROM items').run();
-      this.db.prepare('DELETE FROM borrowers').run();
+      if (options.resetBorrowers) this.db.prepare('DELETE FROM borrowers').run();
       this.db.prepare('DELETE FROM locations').run();
 
       const locationIds = new Map<string, number>();

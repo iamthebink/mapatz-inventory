@@ -1,3 +1,4 @@
+import type { ResetOptions } from '../domain/import-export';
 import {
   isBorrowerValidationEvidence,
   isValidBorrowerProfile,
@@ -642,12 +643,13 @@ export async function downloadInventoryWorkbook(
   URL.revokeObjectURL(url);
 }
 
-export async function importResetWorkbook(file: File): Promise<void> {
+export async function importResetWorkbook(file: File, options: ResetOptions): Promise<void> {
   const response = await fetch('/api/workbook/reset', {
     method: 'POST',
     headers: {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'x-mapatz-confirmed': 'true',
+      'x-mapatz-reset-borrowers': String(options.resetBorrowers),
     },
     body: file,
   });

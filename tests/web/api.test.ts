@@ -6,6 +6,7 @@ import type {
 } from '../../src/contracts/borrower-workflow.js';
 import {
   api,
+  importResetWorkbook,
   ApiError,
   classifyBorrowerCreateResponse,
   classifyBorrowerOperationResponse,
@@ -647,5 +648,24 @@ it.each(['fullName', 'playaName', 'phoneNumber', 'campDepartment'] as const)(
       ),
     );
     await expect(fetchBorrowerSearch('Or')).rejects.toMatchObject({ code: 'invalid_server_truth' });
+  },
+);
+
+it.each([false, true])(
+  'transmits explicit reset borrower scope %s with the workbook and confirmation',
+  async (resetBorrowers) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const file = new File(['workbook'], 'reset.xlsx');
+    await importResetWorkbook(file, { resetBorrowers });
+    expect(fetchMock).toHaveBeenCalledWith('/api/workbook/reset', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'x-mapatz-confirmed': 'true',
+        'x-mapatz-reset-borrowers': String(resetBorrowers),
+      },
+      body: file,
+    });
   },
 );

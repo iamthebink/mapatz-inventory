@@ -1,3 +1,4 @@
+import { resetImportScope } from './import-confirmation';
 import {
   borrowerIdentity,
   borrowerMatchKind,
@@ -173,6 +174,7 @@ export function App() {
   const [managementTab, setManagementTab] = useState<ManagementTab>('inventory');
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
+  const [resetBorrowers, setResetBorrowers] = useState(false);
   const [resetAllocationOpen, setResetAllocationOpen] = useState(false);
   const [resetAllocationLocation, setResetAllocationLocation] = useState('');
   const [borrowerImportOpen, setBorrowerImportOpen] = useState(false);
@@ -823,7 +825,7 @@ export function App() {
           submission.mode === 'reset' ? 'ייבוא איפוס שנתי' : 'שחזור מלא',
           () =>
             submission.mode === 'reset'
-              ? importResetWorkbook(submission.file)
+              ? importResetWorkbook(submission.file, submission.options)
               : importRecoveryWorkbook(submission.file),
         );
         clearImportInput(submission.mode);
@@ -1320,6 +1322,19 @@ export function App() {
                         </p>
                       </div>
                     </div>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={resetBorrowers}
+                        aria-describedby="reset-import-scope"
+                        disabled={!adminActionsEnabled || pending}
+                        onChange={(event) => setResetBorrowers(event.target.checked)}
+                      />
+                      איפוס שואלים גם
+                    </label>
+                    <p id="reset-import-scope" className="my-3 text-xs text-ctp-subtext">
+                      {resetImportScope({ resetBorrowers })}
+                    </p>
                     <input
                       ref={resetFileRef}
                       aria-label="בחירת קובץ לייבוא איפוס"
@@ -1331,7 +1346,7 @@ export function App() {
                         const file = event.target.files?.[0];
                         if (file)
                           openInventoryDialog(
-                            { kind: 'import', mode: 'reset', file },
+                            { kind: 'import', mode: 'reset', file, options: { resetBorrowers } },
                             managementTabRef.current,
                             resetFileRef.current,
                           );

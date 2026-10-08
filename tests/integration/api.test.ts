@@ -338,6 +338,75 @@ describe('inventory API permission and edge-case matrix', () => {
     });
     db.close();
   });
+  it.each([undefined, 'false', 'true'])(
+    'validates reset scope and preserves transaction integrity with scope %s',
+    async (scope) => {
+      const { db, inventory, agent } = fixture();
+      try {
+        const transfer = new InventoryTransferService(db);
+        const locationId = Number(inventory.listLocations()[0]!.id);
+        const item = inventory.createItem({
+          name: 'Existing stock',
+          kind: 'non_consumable',
+          locationId,
+        });
+        inventory.addStock(item.id, 8, '', locationId);
+        const borrower = inventory.createBorrower({
+          fullName: 'Existing borrower',
+          playaName: 'Desert',
+          phoneNumber: '123',
+          campDepartment: 'Kitchen',
+        });
+        inventory.checkout(item.id, borrower.id, 2, '', locationId);
+        const before = transfer.snapshot();
+        const workbook = await exportWorkbook(before, before.locations[0]!.name);
+        const send = (bytes = workbook, option = scope) => {
+          const req = agent
+            .post('/api/workbook/reset')
+            .set('content-type', WORKBOOK_CONTRACT.mimeType)
+            .set('x-mapatz-confirmed', 'true');
+          if (option !== undefined) req.set('x-mapatz-reset-borrowers', option);
+          return req.send(bytes);
+        };
+        await send().expect(403);
+        await role(agent, 'admin', 'admin-pass').expect(200);
+        for (const invalid of ['1', '0', 'TRUE', 'null', 'false,true', '']) {
+          await send(workbook, invalid)
+            .expect(400)
+            .expect(({ body }) => expect(body.error).toBe('invalid_request'));
+          expect(transfer.snapshot()).toEqual(before);
+        }
+        await send(Buffer.from('not a workbook')).expect(400);
+        expect(transfer.snapshot()).toEqual(before);
+        const tables = [
+          'inventory_settings',
+          'inventory_replacement_guard',
+          'state_clock',
+          'inventory_command_receipts',
+          'idempotency_receipts',
+        ];
+        const metadata = () => tables.map((table) => db.prepare(`SELECT * FROM ${table}`).all());
+        const metadataBefore = metadata();
+        db.exec(`CREATE TRIGGER fail_api_reset BEFORE INSERT ON inventory_baselines
+          BEGIN SELECT RAISE(ABORT, 'api reset failure'); END;`);
+        await send().expect(500);
+        expect(transfer.snapshot()).toEqual(before);
+        expect(metadata()).toEqual(metadataBefore);
+        db.exec('DROP TRIGGER fail_api_reset');
+        await send().expect(204);
+        const after = transfer.snapshot();
+        expect(after.borrowers).toEqual(scope === 'true' ? [] : before.borrowers);
+        expect(after.loans).toEqual([]);
+        expect(
+          after.events.every((event) => event.borrowerId === null && event.relatedEventId === null),
+        ).toBe(true);
+        expect(after.items[0]).toMatchObject({ available: 8, borrowed: 0, lost: 0 });
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it('requires reset confirmation, validates before mutation, and preserves destination credentials', async () => {
     const { db, inventory, agent } = fixture();
     const oldItem = inventory.createItem({

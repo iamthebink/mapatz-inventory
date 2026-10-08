@@ -79,6 +79,12 @@ The standalone **Windows installer upgrade** workflow and its pinned-baseline fi
 
 The dedicated `playwright.upgrade.config.ts` suite is restricted to clean GitHub-hosted Windows runners because it installs software and uses the normal Windows profile. The ordinary `test:desktop` suite excludes it.
 
+## Reset import scope
+
+`POST /api/workbook/reset` requires admin access, an XLSX body, and `x-mapatz-confirmed: true`. Borrower profiles are preserved by default, including IDs, profile fields, archive status, and creation time. The optional `x-mapatz-reset-borrowers` header accepts only the literal strings `true` or `false`: absent or `false` preserves profiles; `true` deletes them. Any other value is rejected before workbook parsing or mutation. The UI's unchecked “איפוס שואלים גם” checkbox selects this scope and freezes it with the selected file for confirmation.
+
+Both scopes atomically replace items, aliases, locations, and stock from Reset sheets; clear all loans (including outstanding and lost balances), damaged balances, old inventory events, and reporting baselines; rebuild opening stock and baselines; clear command receipts while preserving identity high-water safety; rotate the ledger epoch; and reset the state revision. Credentials and radio fleet/custody survive; the default location follows the workbook. Reset sheets never load borrowers. Independent borrower import retains its existing merge/replacement behavior, and full recovery is unchanged.
+
 ## Lost equipment and recovery workbook contract
 
 Lost equipment becomes available only through the borrower desk’s found-and-returned operation. Direct restoration to outstanding is rejected by both the domain and `POST /api/lost` (`lost` must be `true`). The operator command retains its `lostCredit` parts and allocates them to lost checkouts in creation-time / event-ID order within one atomic save.

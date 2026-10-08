@@ -725,6 +725,159 @@ describe('inventory XLSX workbook', () => {
       items: [{ name: 'Edited in Numbers', total: 17 }],
     });
   });
+  it.each([false, true])('resets stock atomically with resetBorrowers=%s', (resetBorrowers) => {
+    const db = openDatabase(':memory:');
+    try {
+      const inventory = new InventoryService(db);
+      const transfers = new InventoryTransferService(db);
+      const locationId = Number(inventory.listLocations()[0]!.id);
+      const item = inventory.createItem({
+        name: 'Old equipment',
+        kind: 'non_consumable',
+        locationId,
+      });
+      inventory.addStock(item.id, 9, '', locationId);
+      const borrower = inventory.createBorrower({
+        fullName: 'Active profile',
+        playaName: 'Desert name',
+        phoneNumber: '050123',
+        campDepartment: 'Kitchen',
+      });
+      const archived = inventory.createBorrower({
+        fullName: 'Archived profile',
+        playaName: '',
+        phoneNumber: '',
+        campDepartment: '',
+      });
+      db.prepare('UPDATE borrowers SET archived=1,created_at=? WHERE id=?').run(
+        '2025-01-02 03:04:05',
+        archived.id,
+      );
+      const checkout = inventory.checkout(item.id, borrower.id, 5, 'loan', locationId);
+      inventory.markLost(checkout, 2, true, 'lost');
+      inventory.returnCheckout(checkout, 0, 1, 'damaged return', locationId);
+      expect(transfers.snapshot().items[0]!.damaged).toBe(1);
+      const staleCommand = {
+        key: 'old-location-command',
+        ledgerEpoch: inventory.inventoryEpoch(),
+        code: 'old',
+        name: 'Old location',
+      };
+      inventory.saveInventoryLocation(staleCommand);
+      db.prepare(
+        `INSERT INTO idempotency_receipts(
+        key,command_kind,ledger_epoch,contract_version,request_hash,outcome,subject_id,result_json
+      ) VALUES (?,?,?,?,?,?,?,?)`,
+      ).run(
+        'old-borrower-command',
+        'borrower_operation',
+        1,
+        1,
+        'hash',
+        'committed',
+        borrower.id,
+        '{}',
+      );
+      const tables = [
+        'borrowers',
+        'loan_state',
+        'inventory_events',
+        'items',
+        'item_aliases',
+        'locations',
+        'item_state',
+        'item_location_balances',
+        'inventory_baselines',
+        'idempotency_receipts',
+        'inventory_command_receipts',
+        'inventory_replacement_guard',
+        'state_clock',
+        'inventory_settings',
+        'credentials',
+        'radio_fleet',
+        'radios',
+      ];
+      const capture = () =>
+        Object.fromEntries(
+          tables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
+        );
+      const before = capture();
+      const highWater = transfers.snapshot().identityHighWater;
+      const payload: ResetPayload = {
+        locations: [{ name: 'New location', archived: false, isDefault: true }],
+        items: [
+          {
+            name: 'New stock',
+            kind: 'consumable',
+            location: 'New location',
+            aliases: ['Alias'],
+            lotSize: null,
+            archived: false,
+            total: 6,
+          },
+        ],
+      };
+      db.exec(`CREATE TRIGGER reject_scoped_reset BEFORE INSERT ON inventory_baselines
+        BEGIN SELECT RAISE(ABORT, 'scoped reset failure'); END;`);
+      expect(() => transfers.replaceWithReset(payload, { resetBorrowers })).toThrow(
+        'scoped reset failure',
+      );
+      expect(capture()).toEqual(before);
+      db.exec('DROP TRIGGER reject_scoped_reset');
+      // Omission exercises the domain default; true exercises the explicit opt-in.
+      transfers.replaceWithReset(payload, resetBorrowers ? { resetBorrowers } : undefined);
+      expect(db.prepare('SELECT * FROM borrowers').all()).toEqual(
+        resetBorrowers ? [] : before.borrowers,
+      );
+      const after = transfers.snapshot();
+      expect(after.loans).toEqual([]);
+      expect(after.events).toHaveLength(1);
+      expect(after.events[0]).toMatchObject({
+        kind: 'stock_added',
+        borrowerId: null,
+        relatedEventId: null,
+        quantity: 6,
+      });
+      expect(after.events[0]!.id).toBeGreaterThanOrEqual(highWater.nextEventId);
+      expect(after.items).toHaveLength(1);
+      expect(after.items[0]).toMatchObject({
+        name: 'New stock',
+        aliases: ['Alias'],
+        available: 6,
+        borrowed: 0,
+        damaged: 0,
+        lost: 0,
+        startingStock: 6,
+      });
+      expect(after.stateRevision).toBe(0);
+      expect(after.identityHighWater.nextBorrowerId).toBe(highWater.nextBorrowerId);
+      expect(db.prepare('SELECT * FROM idempotency_receipts').all()).toEqual([]);
+      expect(
+        db
+          .prepare(
+            "SELECT key FROM inventory_command_receipts WHERE key!='system:identity-high-water'",
+          )
+          .all(),
+      ).toEqual([]);
+      expect(inventory.inventoryEpoch()).toBe(staleCommand.ledgerEpoch + 1);
+      expect(() => inventory.saveInventoryLocation(staleCommand)).toThrow('המלאי הוחלף');
+      for (const table of ['credentials', 'radio_fleet', 'radios'])
+        expect(capture()[table]).toEqual(before[table]);
+      expect(inventory.listLocations().find((location) => location.isDefault)?.name).toBe(
+        'New location',
+      );
+      const newBorrower = inventory.createBorrower({
+        fullName: 'Next profile',
+        playaName: '',
+        phoneNumber: '',
+        campDepartment: '',
+      });
+      expect(newBorrower.id).toBeGreaterThan(archived.id);
+    } finally {
+      db.close();
+    }
+  });
+
   it('atomically replaces only inventory-domain data and rolls back a commit failure', () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);

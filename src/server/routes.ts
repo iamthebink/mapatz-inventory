@@ -845,7 +845,12 @@ export function apiRouter(
     route(async (req, res) => {
       if (!Buffer.isBuffer(req.body) || req.body.length === 0)
         throw new DomainError('invalid_workbook', 'יש לבחור קובץ XLSX לייבוא');
-      transfers.replaceWithReset(await parseResetWorkbook(req.body));
+      const resetBorrowers = req.header('x-mapatz-reset-borrowers');
+      if (resetBorrowers !== undefined && resetBorrowers !== 'true' && resetBorrowers !== 'false')
+        throw new DomainError('invalid_request', 'Invalid reset borrower scope');
+      transfers.replaceWithReset(await parseResetWorkbook(req.body), {
+        resetBorrowers: resetBorrowers === 'true',
+      });
       res.status(204).end();
     }),
   );
