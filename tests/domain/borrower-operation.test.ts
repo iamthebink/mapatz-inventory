@@ -35,6 +35,78 @@ function transactionCountingDatabase(db: InventoryDatabase) {
   return { wrapped, beginCount: () => beginCount };
 }
 describe('atomic borrower commands', () => {
+  it.each([0, 1, 3])('accounts for a three-unit return with %i damaged', (damaged) => {
+    const { inventory, borrower } = fixture();
+    const item = inventory.createItem({
+      name: 'Mixed return',
+      kind: 'non_consumable',
+      locationId: 1,
+    });
+    inventory.addStock(item.id, 5, '', 1);
+    inventory.checkout(item.id, borrower.id, 4, '', 1);
+    expect(
+      inventory.commitBorrowerOperations(borrower.id, key(900), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          { itemId: item.id, return: [{ usable: 3 - damaged, damaged, note: '', locationId: 1 }] },
+        ],
+      }),
+    ).toMatchObject({ outcome: 'committed' });
+    const snapshot = inventory.getBorrowerDeskSnapshot(borrower.id);
+    expect(snapshot.inventory).toContainEqual(
+      expect.objectContaining({ id: item.id, available: 4 - damaged, damaged }),
+    );
+    expect(snapshot.holdings).toContainEqual(
+      expect.objectContaining({ itemId: item.id, returnable: 1 }),
+    );
+  });
+  it.each([
+    { usable: -1, damaged: 4 },
+    { usable: 2, damaged: -1 },
+    { usable: 1.5, damaged: 1 },
+    { usable: 2, damaged: 0.5 },
+    { usable: 0, damaged: 0 },
+    { usable: Number.MAX_SAFE_INTEGER, damaged: 1 },
+  ])('rejects invalid return components before any write: %j', (part) => {
+    const { db, inventory, borrower } = fixture();
+    const item = inventory.createItem({
+      name: 'Invalid return',
+      kind: 'non_consumable',
+      locationId: 1,
+    });
+    inventory.addStock(item.id, 5, '', 1);
+    inventory.checkout(item.id, borrower.id, 4, '', 1);
+    const before = db.prepare('SELECT * FROM inventory_events').all();
+    expect(() =>
+      inventory.commitBorrowerOperations(borrower.id, key(901), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: item.id, return: [{ ...part, note: '', locationId: 1 }] }],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_quantity' }));
+    expect(db.prepare('SELECT * FROM inventory_events').all()).toEqual(before);
+  });
+
+  it('rejects overflow across individually valid return parts', () => {
+    const { db, inventory, borrower } = fixture();
+    expect(() =>
+      inventory.commitBorrowerOperations(borrower.id, key(902), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: 1,
+            return: [
+              { usable: Number.MAX_SAFE_INTEGER, damaged: 0, note: '', locationId: 1 },
+              { usable: 0, damaged: 1, note: '', locationId: 1 },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_quantity' }));
+    expect(db.prepare('SELECT * FROM inventory_events').all()).toEqual([]);
+  });
   it('commits mixed loans and anonymous issuance once, and rejects a stale mixed request atomically', () => {
     const { db, inventory, borrower } = fixture();
     const pliers = inventory.createItem({

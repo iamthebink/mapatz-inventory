@@ -1073,6 +1073,27 @@ export class InventoryService {
     idempotencyKey: string,
     request: BorrowerOperationRequest,
   ): BorrowerOperationResult | CommandProtocolError {
+    for (const group of request.items) {
+      let returned = 0;
+      for (const part of group.return ?? []) {
+        const total = part.usable + part.damaged;
+        if (
+          !Number.isSafeInteger(part.usable) ||
+          part.usable < 0 ||
+          !Number.isSafeInteger(part.damaged) ||
+          part.damaged < 0 ||
+          !Number.isSafeInteger(total) ||
+          total <= 0
+        )
+          throw new DomainError(
+            'invalid_quantity',
+            'Return quantities must be non-negative whole numbers with a positive total',
+          );
+        returned += total;
+        if (!Number.isSafeInteger(returned))
+          throw new DomainError('invalid_quantity', 'Return total must be a safe integer');
+      }
+    }
     return transaction(this.db, () => {
       const epochError = this.requireCommandEpoch(request.ledgerEpoch, idempotencyKey);
       if (epochError) return epochError;

@@ -555,6 +555,115 @@ describe('borrower desk workflow', () => {
       expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'ציוד אצל השואל' })),
     );
   });
+  it.each([
+    { total: 3, damage: null, uncheck: false, expected: 0 },
+    { total: 3, damage: '1', uncheck: false, expected: 1 },
+    { total: 3, damage: '3', uncheck: false, expected: 3 },
+    { total: 3, damage: '0', uncheck: false, expected: 0 },
+    { total: 3, damage: '4', uncheck: true, expected: 0 },
+    { total: 3, damage: '1', uncheck: false, expected: 1, remove: true },
+  ])(
+    'stages and reviews one return row: %j',
+    async ({ total, damage, uncheck, expected, remove }) => {
+      let submitted: Record<string, unknown> | undefined;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const path = String(input);
+          if (path.startsWith('/api/borrowers/search'))
+            return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+          if (path === '/api/borrowers/7/desk-snapshot')
+            return json({ ...desk(), holdings: [{ itemId: 11, returnable: 4, lost: 0 }] });
+          if (path === '/api/borrowers/7/operations') {
+            submitted = JSON.parse(String(init?.body));
+            return json({ error: { code: 'validation_error', message: 'test rejection' } }, 400);
+          }
+          throw new Error(`Unexpected ${path}`);
+        }),
+      );
+      render(
+        <DialogStackProvider>
+          <BorrowerWorkflow showToast={vi.fn()} />
+        </DialogStackProvider>,
+      );
+      await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+      await activateBorrowerAction();
+      await userEvent.click(await screen.findByRole('button', { name: 'החזרת ציוד' }));
+      const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+      fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות' }), {
+        target: { value: String(total) },
+      });
+      if (damage !== null) {
+        const checkbox = within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+        await userEvent.click(checkbox);
+        fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
+          target: { value: damage },
+        });
+        if (uncheck) await userEvent.click(checkbox);
+      }
+      await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+      const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
+      expect(pending.querySelectorAll('.borrower-pending-row')).toHaveLength(1);
+      expect(pending.textContent).toContain(`הוחזרו ${total}, ${expected} פגומים`);
+      expectHeldQuantity(1);
+      if (remove) {
+        await userEvent.click(within(pending).getByRole('button', { name: 'ביטול פעולה' }));
+        expect(pending.querySelectorAll('.borrower-pending-row')).toHaveLength(0);
+        expectHeldQuantity(4);
+        return;
+      }
+      await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
+      const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
+      expect(review.querySelectorAll('.borrower-review-row')).toHaveLength(1);
+      expect(review.textContent).toContain(`הוחזרו ${total}, ${expected} פגומים`);
+      await userEvent.click(within(review).getByRole('button', { name: 'אישור ושמירה' }));
+      await waitFor(() => expect(submitted).toBeDefined());
+      expect(submitted).toMatchObject({
+        items: [
+          { itemId: 11, return: [{ usable: total - expected, damaged: expected, locationId: 1 }] },
+        ],
+      });
+    },
+  );
+  it.each(['4', '-1', '1.5', ''])(
+    'rejects invalid damage %j and excessive total before staging',
+    async (damage) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string | URL | Request) => {
+          const path = String(input);
+          return path.startsWith('/api/borrowers/search')
+            ? json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] })
+            : json(desk());
+        }),
+      );
+      render(
+        <DialogStackProvider>
+          <BorrowerWorkflow showToast={vi.fn()} />
+        </DialogStackProvider>,
+      );
+      await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+      await activateBorrowerAction();
+      await userEvent.click(await screen.findByRole('button', { name: 'החזרת ציוד' }));
+      const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+      const total = within(dialog).getByRole('spinbutton', { name: 'כמות' });
+      fireEvent.change(total, { target: { value: '3' } });
+      await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+      expect(within(dialog).getByRole('alert').textContent).toContain('בין 1 ל־2');
+      fireEvent.change(total, { target: { value: '2' } });
+      await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+      fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
+        target: { value: damage },
+      });
+      await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
+      expect(within(dialog).getByRole('alert').textContent).toContain('כמות פגומה שלמה');
+      const invalidDamage = within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' });
+      expect(invalidDamage.getAttribute('aria-invalid')).toBe('true');
+      expect(document.activeElement).toBe(invalidDamage);
+      expect(total.getAttribute('aria-invalid')).toBe('false');
+      expect(document.querySelectorAll('.borrower-pending-row')).toHaveLength(0);
+    },
+  );
   it('uses the existing quantity modal and resets damaged condition on each return', async () => {
     vi.stubGlobal(
       'fetch',
@@ -596,9 +705,14 @@ describe('borrower desk workflow', () => {
     await userEvent.clear(quantityInput);
     await userEvent.type(quantityInput, '1');
     await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+    if (within(dialog).queryByRole('spinbutton', { name: 'כמות פגומה' })) {
+      fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
+        target: { value: '1' },
+      });
+    }
     await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText(/החזרת ציוד · פגום · 1/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 1, 1 פגומים/)).toBeTruthy();
   });
   it('stages damaged lost recovery separately from usable returns and shows both in review', async () => {
     vi.stubGlobal(
@@ -632,11 +746,11 @@ describe('borrower desk workflow', () => {
     await userEvent.click(damaged);
     await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText(/החזרת ציוד · 2/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 2, 0 פגומים/)).toBeTruthy();
     expect(within(pending).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
-    expect(within(review).getByText(/החזרת ציוד · 2/)).toBeTruthy();
+    expect(within(review).getByText(/הוחזרו 2, 0 פגומים/)).toBeTruthy();
     expect(within(review).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
   });
   it('rejects a borrow above remaining stock without adding it to the transaction', async () => {
@@ -704,6 +818,11 @@ describe('borrower desk workflow', () => {
     await userEvent.clear(damagedQuantity);
     await userEvent.type(damagedQuantity, '1');
     await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+    if (within(dialog).queryByRole('spinbutton', { name: 'כמות פגומה' })) {
+      fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
+        target: { value: '1' },
+      });
+    }
     await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
     await userEvent.click(search);
     option = screen.getByRole('option', { name: /אוהל/ });
@@ -759,13 +878,13 @@ describe('borrower desk workflow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
     const rows = within(review)
-      .getAllByText(/החזרת ציוד · [12]/)
+      .getAllByText(/הוחזרו [12], 0 פגומים/)
       .map((label) => label.closest('.borrower-review-row'));
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.textContent).toContain('החזרת ציוד · 1');
+    expect(rows[0]?.textContent).toContain('הוחזרו 1, 0 פגומים');
     expect(rows[0]?.textContent).toContain('first returned unit');
     expect(rows[0]?.textContent).not.toContain('next returned units');
-    expect(rows[1]?.textContent).toContain('החזרת ציוד · 2');
+    expect(rows[1]?.textContent).toContain('הוחזרו 2, 0 פגומים');
     expect(rows[1]?.textContent).toContain('next returned units');
     expect(rows[1]?.textContent).not.toContain('first returned unit');
   });
@@ -1079,7 +1198,7 @@ describe('borrower desk workflow', () => {
     }) as HTMLInputElement;
     expect(returnQuantity.value).toBe('2');
     await userEvent.click(within(returnDialog).getByRole('button', { name: 'אישור' }));
-    expect(within(pendingTransactions).getByText(/החזרת ציוד · 2/)).toBeTruthy();
+    expect(within(pendingTransactions).getByText(/הוחזרו 2, 0 פגומים/)).toBeTruthy();
     expect(within(pendingTransactions).queryByText(/[+−-]\d/)).toBeNull();
     await waitFor(() => expect(document.activeElement?.tagName).toBe('BUTTON'));
     expect(screen.getAllByRole('button', { name: 'ביטול פעולה' })).toHaveLength(2);
@@ -1322,7 +1441,7 @@ describe('borrower desk workflow', () => {
     await confirmSave();
     expect(await screen.findAllByText('יתרת הציוד אצל השואל השתנתה')).not.toHaveLength(0);
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText(/החזרת ציוד · 1/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 1, 0 פגומים/)).toBeTruthy();
     const lossRow = within(pending)
       .getByText(/סמן כאבוד · 1/)
       .closest('.borrower-pending-row')!;
@@ -1331,7 +1450,7 @@ describe('borrower desk workflow', () => {
       within(lossRow as HTMLElement).getByRole('button', { name: 'ביטול פעולה' }),
     );
     expect(within(pending).queryByText(/סמן כאבוד · 1/)).toBeNull();
-    expect(within(pending).getByText(/החזרת ציוד · 1/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 1, 0 פגומים/)).toBeTruthy();
     await confirmSave();
     await waitFor(() => expect(postedBodies).toHaveLength(2));
     expect(postedBodies[0]?.items[0]).toMatchObject({

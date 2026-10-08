@@ -57,7 +57,7 @@ export function BorrowerOperationalTables({
   onReturn: (itemId: number, condition: ReturnCondition) => void;
   onRollback: (
     itemId: number,
-    direction: 'borrow' | 'issue' | 'usable' | 'damaged' | 'lost' | 'lostCredit',
+    direction: 'borrow' | 'issue' | 'return' | 'lost' | 'lostCredit',
     condition?: 'usable' | 'damaged',
   ) => void;
   returnButtonRefs?: RefObject<Map<string, HTMLButtonElement>>;
@@ -126,7 +126,7 @@ export function BorrowerOperationalTables({
             {state.staged.flatMap((group) => {
               const projection = projectItem(state, group.itemId);
               const rows: Array<{
-                direction: 'borrow' | 'issue' | 'usable' | 'damaged' | 'lost' | 'lostCredit';
+                direction: 'borrow' | 'issue' | 'return' | 'lost' | 'lostCredit';
                 condition?: 'usable' | 'damaged';
                 quantity: number;
                 label: string;
@@ -146,25 +146,17 @@ export function BorrowerOperationalTables({
                   label: 'ניפוק · מתכלה',
                   notes: (group.issue ?? []).map((part) => attribution(part, part.quantity)),
                 });
-              const usable = group.return.reduce((total, part) => total + part.usable, 0);
-              if (usable > 0)
+              const total = group.return.reduce((sum, part) => sum + part.usable + part.damaged, 0);
+              const damaged = group.return.reduce((sum, part) => sum + part.damaged, 0);
+              if (total > 0)
                 rows.push({
-                  direction: 'usable',
-                  quantity: usable,
-                  label: actions.usable.label,
-                  notes: group.return
-                    .filter((part) => part.usable > 0)
-                    .map((part) => attribution(part, part.usable)),
-                });
-              const damaged = group.return.reduce((total, part) => total + part.damaged, 0);
-              if (damaged > 0)
-                rows.push({
-                  direction: 'damaged',
-                  quantity: damaged,
-                  label: 'החזרת ציוד · פגום',
-                  notes: group.return
-                    .filter((part) => part.damaged > 0)
-                    .map((part) => attribution(part, part.damaged)),
+                  direction: 'return',
+                  quantity: total,
+                  label: `הוחזרו ${total}, ${damaged} פגומים`,
+                  notes: group.return.map(
+                    (part) =>
+                      `${attribution(part, part.usable + part.damaged)} · ${part.damaged} פגומים`,
+                  ),
                 });
               if ((group.lost ?? []).length)
                 rows.push({
@@ -202,10 +194,12 @@ export function BorrowerOperationalTables({
                       />
                     </div>
                     <p>
-                      {(row.direction === 'damaged' || row.condition === 'damaged') && (
+                      {((row.direction === 'return' && damaged > 0) ||
+                        row.condition === 'damaged') && (
                         <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
                       )}{' '}
-                      {row.label} · {Math.abs(row.quantity)}
+                      {row.label}
+                      {row.direction !== 'return' && ` · ${Math.abs(row.quantity)}`}
                     </p>
                     {row.notes.filter(Boolean).map((note, index) => (
                       <p className="borrower-pending-note" key={index}>

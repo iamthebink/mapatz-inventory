@@ -286,6 +286,24 @@ describe('borrower operation state', () => {
     expect(state.staged[0]?.borrow).toHaveLength(2);
     expect(state.staged[0]?.return).toEqual([]);
   });
+  it('edits mixed return quantities and removes both components together', () => {
+    let state = operationReducer(createOperationState(7, snapshot()), {
+      type: 'stage-return',
+      itemId: 11,
+      part: { usable: 2, damaged: 1, note: 'mixed', locationId: 1 },
+    });
+    state = operationReducer(state, {
+      type: 'update-return',
+      itemId: 11,
+      index: 0,
+      part: { usable: 1, damaged: 2, note: 'edited', locationId: 1 },
+    });
+    expect(operationRequest(state).items[0]?.return).toEqual([
+      { usable: 1, damaged: 2, note: 'edited', locationId: 1 },
+    ]);
+    state = operationReducer(state, { type: 'rollback', itemId: 11, direction: 'return' });
+    expect(state.staged).toEqual([]);
+  });
   it('updates ordered borrow parts and ignores fractional indexes without an announcement', () => {
     let state = operationReducer(createOperationState(7, snapshot()), {
       type: 'stage-borrow',

@@ -74,7 +74,9 @@ type QuantityDialog = {
   quantity: string;
   note: string;
   error: string;
+  errorTarget?: 'damaged';
   damaged: boolean;
+  damagedQuantity: string;
 };
 
 const titleForFeedback: Record<WorkflowFeedback['kind'], string> = {
@@ -123,8 +125,14 @@ function OperationReview({ state }: { state: OperationState }) {
   return (
     <div className="borrower-review-list">
       {state.staged.flatMap((group) => {
-        const rows: Array<{ label: string; quantity: number; note: string; locationId?: number }> =
-          [];
+        const rows: Array<{
+          label: string;
+          quantity: number;
+          note: string;
+          locationId?: number;
+          returned?: boolean;
+          damaged?: number;
+        }> = [];
         for (const part of group.borrow)
           rows.push({
             label: 'השאלה',
@@ -139,22 +147,15 @@ function OperationReview({ state }: { state: OperationState }) {
             note: part.note,
             locationId: part.locationId,
           });
-        for (const part of group.return) {
-          if (part.usable > 0)
-            rows.push({
-              label: 'החזרת ציוד',
-              quantity: part.usable,
-              note: part.note,
-              locationId: part.locationId,
-            });
-          if (part.damaged > 0)
-            rows.push({
-              label: 'החזרת ציוד · פגום',
-              quantity: part.damaged,
-              note: part.note,
-              locationId: part.locationId,
-            });
-        }
+        for (const part of group.return)
+          rows.push({
+            label: `הוחזרו ${part.usable + part.damaged}, ${part.damaged} פגומים`,
+            returned: true,
+            damaged: part.damaged,
+            quantity: part.usable + part.damaged,
+            note: part.note,
+            locationId: part.locationId,
+          });
         for (const part of group.lost ?? [])
           rows.push({ label: 'סמן כאבוד', quantity: part.quantity, note: part.note });
         for (const part of group.lostCredit ?? [])
@@ -168,10 +169,11 @@ function OperationReview({ state }: { state: OperationState }) {
           <div className="borrower-review-row" key={`${group.itemId}-${index}`}>
             <strong>{inventory.get(group.itemId) ?? 'פריט לא זמין'}</strong>
             <span>
-              {row.label.includes('פגום') && (
+              {((row.damaged ?? 0) > 0 || row.label.includes('פגום')) && (
                 <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
               )}{' '}
-              {row.label} · {row.quantity}
+              {row.label}
+              {!row.returned && ` · ${row.quantity}`}
               {row.locationId &&
                 ` · ${state.snapshot.locations.find((l) => l.id === row.locationId)?.name ?? 'מיקום לא זמין'}`}
             </span>
@@ -221,6 +223,7 @@ export const BorrowerWorkflow = forwardRef<
   const itemSearchRef = useRef<HTMLInputElement>(null);
   const cardOverviewRef = useRef<HTMLParagraphElement>(null);
   const quantityErrorRef = useRef<HTMLInputElement>(null);
+  const damagedQuantityRef = useRef<HTMLInputElement>(null);
   const reviewConfirmRef = useRef<HTMLButtonElement>(null);
   const createFirstRef = useRef<HTMLInputElement>(null);
   const discardCreationKeepRef = useRef<HTMLButtonElement>(null);
@@ -759,9 +762,27 @@ export const BorrowerWorkflow = forwardRef<
       if (!Number.isSafeInteger(amount) || amount < 1 || amount > max) {
         setQuantity({
           ...quantity,
+          errorTarget: undefined,
           error: `ניתן ${quantity.condition === 'mark-lost' ? 'לסמן כאבוד' : 'להחזיר'} בין 1 ל־${max} יחידות`,
         });
         queueMicrotask(() => quantityErrorRef.current?.focus());
+        return;
+      }
+      const damagedAmount = quantity.damaged ? Number(quantity.damagedQuantity) : 0;
+      if (
+        quantity.condition !== 'found' &&
+        quantity.condition !== 'mark-lost' &&
+        (!Number.isSafeInteger(damagedAmount) ||
+          damagedAmount < 0 ||
+          damagedAmount > amount ||
+          (quantity.damaged && quantity.damagedQuantity.trim() === ''))
+      ) {
+        setQuantity({
+          ...quantity,
+          error: `יש להזין כמות פגומה שלמה בין 0 ל־${amount}`,
+          errorTarget: 'damaged',
+        });
+        queueMicrotask(() => damagedQuantityRef.current?.focus());
         return;
       }
       setOperation(
@@ -789,8 +810,8 @@ export const BorrowerWorkflow = forwardRef<
                   itemId: quantity.itemId,
                   part: {
                     locationId: Number(quantity.locationId),
-                    usable: quantity.damaged ? 0 : amount,
-                    damaged: quantity.damaged ? amount : 0,
+                    usable: amount - damagedAmount,
+                    damaged: damagedAmount,
                     note: quantity.note,
                   },
                 },
@@ -1363,7 +1384,12 @@ export const BorrowerWorkflow = forwardRef<
         className="input-field"
         value={quantity.locationId}
         onChange={(event) =>
-          setQuantity({ ...quantity, locationId: event.target.value, error: '' })
+          setQuantity({
+            ...quantity,
+            locationId: event.target.value,
+            error: '',
+            errorTarget: undefined,
+          })
         }
       >
         <option value="">בחרו מיקום</option>
@@ -1636,6 +1662,7 @@ export const BorrowerWorkflow = forwardRef<
                       note: '',
                       error: '',
                       damaged: false,
+                      damagedQuantity: '0',
                     });
                     setItemSearch('');
                   }}
@@ -1711,6 +1738,7 @@ export const BorrowerWorkflow = forwardRef<
                     note: '',
                     error: '',
                     damaged: false,
+                    damagedQuantity: '0',
                   });
                 }}
                 onRollback={(itemId, direction, condition) => {
@@ -1820,10 +1848,15 @@ export const BorrowerWorkflow = forwardRef<
                         )
                       : undefined
                 }
-                aria-invalid={Boolean(quantity.error)}
+                aria-invalid={Boolean(quantity.error) && quantity.errorTarget !== 'damaged'}
                 value={quantity.quantity}
                 onChange={(event) =>
-                  setQuantity({ ...quantity, quantity: event.target.value, error: '' })
+                  setQuantity({
+                    ...quantity,
+                    quantity: event.target.value,
+                    error: '',
+                    errorTarget: undefined,
+                  })
                 }
               />
             </label>
@@ -1832,12 +1865,49 @@ export const BorrowerWorkflow = forwardRef<
                 <input
                   type="checkbox"
                   checked={quantity.damaged}
-                  onChange={(event) => setQuantity({ ...quantity, damaged: event.target.checked })}
+                  onChange={(event) =>
+                    setQuantity({
+                      ...quantity,
+                      damaged: event.target.checked,
+                      error: '',
+                      errorTarget: undefined,
+                    })
+                  }
                 />
                 <TriangleAlert className="size-4" aria-hidden="true" />
                 הציוד הוחזר פגום
               </label>
             )}
+            {quantity.direction === 'return' &&
+              quantity.condition === 'usable' &&
+              quantity.damaged && (
+                <label className="field-label">
+                  כמות פגומה
+                  <input
+                    className="input-field"
+                    type="number"
+                    min="0"
+                    max={quantity.quantity}
+                    step="1"
+                    ref={damagedQuantityRef}
+                    aria-invalid={Boolean(quantity.error) && quantity.errorTarget === 'damaged'}
+                    aria-describedby={
+                      quantity.errorTarget === 'damaged' && quantity.error
+                        ? 'quantity-validation-error'
+                        : undefined
+                    }
+                    value={quantity.damagedQuantity}
+                    onChange={(event) =>
+                      setQuantity({
+                        ...quantity,
+                        damagedQuantity: event.target.value,
+                        error: '',
+                        errorTarget: undefined,
+                      })
+                    }
+                  />
+                </label>
+              )}
             <label className="field-label">
               הערה (רשות)
               <input
@@ -1849,7 +1919,7 @@ export const BorrowerWorkflow = forwardRef<
             </label>
             {quantity.direction === 'return' && quantityLocationField}
             {quantity.error && (
-              <p className="field-error" role="alert">
+              <p id="quantity-validation-error" className="field-error" role="alert">
                 {quantity.error}
               </p>
             )}

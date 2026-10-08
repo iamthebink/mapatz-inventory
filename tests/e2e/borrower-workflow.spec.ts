@@ -62,29 +62,28 @@ async function stageBorrow(page: Page, itemName: string, quantity = '1') {
   await expectQuantityDialogItem(dialog, itemName);
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
   await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
-  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(quantity);
+  await dialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill(quantity);
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(1);
 }
 async function stageReturn(page: Page, itemName: string, usable = '1', damaged = '0') {
   const holdings = page.getByRole('heading', { name: /ציוד אצל השואל/ }).locator('..');
   const itemRow = holdings.getByRole('rowheader', { name: itemName, exact: true }).locator('..');
-  // Keyboard activation avoids the open item-search list overlapping this row after a borrow.
-  for (const [quantity, isDamaged] of [
-    [usable, false],
-    [damaged, true],
-  ] as const) {
-    if (Number(quantity) <= 0) continue;
-    await itemRow.getByRole('button', { name: 'החזרת ציוד' }).press('Enter');
-    const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
-    await expectQuantityDialogItem(dialog, itemName);
-    const checkbox = dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
-    await expect(checkbox).not.toBeChecked();
-    if (isDamaged) await checkbox.check();
-    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill(quantity);
-    await dialog.getByRole('button', { name: 'אישור' }).click();
-    await expect(dialog).toBeHidden();
+  // Keyboard activation avoids an open item-search list overlapping this row.
+  await itemRow.getByRole('button', { name: 'החזרת ציוד' }).press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
+  await expectQuantityDialogItem(dialog, itemName);
+  await dialog
+    .getByRole('spinbutton', { name: 'כמות', exact: true })
+    .fill(String(Number(usable) + Number(damaged)));
+  const checkbox = dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+  await expect(checkbox).not.toBeChecked();
+  if (Number(damaged) > 0) {
+    await checkbox.check();
+    await dialog.getByRole('spinbutton', { name: 'כמות פגומה', exact: true }).fill(damaged);
   }
+  await dialog.getByRole('button', { name: 'אישור' }).click();
+  await expect(dialog).toBeHidden();
 }
 async function confirmSave(page: Page) {
   await page.getByRole('button', { name: 'אישור פעולות' }).click();
@@ -218,8 +217,8 @@ test('commits a mixed reviewed save exactly once with deterministic ledger order
   await stageReturn(page, seed.item.name, '1', '1');
   const staged = page.getByRole('heading', { name: 'פעולות ממתינות' }).locator('..');
   await expect(staged.getByText('השאלה')).toBeVisible();
-  await expect(staged.getByText(/החזרת ציוד · 1/)).toBeVisible();
-  await expect(staged.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
+  await expect(staged.getByText(/הוחזרו 2, 1 פגומים/)).toBeVisible();
+  await expect(staged.locator('.borrower-pending-row')).toHaveCount(2);
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
   await expect(borrowerSearch).toBeFocused();
@@ -271,7 +270,7 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
   await search.press('Enter');
   const quantity = page.getByRole('dialog', { name: 'ניפוק ציוד מתכלה' });
   await expectQuantityDialogItem(quantity, seed.consumable.name);
-  await quantity.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await quantity.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('2');
   await quantity.getByRole('textbox', { name: 'הערה (רשות)' }).fill('card supplies');
   await quantity.getByRole('button', { name: 'אישור' }).click();
   await expect(page.getByText('ניפוק · מתכלה · 2')).toBeVisible();
@@ -313,7 +312,7 @@ test('issues consumables anonymously from a mixed borrower handover and a desk b
   await secondRow.getByRole('button', { name: 'ניפוק' }).click();
   const restage = page.getByRole('dialog', { name: `ניפוק ${seed.secondConsumable.name}` });
   await expectQuantityDialogItem(restage, seed.secondConsumable.name);
-  await restage.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await restage.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('2');
   await restage.getByRole('button', { name: 'הוספה לעסקה' }).click();
   await expect(desk.getByText('סך יחידות לניפוק').locator('..')).toContainText('3');
   await desk.getByRole('button', { name: 'בדיקה ואישור הניפוק' }).click();
@@ -397,12 +396,12 @@ test('stages loss and dependent found return from the borrower card with keyboar
   await markLost.press('Enter');
   const lossDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
   await expectQuantityDialogItem(lossDialog, seed.item.name);
-  await expect(lossDialog.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
-  await expect(lossDialog.getByRole('spinbutton', { name: 'כמות' })).toHaveValue('1');
+  await expect(lossDialog.getByRole('spinbutton', { name: 'כמות', exact: true })).toBeFocused();
+  await expect(lossDialog.getByRole('spinbutton', { name: 'כמות', exact: true })).toHaveValue('1');
   await expect(lossDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).toHaveCount(0);
   await expect(page.locator('.borrower-inline-editor')).toHaveCount(0);
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
-  await lossDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await lossDialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('2');
   await lossDialog.getByRole('button', { name: 'אישור' }).click();
   const lostSummary = page.locator('.lost-equipment-section summary');
   await expect(lostSummary).toContainText('(2)');
@@ -430,7 +429,7 @@ test('stages loss and dependent found return from the borrower card with keyboar
   const foundDialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
   await expectQuantityDialogItem(foundDialog, seed.item.name);
   await expect(foundDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
-  await foundDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await foundDialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('2');
   await foundDialog.getByRole('button', { name: 'אישור' }).click();
   const pending = page.locator('.staged-section');
   const lossRow = pending.locator('.borrower-pending-row').filter({ hasText: 'סמן כאבוד' });
@@ -497,18 +496,19 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   const heldDialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
   await expectEmphasizedQuantityDialogItem(heldDialog, seed.item.name);
   await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
-  await expect(heldDialog.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  await expect(heldDialog.getByRole('spinbutton', { name: 'כמות', exact: true })).toBeFocused();
   const heldCheckbox = heldDialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
   await expect(heldCheckbox).not.toBeChecked();
-  await heldDialog.getByRole('spinbutton', { name: 'כמות' }).fill('0');
+  await heldDialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('0');
   await heldDialog.getByRole('button', { name: 'אישור' }).click();
   await expect(heldDialog.getByRole('alert')).toBeVisible();
   await expect(page.getByText('אין פעולות ממתינות')).toBeVisible();
-  await heldDialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await heldDialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('1');
   await heldCheckbox.check();
+  await heldDialog.getByRole('spinbutton', { name: 'כמות פגומה', exact: true }).fill('1');
   await heldDialog.getByRole('button', { name: 'אישור' }).click();
   await expect(heldDialog).toBeHidden();
-  await expect(page.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
+  await expect(page.getByText(/הוחזרו 1, 1 פגומים/)).toBeVisible();
   await returnButton.click();
   await expect(heldCheckbox).not.toBeChecked();
   await heldDialog.getByRole('button', { name: 'ביטול' }).click();
@@ -545,7 +545,7 @@ test('uses resettable damaged condition for held and lost returns at 320px', asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole('button', { name: 'אישור פעולות' }).press('Enter');
   const review = page.getByRole('dialog', { name: 'אישור פעולות' });
-  await expect(review.getByText(/החזרת ציוד · פגום · 1/)).toBeVisible();
+  await expect(review.getByText(/הוחזרו 1, 1 פגומים/)).toBeVisible();
   await expect(review.getByText(/נמצא והוחזר · פגום · 1/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await review.getByRole('button', { name: 'אישור ושמירה' }).press('Enter');
@@ -735,7 +735,7 @@ test('restores focus to the return trigger after dismissing its quantity modal',
   const returnButton = page.getByRole('button', { name: 'החזרת ציוד' });
   await returnButton.click();
   const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
-  await expect(dialog.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  await expect(dialog.getByRole('spinbutton', { name: 'כמות', exact: true })).toBeFocused();
   await dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' }).check();
   await dialog.getByRole('button', { name: 'ביטול' }).click();
   await expect(dialog).toBeHidden();
@@ -793,7 +793,7 @@ test('renders a fresh conflict, keeps staging, and requires a new deliberate sav
   await expect(
     page.getByText('אין די מלאי זמין').locator('xpath=ancestor::*[@data-compatible="false"]'),
   ).toBeFocused();
-  await expect(page.getByText(/החזרת ציוד ·/)).toBeVisible();
+  await expect(page.getByText(/הוחזרו/)).toBeVisible();
   await expect(
     page.locator('.staged-section .borrower-pending-row').filter({ hasText: 'השאלה' }),
   ).toHaveCount(2);
@@ -930,7 +930,7 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   });
   const pending = page.locator('.staged-section');
   await expect(pending.getByText('יתרת הציוד אצל השואל השתנתה')).toHaveCount(2);
-  await expect(pending.getByText(/החזרת ציוד · 1/)).toBeVisible();
+  await expect(pending.getByText(/הוחזרו 1, 0 פגומים/)).toBeVisible();
   await expect(pending.getByText(/סמן כאבוד · 1/)).toBeVisible();
   await expect(pending.getByText(/השאלה · 1/)).toBeVisible();
   await expect(pending.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
@@ -1231,7 +1231,7 @@ test('traps keyboard focus at both dialog depths and guards dirty Escape with on
   const child = page.getByRole('dialog', { name: 'הוספת השאלה' });
   const childClose = child.locator('.dialog-close');
   const childConfirm = child.getByRole('button', { name: 'אישור' });
-  await expect(child.getByRole('spinbutton', { name: 'כמות' })).toBeFocused();
+  await expect(child.getByRole('spinbutton', { name: 'כמות', exact: true })).toBeFocused();
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   await childClose.focus();
   await page.keyboard.press('Shift+Tab');
@@ -1272,7 +1272,7 @@ test('marks lost equipment at the borrower desk without offering reversal', asyn
   await holding.getByRole('button', { name: 'אפשרויות נוספות' }).click();
   await page.getByRole('menuitem', { name: 'סמן כאבוד' }).click();
   const dialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
-  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await dialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('1');
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
@@ -1298,7 +1298,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   await holding.getByRole('button', { name: 'אפשרויות נוספות' }).click();
   await page.getByRole('menuitem', { name: 'סמן כאבוד' }).click();
   const lostDialog = page.getByRole('dialog', { name: 'סמן כאבוד' });
-  await lostDialog.getByRole('spinbutton', { name: 'כמות' }).fill('2');
+  await lostDialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('2');
   await lostDialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
   await openSeededCard(page, seed.borrower.playaName);
@@ -1311,7 +1311,7 @@ test('operator credits a previously lost unit back to usable inventory', async (
   const dialog = page.getByRole('dialog', { name: 'נמצא והוחזר' });
   await expectQuantityDialogItem(dialog, seed.item.name);
   await expect(dialog.getByRole('checkbox', { name: 'הציוד הוחזר פגום' })).not.toBeChecked();
-  await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+  await dialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('1');
   await dialog.getByRole('button', { name: 'אישור' }).click();
   await confirmSave(page);
   await expect(page.locator('.toast')).toContainText('השמירה הושלמה');
@@ -1510,11 +1510,13 @@ test.describe('item notes on touch workflows', () => {
     await indicator.tap();
     await expect(indicator).toHaveAttribute('aria-expanded', 'false');
     await expect(dialog.locator('.item-note-popover')).toBeHidden();
-    const quantityBefore = await dialog.getByRole('spinbutton', { name: 'כמות' }).boundingBox();
+    const quantityBefore = await dialog
+      .getByRole('spinbutton', { name: 'כמות', exact: true })
+      .boundingBox();
     await indicator.tap();
-    expect(await dialog.getByRole('spinbutton', { name: 'כמות' }).boundingBox()).toEqual(
-      quantityBefore,
-    );
+    expect(
+      await dialog.getByRole('spinbutton', { name: 'כמות', exact: true }).boundingBox(),
+    ).toEqual(quantityBefore);
     await expect(dialog.locator('.item-note-text')).toHaveText(note);
     const text = dialog.locator('.item-note-text');
     expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -1532,7 +1534,7 @@ test.describe('item notes on touch workflows', () => {
       )
       .toBe(true);
     await expect(dialog.getByRole('button', { name: 'סגירת הערות' })).toBeInViewport();
-    const quantityControl = dialog.getByRole('spinbutton', { name: 'כמות' });
+    const quantityControl = dialog.getByRole('spinbutton', { name: 'כמות', exact: true });
     await dialog.getByRole('button', { name: 'סגירת הערות' }).tap();
     await expect(indicator).toBeFocused();
     await quantityControl.scrollIntoViewIfNeeded();
@@ -1571,7 +1573,7 @@ test.describe('item notes on touch workflows', () => {
       .filter({ has: page.getByLabel(`הערות לפריט ${seed.item.name}`) });
     await holding.getByRole('button', { name: 'החזרת ציוד' }).press('Enter');
     dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
-    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+    await dialog.getByRole('spinbutton', { name: 'כמות', exact: true }).fill('1');
     const returnIndicator = dialog.getByLabel(`הערות לפריט ${seed.item.name}`);
     await returnIndicator.focus();
     await returnIndicator.press('Space');
@@ -1584,7 +1586,7 @@ test.describe('item notes on touch workflows', () => {
     await expect(dialog.locator('.item-note-text')).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(dialog.locator('.item-note-popover')).toBeHidden();
-    await expect(dialog.getByRole('spinbutton', { name: 'כמות' })).toHaveValue('1');
+    await expect(dialog.getByRole('spinbutton', { name: 'כמות', exact: true })).toHaveValue('1');
     await expect(dialog.getByRole('textbox', { name: 'הערה (רשות)' })).toHaveValue('');
     await dialog.getByRole('textbox', { name: 'הערה (רשות)' }).fill('Return event reason');
     await dialog.getByRole('button', { name: 'אישור', exact: true }).click();

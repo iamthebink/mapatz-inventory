@@ -144,7 +144,7 @@ describe('frozen attempt validation and storage', () => {
     mixed.body.items = [
       {
         itemId: 11,
-        return: [{ usable: 1, damaged: 0, note: 'desk', locationId: 1 }],
+        return: [{ usable: 2, damaged: 1, note: 'desk', locationId: 1 }],
         lost: [{ quantity: 2, note: 'missing' }],
         lostCredit: [{ quantity: 1, condition: 'usable', note: 'found', locationId: 1 }],
       },
