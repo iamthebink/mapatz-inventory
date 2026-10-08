@@ -83,7 +83,13 @@ export function ItemNote({ note, itemName }: { note?: string; itemName: string }
         aria-label={`הערות לפריט ${itemName}`}
         aria-expanded={open}
         aria-controls={id}
-        onClick={toggle}
+        popoverTarget={id}
+        onClick={(event) => {
+          // Associate the trigger with the popover so native light dismissal does
+          // not close it before this click can toggle it.
+          event.preventDefault();
+          toggle();
+        }}
       >
         <StickyNote aria-hidden="true" className="size-4" />
         הערות

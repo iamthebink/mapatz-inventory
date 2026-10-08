@@ -1505,6 +1505,10 @@ test.describe('item notes on touch workflows', () => {
     await itemSearch.press('Enter');
     let dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
     const indicator = dialog.getByLabel(`הערות לפריט ${seed.item.name}`);
+    await indicator.tap();
+    await expect(indicator).toHaveAttribute('aria-expanded', 'true');
+    await indicator.tap();
+    await expect(indicator).toHaveAttribute('aria-expanded', 'false');
     await expect(dialog.locator('.item-note-popover')).toBeHidden();
     const quantityBefore = await dialog.getByRole('spinbutton', { name: 'כמות' }).boundingBox();
     await indicator.tap();

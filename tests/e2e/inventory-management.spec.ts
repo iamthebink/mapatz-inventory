@@ -296,6 +296,12 @@ test('item notes persist independently and disclose by keyboard across edits and
   await page.keyboard.press('Escape');
   await expect(indicator).toBeFocused();
   await expect(indicator).toHaveAttribute('aria-expanded', 'false');
+  await indicator.click();
+  await expect(indicator).toHaveAttribute('aria-expanded', 'true');
+  await indicator.click();
+  await expect(indicator).toHaveAttribute('aria-expanded', 'false');
+  await expect(indicator.locator('..').locator('.item-note-popover')).toBeHidden();
+  await expect(indicator).toBeFocused();
   const database = openLedger();
   expect(
     database
