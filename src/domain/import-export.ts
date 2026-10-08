@@ -149,7 +149,15 @@ export function consumablesUsageReport(
 ): ConsumablesUsageReportRow[] {
   const identities = new Map<number, TransferItem[]>();
   for (const item of snapshot.items)
-    if (item.kind === 'consumable')
+    if (
+      item.kind === 'consumable' ||
+      snapshot.events.some(
+        (event) =>
+          event.itemId === item.id &&
+          event.kind === 'issued' &&
+          event.id > item.baselineThroughEventId,
+      )
+    )
       identities.set(item.id, [...(identities.get(item.id) ?? []), item]);
   return [...identities.values()].map((placements) => {
     const item = placements[0]!;
@@ -349,10 +357,10 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     if (item.kind !== 'consumable' && item.lotSize != null)
       invalidWorkbook(`Recovery item ${item.id} defines a Lot Size but is not consumable`);
     if (
-      item.kind === 'consumable' &&
+      item.kind !== 'non_consumable' &&
       (item.borrowed !== 0 || item.damaged !== 0 || item.lost !== 0)
     )
-      invalidWorkbook(`Recovery consumable ${item.id} has unsupported balances`);
+      invalidWorkbook(`Recovery item ${item.id} has unsupported balances for its category`);
     if (
       item.archived &&
       (item.available !== 0 || item.borrowed !== 0 || item.damaged !== 0 || item.lost !== 0)
@@ -433,7 +441,7 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
     if (borrower && timestamp < utcTimestamp(borrower.createdAt))
       invalidWorkbook(`Recovery event ${event.id} occurs before its borrower was created`);
     if (event.kind === 'checked_out') {
-      if (item.kind !== 'non_consumable' || !borrower || event.relatedEventId != null)
+      if (!borrower || event.relatedEventId != null)
         invalidWorkbook(
           `Recovery checkout ${event.id} has invalid item, borrower, or related event`,
         );
@@ -448,8 +456,6 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
         invalidWorkbook(`Recovery event ${event.id} references a missing or mismatched checkout`);
     } else if (event.borrowerId != null || event.relatedEventId != null)
       invalidWorkbook(`Recovery event ${event.id} cannot reference a borrower or checkout`);
-    if (event.kind === 'issued' && item.kind !== 'consumable')
-      invalidWorkbook(`Recovery event ${event.id} issues an item that is not consumable`);
     if (event.kind !== 'marked_lost' && (!event.locationName || !event.locationCode))
       invalidWorkbook('Recovery physical event is missing location attribution');
     events.set(event.id, event);

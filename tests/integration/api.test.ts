@@ -47,6 +47,59 @@ function expectRecoveredState(
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
 describe('inventory API permission and edge-case matrix', () => {
+  it('accepts category through both admin edit routes and rejects an operator or a concurrent loan', async () => {
+    const { db, inventory, agent } = fixture();
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const item = inventory.createItem({ name: 'API category', kind: 'non_consumable', locationId });
+    inventory.addStock(item.id, 4, '', locationId);
+    const body = {
+      key: 'api-category-save-1',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      name: item.name,
+      kind: 'consumable',
+      aliases: [],
+      lotSize: null,
+      locationId,
+    };
+    await agent.put(`/api/inventory/items/${item.id}`).send(body).expect(403);
+    await agent
+      .put(`/api/items/${item.id}`)
+      .send({ name: item.name, kind: 'consumable' })
+      .expect(403);
+    await role(agent, 'admin', 'admin-pass');
+    await agent
+      .put(`/api/inventory/items/${item.id}`)
+      .send(body)
+      .expect(200)
+      .expect((response) => expect(response.body.kind).toBe('consumable'));
+    await agent
+      .put(`/api/items/${item.id}`)
+      .send({ name: item.name, kind: 'non_consumable', lotSize: null })
+      .expect(200);
+    const borrower = inventory.createBorrower({
+      fullName: 'Borrower',
+      playaName: '',
+      campDepartment: '',
+    });
+    inventory.checkout(item.id, borrower.id, 1, '', locationId);
+    for (const path of [`/api/inventory/items/${item.id}`, `/api/items/${item.id}`]) {
+      await agent
+        .put(path)
+        .send({ ...body, key: 'api-category-blocked', name: 'Should roll back' })
+        .expect(409)
+        .expect((response) => expect(response.body.error).toBe('active_loan'));
+    }
+    expect(inventory.listItems(item.name)[0]).toMatchObject({
+      name: item.name,
+      kind: 'non_consumable',
+      borrowed: 1,
+    });
+    await agent
+      .put(`/api/items/${item.id}`)
+      .send({ name: 'Allowed metadata', kind: 'non_consumable' })
+      .expect(200);
+    db.close();
+  });
   it('keeps password recovery unavailable in browser mode and requires the desktop token for exact recovery', async () => {
     const browser = fixture();
     await browser.agent.post('/api/password/recovery').expect(404);

@@ -526,7 +526,7 @@ export function apiRouter(
     route((req, res) => {
       res.json(
         service.saveInventoryItem({
-          ...parse(inventorySave.omit({ kind: true }), req.body),
+          ...parse(inventorySave, req.body),
           itemId: parse(id, req.params.id),
         }),
       );
@@ -638,7 +638,7 @@ export function apiRouter(
     '/items/:id',
     requireRole('admin'),
     route((req, res) => {
-      const body = parse(itemInput.omit({ kind: true }), req.body);
+      const body = parse(itemInput.extend({ kind: itemInput.shape.kind.optional() }), req.body);
       res.json(service.updateItem(parse(id, req.params.id), body));
     }),
   );

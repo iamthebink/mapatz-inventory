@@ -141,6 +141,66 @@ function expectRecoveredState(
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
 describe('complete inventory recovery', () => {
+  it.each(['damaged', 'second-placement-damaged', 'borrowed', 'lost'] as const)(
+    'rejects camp equipment with %s balances without changing the destination',
+    async (field) => {
+      const source = database('invalid-camp-source');
+      const inventory = new InventoryService(source);
+      const locationId = Number(inventory.listLocations()[0]!.id);
+      const item = inventory.createItem({ name: 'Camp item', kind: 'camp_equipment', locationId });
+      inventory.addStock(item.id, 4, '', locationId);
+      const second = inventory.createLocation('second-camp', 'Second camp placement');
+      inventory.updateItem(item.id, { name: item.name, locationId: Number(second.id) });
+      const payload = await parseRecoveryWorkbook(
+        await exportWorkbook(new InventoryTransferService(source).snapshot(), 'Main'),
+      );
+      if (field === 'second-placement-damaged') payload.items[1]!.damaged = 1;
+      else payload.items[0]![field] = 1;
+      const destination = database('invalid-camp-destination');
+      const destinationInventory = new InventoryService(destination);
+      destinationInventory.createItem({
+        name: 'Keep destination',
+        kind: 'consumable',
+        locationId: Number(destinationInventory.listLocations()[0]!.id),
+      });
+      const transfers = new InventoryTransferService(destination);
+      const before = transfers.snapshot();
+      const epoch = destinationInventory.inventoryEpoch();
+      expect(() => transfers.replaceWithRecovery(payload)).toThrow(
+        expect.objectContaining({ code: 'invalid_workbook' }),
+      );
+      expect(transfers.snapshot()).toEqual(before);
+      expect(destinationInventory.inventoryEpoch()).toBe(epoch);
+      source.close();
+      destination.close();
+    },
+  );
+  it('recovers mixed issue and closed checkout history after category changes', async () => {
+    const source = database('category-source');
+    const inventory = new InventoryService(source);
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const item = inventory.createItem({ name: 'Mixed history', kind: 'consumable', locationId });
+    inventory.addStock(item.id, 10, 'stock note', locationId);
+    inventory.issue(item.id, 2, 'issue note', locationId);
+    inventory.updateItem(item.id, { name: item.name, kind: 'non_consumable' });
+    const borrower = inventory.createBorrower({
+      fullName: 'Borrower',
+      playaName: '',
+      campDepartment: '',
+    });
+    const checkout = inventory.checkout(item.id, borrower.id, 3, '', locationId);
+    inventory.returnCheckout(checkout, 3, 0, 'return note', locationId);
+    inventory.updateItem(item.id, { name: item.name, kind: 'camp_equipment' });
+    const expected = new InventoryTransferService(source).snapshot();
+    const payload = await parseRecoveryWorkbook(await exportWorkbook(expected, 'Main'));
+    const destination = database('category-destination');
+    const transfers = new InventoryTransferService(destination);
+    transfers.replaceWithRecovery(payload);
+    expect(transferBusinessState(transfers.snapshot())).toEqual(transferBusinessState(expected));
+    destination.close();
+    source.close();
+  });
+
   it('rejects missing, invalid, duplicate, and dangling workbook item identities atomically', async () => {
     const source = sourceFixture();
     const valid = await parseRecoveryWorkbook(

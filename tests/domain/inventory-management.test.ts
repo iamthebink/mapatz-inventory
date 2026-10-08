@@ -6,6 +6,183 @@ const setup = () => {
   return { db, inventory: new InventoryService(db) };
 };
 describe('inventory management commands', () => {
+  it.each(
+    (['consumable', 'non_consumable', 'camp_equipment'] as const).flatMap((from) =>
+      (['consumable', 'non_consumable', 'camp_equipment'] as const)
+        .filter((to) => to !== from)
+        .flatMap((to) => (['management', 'legacy'] as const).map((entry) => ({ from, to, entry }))),
+    ),
+  )(
+    'preserves identity, placements, and history from $from to $to through $entry',
+    ({ from, to, entry }) => {
+      const { db, inventory } = setup();
+      const locationId = Number(inventory.listLocations()[0]!.id);
+      const second = Number(inventory.createLocation('transition-second', 'Second').id);
+      const item = inventory.createItem({
+        name: 'All directions',
+        kind: from,
+        aliases: ['Alias'],
+        locationId,
+      });
+      inventory.addStock(item.id, 4, 'original note', locationId);
+      inventory.addStock(item.id, 2, 'second note', second);
+      const before = inventory.listItems(item.name)[0]!;
+      const events = db.prepare('SELECT * FROM inventory_events ORDER BY id').all();
+      const saved =
+        entry === 'legacy'
+          ? inventory.updateItem(item.id, { name: item.name, kind: to })
+          : inventory.saveInventoryItem({
+              key: 'all-directions-save',
+              itemId: item.id,
+              name: item.name,
+              kind: to,
+              aliases: item.aliases,
+              lotSize: null,
+              locationId,
+            });
+      expect(saved).toEqual({ ...before, kind: to });
+      expect(db.prepare('SELECT * FROM inventory_events ORDER BY id').all()).toEqual(events);
+      db.close();
+    },
+  );
+  it('requires explicit lot-size clearance through management save', () => {
+    const { db, inventory } = setup();
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const item = inventory.createItem({
+      name: 'Management lots',
+      kind: 'consumable',
+      lotSize: 12,
+      locationId,
+    });
+    const command = {
+      key: 'management-lot-clear',
+      itemId: item.id,
+      name: item.name,
+      kind: 'camp_equipment' as const,
+      aliases: [],
+      lotSize: 12,
+      locationId,
+    };
+    expect(() => inventory.saveInventoryItem(command)).toThrow(
+      expect.objectContaining({ code: 'invalid_lot_size' }),
+    );
+    expect(inventory.listItems(item.name)[0]).toEqual(item);
+    expect(inventory.saveInventoryItem({ ...command, lotSize: null })).toMatchObject({
+      id: item.id,
+      kind: 'camp_equipment',
+      lotSize: null,
+    });
+    db.close();
+  });
+  it('reclassifies in place across locations, retains immutable history, and replays the receipt', () => {
+    const { db, inventory } = setup();
+    const first = Number(inventory.listLocations()[0]!.id);
+    const second = Number(inventory.createLocation('second-category', 'Second').id);
+    const item = inventory.createItem({
+      name: 'Reclassify',
+      kind: 'non_consumable',
+      aliases: ['Alias'],
+      locationId: first,
+    });
+    inventory.addStock(item.id, 8, 'original note', first);
+    inventory.addStock(item.id, 3, '', second);
+    const borrower = inventory.createBorrower({
+      fullName: 'Borrower',
+      playaName: '',
+      campDepartment: '',
+    });
+    const checkout = inventory.checkout(item.id, borrower.id, 2, '', first);
+    inventory.returnCheckout(checkout, 2, 0, 'closed', first);
+    const before = inventory.listItems('Reclassify')[0]!;
+    const events = db.prepare('SELECT * FROM inventory_events ORDER BY id').all();
+    const loans = db.prepare('SELECT * FROM loan_state').all();
+    const command = {
+      key: 'category-change-1',
+      itemId: item.id,
+      name: item.name,
+      kind: 'consumable' as const,
+      aliases: item.aliases,
+      lotSize: null,
+      locationId: first,
+    };
+    const saved = inventory.saveInventoryItem(command);
+    expect(saved).toEqual({ ...before, kind: 'consumable' });
+    expect(inventory.saveInventoryItem(command)).toEqual(saved);
+    expect(() => inventory.saveInventoryItem({ ...command, kind: 'camp_equipment' })).toThrow(
+      expect.objectContaining({ code: 'idempotency_conflict' }),
+    );
+    expect(db.prepare('SELECT * FROM inventory_events ORDER BY id').all()).toEqual(events);
+    expect(db.prepare('SELECT * FROM loan_state').all()).toEqual(loans);
+    db.close();
+  });
+  it.each(['management', 'legacy'] as const)(
+    'enforces transition constraints atomically through %s edits',
+    (entry) => {
+      const { db, inventory } = setup();
+      const locationId = Number(inventory.listLocations()[0]!.id);
+      const item = inventory.createItem({ name: 'Constraint', kind: 'non_consumable', locationId });
+      inventory.addStock(item.id, 5, '', locationId);
+      const borrower = inventory.createBorrower({
+        fullName: 'Borrower',
+        playaName: '',
+        campDepartment: '',
+      });
+      const checkout = inventory.checkout(item.id, borrower.id, 3, '', locationId);
+      inventory.returnCheckout(checkout, 1, 0, '', locationId);
+      const edit = (kind: 'non_consumable' | 'consumable' | 'camp_equipment') =>
+        entry === 'legacy'
+          ? inventory.updateItem(item.id, { name: 'Changed', kind, lotSize: null })
+          : inventory.saveInventoryItem({
+              key: 'constraint-change-1',
+              itemId: item.id,
+              name: 'Changed',
+              kind,
+              lotSize: null,
+              aliases: [],
+              locationId,
+              targetAvailable: 0,
+              stockRevision: inventory.listItems('Constraint')[0]!.stockRevision,
+            });
+      const before = inventory.listItems('Constraint')[0]!;
+      expect(() => edit('consumable')).toThrow(expect.objectContaining({ code: 'active_loan' }));
+      expect(inventory.listItems('Constraint')[0]).toEqual(before);
+      inventory.markLost(checkout, 2, true);
+      expect(() => edit('camp_equipment')).toThrow(
+        expect.objectContaining({ code: 'unresolved_balances' }),
+      );
+      expect(() => edit('consumable')).toThrow(
+        expect.objectContaining({ code: 'unresolved_balances' }),
+      );
+      expect(edit('non_consumable').kind).toBe('non_consumable');
+      db.close();
+    },
+  );
+  it('requires explicitly clearing lot size and rejects damaged balances', () => {
+    const { db, inventory } = setup();
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const item = inventory.createItem({
+      name: 'Lots',
+      kind: 'consumable',
+      lotSize: 12,
+      locationId,
+    });
+    expect(() =>
+      inventory.updateItem(item.id, { name: item.name, kind: 'non_consumable' }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_lot_size' }));
+    inventory.updateItem(item.id, { name: item.name, kind: 'non_consumable', lotSize: null });
+    inventory.addStock(item.id, 1, '', locationId);
+    const borrower = inventory.createBorrower({
+      fullName: 'Borrower',
+      playaName: '',
+      campDepartment: '',
+    });
+    const checkout = inventory.checkout(item.id, borrower.id, 1, '', locationId);
+    inventory.returnCheckout(checkout, 0, 1, '', locationId);
+    expect(() =>
+      inventory.updateItem(item.id, { name: item.name, kind: 'camp_equipment' }),
+    ).toThrow(expect.objectContaining({ code: 'unresolved_balances' }));
+    db.close();
+  });
   it('replays an uncertain location creation without inserting a second location', () => {
     const { db, inventory } = setup();
     const command = { key: 'location-create-1', code: 'A-1', name: 'Storage' };

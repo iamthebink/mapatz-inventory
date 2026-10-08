@@ -394,6 +394,28 @@ export function InventoryManagement({
       return;
     }
     const item = editor.item;
+    if (item && draft.kind !== item.kind) {
+      if (item.borrowed > 0) {
+        showToast('לא ניתן לשנות סוג', 'יש לסגור את ההשאלה הפעילה לפני שינוי סוג הפריט', 'error');
+        return;
+      }
+      if (draft.kind !== 'non_consumable' && (item.damaged > 0 || item.lost > 0)) {
+        showToast(
+          'לא ניתן לשנות סוג',
+          'יש לטפל בכמויות הפגומות והאבודות לפני שינוי סוג הפריט',
+          'error',
+        );
+        return;
+      }
+    }
+    if (draft.kind !== 'consumable' && draft.lotSize !== '') {
+      showToast(
+        'יש לנקות את גודל המארז',
+        'יש לנקות במפורש את גודל המארז לפני מעבר לסוג שאינו מתכלה',
+        'error',
+      );
+      return;
+    }
     const countChanged =
       !item ||
       Number(draft.available) !==
@@ -409,12 +431,12 @@ export function InventoryManagement({
         key: crypto.randomUUID(),
         ledgerEpoch: editorEpoch,
         name: draft.name.trim(),
-        ...(!item ? { kind: draft.kind } : {}),
+        ...(!item || draft.kind !== item.kind ? { kind: draft.kind } : {}),
         aliases: draft.aliases
           .split(',')
           .map((alias) => alias.trim())
           .filter(Boolean),
-        lotSize: draft.kind === 'consumable' && draft.lotSize ? Number(draft.lotSize) : null,
+        lotSize: draft.lotSize ? Number(draft.lotSize) : null,
         locationId: draft.locationId ? Number(draft.locationId) : null,
         ...(countChanged
           ? {
@@ -958,33 +980,30 @@ export function InventoryManagement({
                   )}
                 </div>
                 <div className="item-editor-fields">
-                  {!selected && (
-                    <label className="field-label">
-                      סוג
-                      <select
-                        className="input-field"
-                        value={draft.kind}
-                        disabled={lockedDraft}
-                        onChange={(event) => {
-                          setDraft({
-                            ...draft,
-                            kind: event.target.value as Item['kind'],
-                            lotSize: '',
-                          });
-                          setDirty(true);
-                        }}
-                      >
-                        {Object.entries(kinds).map(([kind, name]) => (
-                          <option key={kind} value={kind}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
+                  <label className="field-label">
+                    סוג
+                    <select
+                      className="input-field"
+                      value={draft.kind}
+                      disabled={lockedDraft || !admin || !!selected?.archived}
+                      onChange={(event) => {
+                        setDraft({
+                          ...draft,
+                          kind: event.target.value as Item['kind'],
+                        });
+                        setDirty(true);
+                      }}
+                    >
+                      {Object.entries(kinds).map(([kind, name]) => (
+                        <option key={kind} value={kind}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   {field('name', 'שם פריט', !admin || !!selected?.archived)}
                   {field('aliases', 'כינויים, מופרדים בפסיק', !admin || !!selected?.archived)}
-                  {draft.kind === 'consumable' &&
+                  {(draft.kind === 'consumable' || draft.lotSize !== '') &&
                     field('lotSize', 'גודל מארז', !admin || !!selected?.archived)}
                 </div>
               </section>

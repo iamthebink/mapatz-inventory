@@ -22,6 +22,34 @@ async function load(buffer: Buffer): Promise<ExcelJS.Workbook> {
   return workbook;
 }
 describe('inventory workbook reports', () => {
+  it('retains usage after reclassification but excludes issue history before the baseline', () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const item = inventory.createItem({
+      name: 'Reclassified usage',
+      kind: 'consumable',
+      locationId,
+    });
+    inventory.addStock(item.id, 10, '', locationId);
+    inventory.issue(item.id, 3, '', locationId);
+    inventory.updateItem(item.id, { name: item.name, kind: 'camp_equipment' });
+    const snapshot = new InventoryTransferService(db).snapshot();
+    expect(consumablesUsageReport(snapshot)).toEqual([
+      {
+        itemName: item.name,
+        location: snapshot.items[0]!.location,
+        startOfCycleStock: 0,
+        addedDuringCycle: 10,
+        usage: 3,
+        left: 7,
+      },
+    ]);
+    const cutoff = snapshot.events.at(-1)!.id;
+    for (const placement of snapshot.items) placement.baselineThroughEventId = cutoff;
+    expect(consumablesUsageReport(snapshot)).toEqual([]);
+    db.close();
+  });
   it('includes damaged lost recovery in unresolved damage without usable credit', async () => {
     const db = openDatabase(':memory:');
     const inventory = new InventoryService(db);

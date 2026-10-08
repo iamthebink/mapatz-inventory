@@ -63,6 +63,80 @@ afterEach(() => {
   registerLeaveGuard.mockClear();
 });
 describe('inventory management UI', () => {
+  it('omits the captured category when saving only metadata', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond(item));
+    const user = userEvent.setup();
+    view();
+    await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+    await user.clear(within(dialog).getByRole('textbox', { name: 'שם פריט' }));
+    await user.type(within(dialog).getByRole('textbox', { name: 'שם פריט' }), 'Renamed');
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(body.name).toBe('Renamed');
+    expect(body).not.toHaveProperty('kind');
+  });
+  it('submits an edited category and requires explicit lot clearance', async () => {
+    const fetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(respond({ ...item, kind: 'camp_equipment' }));
+    const user = userEvent.setup();
+    view(true, [{ ...item, kind: 'consumable', damaged: 0, lotSize: 12 }]);
+    await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+    await user.selectOptions(
+      within(dialog).getByRole('combobox', { name: 'סוג' }),
+      'camp_equipment',
+    );
+    expect(within(dialog).getByRole('textbox', { name: 'גודל מארז' })).toHaveProperty(
+      'value',
+      '12',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith('יש לנקות את גודל המארז', expect.any(String), 'error');
+    await user.clear(within(dialog).getByRole('textbox', { name: 'גודל מארז' }));
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toMatchObject({
+      kind: 'camp_equipment',
+      lotSize: null,
+    });
+  });
+  it.each([
+    {
+      borrowed: 2,
+      lost: 0,
+      damaged: 0,
+      explanation: 'יש לסגור את ההשאלה הפעילה לפני שינוי סוג הפריט',
+    },
+    {
+      borrowed: 0,
+      lost: 2,
+      damaged: 0,
+      explanation: 'יש לטפל בכמויות הפגומות והאבודות לפני שינוי סוג הפריט',
+    },
+    {
+      borrowed: 0,
+      lost: 0,
+      damaged: 2,
+      explanation: 'יש לטפל בכמויות הפגומות והאבודות לפני שינוי סוג הפריט',
+    },
+  ])(
+    'explains blocked category edits with error toasts ($borrowed borrowed, $lost lost, $damaged damaged)',
+    async ({ explanation, ...balances }) => {
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      const user = userEvent.setup();
+      view(true, [{ ...item, ...balances }]);
+      await user.click(screen.getByRole('button', { name: 'Hammer' }));
+      const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+      await user.selectOptions(within(dialog).getByRole('combobox', { name: 'סוג' }), 'consumable');
+      await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+      expect(fetch).not.toHaveBeenCalled();
+      expect(showToast).toHaveBeenCalledWith('לא ניתן לשנות סוג', explanation, 'error');
+    },
+  );
   it('identifies and searches items by name and alias, excluding internal IDs', async () => {
     const user = userEvent.setup();
     view(true, [{ ...item, id: 87941 }]);

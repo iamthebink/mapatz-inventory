@@ -604,25 +604,33 @@ export class InventoryService {
     id: number,
     input: {
       name: string;
+      kind?: ItemKind;
       lotSize?: number | null;
       locationId?: number | null;
       aliases?: string[];
     },
   ): Item {
-    const item = this.requireItem(id);
-    const lotSize = input.lotSize === undefined ? item.lotSize : input.lotSize;
-    const locationId = input.locationId;
-    if (item.kind !== 'consumable' && lotSize != null)
-      throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
-    if (lotSize != null) integer(lotSize, 'lotSize');
     return transaction(this.db, () => {
+      const item = this.requireItem(id);
+      const kind = input.kind ?? item.kind;
+      this.requireItemCategoryTransition(item, kind);
+      const lotSize = input.lotSize === undefined ? item.lotSize : input.lotSize;
+      const locationId = input.locationId;
+      if (kind !== 'consumable' && lotSize != null)
+        throw new DomainError(
+          'invalid_lot_size',
+          'יש לנקות במפורש את גודל המארז לפני מעבר לסוג שאינו מתכלה',
+        );
+      if (lotSize != null) integer(lotSize, 'lotSize');
       if (locationId !== undefined) {
         this.requireActiveLocation(locationId);
         this.ensureBalance(id, locationId!);
       }
       const name = input.name.trim();
       this.requireUniqueItemName(name, id);
-      this.db.prepare('UPDATE items SET name=?,lot_size=? WHERE id=?').run(name, lotSize, id);
+      this.db
+        .prepare('UPDATE items SET name=?,kind=?,lot_size=? WHERE id=?')
+        .run(name, kind, lotSize, id);
       if (input.aliases !== undefined) this.setAliases(id, input.aliases);
       return this.getItem(id);
     });
@@ -667,13 +675,18 @@ export class InventoryService {
         item = this.createItemInTransaction(input);
       } else {
         item = this.requireItem(input.itemId);
-        if (item.kind !== 'consumable' && input.lotSize != null)
-          throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
+        const kind = input.kind ?? item.kind;
+        this.requireItemCategoryTransition(item, kind);
+        if (kind !== 'consumable' && input.lotSize != null)
+          throw new DomainError(
+            'invalid_lot_size',
+            'יש לנקות במפורש את גודל המארז לפני מעבר לסוג שאינו מתכלה',
+          );
         if (input.lotSize != null) integer(input.lotSize, 'lotSize');
         this.requireUniqueItemName(input.name.trim(), input.itemId);
         this.db
-          .prepare('UPDATE items SET name=?,lot_size=? WHERE id=?')
-          .run(input.name.trim(), input.lotSize, input.itemId);
+          .prepare('UPDATE items SET name=?,kind=?,lot_size=? WHERE id=?')
+          .run(input.name.trim(), kind, input.lotSize, input.itemId);
         this.ensureBalance(input.itemId, input.locationId!);
         this.setAliases(input.itemId, input.aliases);
       }
@@ -705,6 +718,18 @@ export class InventoryService {
         .run(input.key, hash, JSON.stringify(result));
       return result;
     });
+  }
+
+  private requireItemCategoryTransition(item: Item, kind: ItemKind): void {
+    if (kind === item.kind) return;
+    if (item.borrowed > 0)
+      throw new DomainError('active_loan', 'יש לסגור את ההשאלה הפעילה לפני שינוי סוג הפריט', 409);
+    if (kind !== 'non_consumable' && (item.damaged > 0 || item.lost > 0))
+      throw new DomainError(
+        'unresolved_balances',
+        'יש לטפל בכמויות הפגומות והאבודות לפני שינוי סוג הפריט',
+        409,
+      );
   }
 
   private createItemInTransaction(input: {

@@ -297,9 +297,9 @@ describe('inventory XLSX workbook', () => {
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!
       .getRow(2)
       .getCell(2).value = 'issued';
-    await expect(parseRecoveryWorkbook(await save(impossibleIssue))).rejects.toThrow(
-      /not consumable/,
-    );
+    // Historical issue events may precede a later change to camp equipment.
+    const historicalIssue = await parseRecoveryWorkbook(await save(impossibleIssue));
+    expect(historicalIssue.events[0]!.kind).toBe('issued');
     const impossibleCheckout = await load(exported);
     impossibleCheckout
       .getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryEvents.name)!

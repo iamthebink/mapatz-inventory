@@ -221,3 +221,43 @@ test('transfer respects dirty decisions and stale refresh before moving the sele
     },
   ]);
 });
+
+test('administrator reclassifies an item after closing its active loan', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  await page.request.post('/api/session/role', {
+    data: { role: 'admin', password: 'e2e-admin-password' },
+  });
+  await page.goto('/management');
+  await page.getByRole('button', { name: seed.item.name, exact: true }).click();
+  let dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
+  await dialog.getByRole('combobox', { name: 'סוג', exact: true }).selectOption('camp_equipment');
+  await dialog.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await expect(
+    page.getByText('יש לסגור את ההשאלה הפעילה לפני שינוי סוג הפריט', { exact: true }),
+  ).toBeVisible();
+  await dialog.getByRole('button', { name: 'ביטול', exact: true }).click();
+  await page.getByRole('button', { name: 'ביטול השינויים' }).click();
+  const returned = await page.request.post('/api/return', {
+    data: { checkoutId: seed.checkoutId, usable: 2, damaged: 0, locationId: 1 },
+  });
+  expect(returned.ok()).toBeTruthy();
+  await page.reload();
+  const db = openLedger();
+  const events = db
+    .prepare('SELECT * FROM inventory_events WHERE item_id=? ORDER BY id')
+    .all(seed.item.id);
+  await page.getByRole('button', { name: seed.item.name, exact: true }).click();
+  dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
+  await dialog.getByRole('combobox', { name: 'סוג', exact: true }).selectOption('camp_equipment');
+  await dialog.getByRole('button', { name: 'שמירה', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(db.prepare('SELECT kind FROM items WHERE id=?').get(seed.item.id)).toEqual({
+    kind: 'camp_equipment',
+  });
+  expect(
+    db.prepare('SELECT * FROM inventory_events WHERE item_id=? ORDER BY id').all(seed.item.id),
+  ).toEqual(events);
+});
