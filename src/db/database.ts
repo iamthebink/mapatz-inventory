@@ -27,6 +27,14 @@ export function openDatabase(filename: string): InventoryDatabase {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   try {
     migrate(db);
+    // Fill only an absent setting, after validating the database. ID ordering
+    // makes the fallback stable when the preferred location is unavailable.
+    db.prepare(
+      `UPDATE inventory_settings SET default_location_id=(
+        SELECT id FROM locations WHERE archived=0
+        ORDER BY (name='צוללת') DESC, id ASC LIMIT 1
+      ) WHERE singleton=1 AND default_location_id IS NULL`,
+    ).run();
     return db;
   } catch (error) {
     db.close();

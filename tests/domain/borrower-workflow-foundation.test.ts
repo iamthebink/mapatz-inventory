@@ -217,7 +217,7 @@ describe('borrower workflow persistence foundation', () => {
       locations: expect.arrayContaining([
         expect.objectContaining({ id: 1, code: 'monster', isDefault: false }),
       ]),
-      defaultLocationId: null,
+      defaultLocationId: 2,
     });
     expect(writer.prepare('SELECT ledger_epoch FROM inventory_replacement_guard').get()).toEqual({
       ledger_epoch: 2,

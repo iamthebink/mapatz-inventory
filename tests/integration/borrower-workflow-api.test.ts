@@ -489,7 +489,7 @@ describe('borrower workflow snapshot API', () => {
           stateRevision: 3,
           ledgerEpoch: 1,
           locations: inventory.listLocations(),
-          defaultLocationId: null,
+          defaultLocationId: 2,
         });
       });
     expect(db.isTransaction).toBe(false);

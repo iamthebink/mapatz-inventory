@@ -393,8 +393,9 @@ describe('multi-location invariants', () => {
     databases.splice(databases.indexOf(reopened), 1);
     rmSync(directory, { recursive: true, force: true });
   });
-  it('default checkbox replaces, unchecks and retires the nullable setting', () => {
-    const { service, a, b } = fixture();
+  it('default commands replace, unset and retire the nullable setting', () => {
+    const { db, service, a, b } = fixture();
+    db.prepare('UPDATE inventory_settings SET default_location_id=NULL').run();
     const save = (key: string, location: typeof a, isDefault: boolean) =>
       service.saveInventoryLocation({
         key,
@@ -563,6 +564,7 @@ it.each(['missing', 'archived'] as const)(
 
 it('rejects a default selection from stale metadata without undoing a concurrent rename', () => {
   const { service, b } = fixture();
+  const previousDefault = service.defaultLocationId();
   service.saveInventoryLocation({
     key: randomUUID(),
     ledgerEpoch: 1,
@@ -580,7 +582,7 @@ it('rejects a default selection from stale metadata without undoing a concurrent
       isDefault: true,
     }),
   ).toThrow(expect.objectContaining({ code: 'confirmation_changed' }));
-  expect(service.defaultLocationId()).toBeNull();
+  expect(service.defaultLocationId()).toBe(previousDefault);
   expect(service.listLocations().find((location) => location.id === b.id)).toMatchObject({
     name: 'New name',
     code: 'new-code',
