@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import '../helpers/popover';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -153,8 +154,8 @@ describe('inventory management UI', () => {
     view(true, [{ ...item, itemNote: 'Full text\nSecond line' }]);
     const indicator = screen.getByLabelText('הערות לפריט Hammer');
     await user.click(indicator);
-    expect(indicator.closest('details')!.open).toBe(true);
-    expect(indicator.closest('details')!.querySelector('p')!.textContent).toBe(
+    expect(indicator.getAttribute('aria-expanded')).toBe('true');
+    expect(indicator.parentElement!.querySelector('.item-note-text')!.textContent).toBe(
       'Full text\nSecond line',
     );
     await user.click(screen.getByRole('button', { name: 'Hammer' }));
@@ -843,9 +844,14 @@ it.each([true, false])(
 );
 it('readonly details show a real balance and permit inspection of other balances without edits', async () => {
   const user = userEvent.setup();
-  view(false, [splitItem], splitLocations);
+  view(false, [{ ...splitItem, itemNote: 'Operator-readable note' }], splitLocations);
   await user.click(screen.getByRole('button', { name: 'Hammer' }));
   const dialog = screen.getByRole('dialog');
+  const noteField = within(dialog).getByRole('textbox', { name: 'הערות' });
+  expect(noteField).toHaveProperty('value', 'Operator-readable note');
+  expect(noteField).toHaveProperty('readOnly', true);
+  expect(noteField).toHaveProperty('disabled', false);
+  expect(dialog.querySelector('.item-note-text')).toBeNull();
   expect(within(dialog).getByLabelText('מיקום')).toHaveProperty('value', '1');
   expect(within(dialog).getByLabelText('זמין')).toHaveProperty('value', '20');
   await user.selectOptions(within(dialog).getByLabelText('מיקום'), '2');

@@ -1686,36 +1686,91 @@
   }
 }
 
+/* Item notes float above the workflow; opening them never changes row height. */
 .item-name-with-note {
   display: flex;
-  align-items: start;
-  gap: 0.25rem;
+  align-items: center;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 .item-note {
-  max-width: 100%;
-  min-width: 0;
+  display: inline-flex;
+  flex: none;
+  font-weight: normal;
 }
-.item-note summary {
-  display: flex;
+.item-note-trigger,
+.item-note-close {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 40px;
-  min-height: 40px;
+  gap: 0.375rem;
+  min-height: 44px;
+  min-width: 44px;
+  border-radius: 0.625rem;
   cursor: pointer;
-  border-radius: 0.5rem;
   color: var(--color-ctp-text);
 }
-.item-note summary::-webkit-details-marker {
-  display: none;
+.item-note-trigger {
+  padding: 0 0.625rem;
+  font-size: 0.875rem;
+  background: color-mix(in srgb, var(--color-ctp-lavender) 12%, transparent);
 }
-.item-note summary:focus-visible {
-  outline: 2px solid currentColor;
+.item-note-trigger:hover,
+.item-note-close:hover {
+  background: color-mix(in srgb, var(--color-ctp-lavender) 22%, transparent);
+}
+.item-note-trigger:focus-visible,
+.item-note-close:focus-visible,
+.item-note-text:focus-visible {
+  outline: 2px solid var(--color-ctp-text);
   outline-offset: 2px;
 }
+.item-note-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: min(22rem, calc(100dvh - 2rem));
+  padding: 0.75rem;
+  border: 1px solid var(--color-ctp-lavender);
+  border-radius: 1rem;
+  background: var(--color-ctp-base);
+  color: var(--color-ctp-text);
+  box-shadow: 0 12px 36px #0003;
+  direction: rtl;
+  text-align: start;
+  font-size: 1rem;
+  font-weight: normal;
+  overflow: auto;
+}
+.item-note-popover:popover-open {
+  display: flex;
+  flex-direction: column;
+}
+.item-note-heading {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+.item-note-close {
+  flex: none;
+}
 .item-note-text {
+  display: block;
+  min-height: 0;
+  overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-weight: normal;
-  max-width: 40rem;
+  line-height: 1.6;
+}
+.item-editor-note {
+  grid-column: 1 / -1;
+}
+.item-editor-note textarea {
+  resize: vertical;
 }

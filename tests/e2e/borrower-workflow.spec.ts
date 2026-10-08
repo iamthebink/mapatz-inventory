@@ -1505,14 +1505,32 @@ test.describe('item notes on touch workflows', () => {
     await itemSearch.press('Enter');
     let dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
     const indicator = dialog.getByLabel(`הערות לפריט ${seed.item.name}`);
+    await expect(dialog.locator('.item-note-popover')).toBeHidden();
+    const quantityBefore = await dialog.getByRole('spinbutton', { name: 'כמות' }).boundingBox();
     await indicator.tap();
+    expect(await dialog.getByRole('spinbutton', { name: 'כמות' }).boundingBox()).toEqual(
+      quantityBefore,
+    );
     await expect(dialog.locator('.item-note-text')).toHaveText(note);
     const text = dialog.locator('.item-note-text');
     expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     const bounds = await text.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    await text.focus();
+    await expect(text).toBeFocused();
+    await text.press('PageDown');
+    await expect
+      .poll(() =>
+        text.evaluate(
+          (element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+        ),
+      )
+      .toBe(true);
+    await expect(dialog.getByRole('button', { name: 'סגירת הערות' })).toBeInViewport();
     const quantityControl = dialog.getByRole('spinbutton', { name: 'כמות' });
+    await dialog.getByRole('button', { name: 'סגירת הערות' }).tap();
+    await expect(indicator).toBeFocused();
     await quantityControl.scrollIntoViewIfNeeded();
     await expect(quantityControl).toBeInViewport();
     const confirmControl = dialog.getByRole('button', { name: 'אישור', exact: true });
@@ -1522,7 +1540,6 @@ test.describe('item notes on touch workflows', () => {
     await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
     await expect(dialog.getByRole('textbox', { name: 'הערה (רשות)' })).toHaveValue('');
     await expect(page.locator('.staged-section')).toContainText('אין פעולות ממתינות');
-    await indicator.tap();
     await dialog.getByRole('textbox', { name: 'הערה (רשות)' }).fill('Loan event reason');
     await dialog.getByRole('button', { name: 'אישור', exact: true }).click();
     await expect(dialog).toBeHidden();
@@ -1555,6 +1572,14 @@ test.describe('item notes on touch workflows', () => {
     await returnIndicator.focus();
     await returnIndicator.press('Space');
     await expect(dialog.locator('.item-note-text')).toHaveText(note);
+    await page.keyboard.press('Escape');
+    await expect(returnIndicator).toBeFocused();
+    await expect(dialog).toBeVisible();
+    await returnIndicator.press('Enter');
+    await page.keyboard.press('Tab');
+    await expect(dialog.locator('.item-note-text')).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(dialog.locator('.item-note-popover')).toBeHidden();
     await expect(dialog.getByRole('spinbutton', { name: 'כמות' })).toHaveValue('1');
     await expect(dialog.getByRole('textbox', { name: 'הערה (רשות)' })).toHaveValue('');
     await dialog.getByRole('textbox', { name: 'הערה (רשות)' }).fill('Return event reason');
@@ -1584,6 +1609,8 @@ test.describe('item notes on touch workflows', () => {
     await expect(refreshed.locator('..').locator('.item-note-text')).toHaveText(
       'Fresh edited note',
     );
+    await page.keyboard.press('Escape');
+    await expect(refreshed).toBeFocused();
     await page
       .getByRole('dialog', { name: /כרטיס שואל/ })
       .getByRole('button', { name: 'סגירה', exact: true })

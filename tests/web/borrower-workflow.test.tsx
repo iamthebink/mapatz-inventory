@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import '../helpers/popover';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createRef } from 'react';
 import { flushSync } from 'react-dom';
@@ -287,7 +288,7 @@ describe('active descendant search', () => {
     const held = document.getElementById('holdings-heading')!.parentElement!;
     const disclosure = within(held).getByLabelText(`הערות לפריט ${item.name}`);
     await userEvent.click(disclosure);
-    expect(disclosure.closest('details')!.querySelector('p')!.textContent).toBe(itemNote);
+    expect(disclosure.parentElement!.querySelector('.item-note-text')!.textContent).toBe(itemNote);
     await userEvent.click(within(held).getByRole('button', { name: 'החזרת ציוד' }));
     const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
     await userEvent.click(within(dialog).getByLabelText(`הערות לפריט ${item.name}`));

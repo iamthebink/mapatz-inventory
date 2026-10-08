@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import '../helpers/popover';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -139,14 +140,16 @@ it('discloses exact multiline item notes in populated pending and lost rows', as
   const pending = document.querySelector<HTMLElement>('.staged-section')!;
   const pendingIndicator = within(pending).getByLabelText('הערות לפריט Shared');
   await user.click(pendingIndicator);
-  expect(pendingIndicator.closest('details')!.open).toBe(true);
-  expect(pendingIndicator.closest('details')!.querySelector('p')!.textContent).toBe(itemNote);
+  expect(pendingIndicator.getAttribute('aria-expanded')).toBe('true');
+  expect(pendingIndicator.parentElement!.querySelector('.item-note-text')!.textContent).toBe(
+    itemNote,
+  );
   const lost = document.querySelector<HTMLElement>('.lost-equipment-section')!;
   await user.click(lost.querySelector('summary')!);
   const lostIndicator = within(lost).getByLabelText('הערות לפריט Shared');
   await user.click(lostIndicator);
-  expect(lostIndicator.closest('details')!.open).toBe(true);
-  expect(lostIndicator.closest('details')!.querySelector('p')!.textContent).toBe(itemNote);
+  expect(lostIndicator.getAttribute('aria-expanded')).toBe('true');
+  expect(lostIndicator.parentElement!.querySelector('.item-note-text')!.textContent).toBe(itemNote);
   expect(onReturn).not.toHaveBeenCalled();
   expect(onRollback).not.toHaveBeenCalled();
 });

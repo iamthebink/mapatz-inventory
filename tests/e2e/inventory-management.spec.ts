@@ -285,14 +285,17 @@ test('item notes persist independently and disclose by keyboard across edits and
   await expect(dialog).toBeHidden();
   let indicator = page.getByLabel(`הערות לפריט ${name}`);
   await indicator.focus();
+  const rowBefore = await indicator.locator('xpath=ancestor::tr').boundingBox();
   await indicator.press('Enter');
+  expect(await indicator.locator('xpath=ancestor::tr').boundingBox()).toEqual(rowBefore);
   await expect(indicator.locator('..').locator('.item-note-text')).toHaveText(note);
   await expect(indicator.locator('..').locator('.item-note-text')).toHaveCSS(
     'white-space',
     'pre-wrap',
   );
-  await indicator.press('Space');
-  await expect(indicator.locator('..')).not.toHaveAttribute('open');
+  await page.keyboard.press('Escape');
+  await expect(indicator).toBeFocused();
+  await expect(indicator).toHaveAttribute('aria-expanded', 'false');
   const database = openLedger();
   expect(
     database
@@ -303,6 +306,7 @@ test('item notes persist independently and disclose by keyboard across edits and
   ).toEqual([{ note: '' }]);
   await page.getByRole('button', { name, exact: true }).click();
   dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
+  await expect(dialog.locator('.item-note-text')).toHaveCount(0);
   await dialog.getByRole('textbox', { name: 'הערות', exact: true }).fill('Edited note');
   await dialog.getByRole('button', { name: 'שמירה' }).click();
   await expect(dialog).toBeHidden();
@@ -310,6 +314,11 @@ test('item notes persist independently and disclose by keyboard across edits and
   indicator = page.getByLabel(`הערות לפריט ${name}`);
   await indicator.press('Space');
   await expect(indicator.locator('..').locator('.item-note-text')).toHaveText('Edited note');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(indicator).toHaveAttribute('aria-expanded', 'false');
+  await indicator.click();
+  await page.getByRole('textbox', { name: 'סינון הטבלה' }).click();
+  await expect(indicator).toHaveAttribute('aria-expanded', 'false');
   await page.getByRole('button', { name, exact: true }).click();
   dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
   await dialog.getByRole('textbox', { name: 'הערות', exact: true }).fill('  \n ');

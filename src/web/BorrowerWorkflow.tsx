@@ -1758,9 +1758,16 @@ export const BorrowerWorkflow = forwardRef<
           description={
             <span className="quantity-dialog-item">
               <span className="quantity-dialog-item-label">פריט: </span>
-              <strong className="quantity-dialog-item-name">
-                <bdi>{quantityItem.name}</bdi>
-              </strong>
+              <span className="item-name-with-note">
+                <strong className="quantity-dialog-item-name">
+                  <bdi>{quantityItem.name}</bdi>
+                </strong>
+                <ItemNote
+                  key={quantityItem.id}
+                  note={quantityItem.itemNote}
+                  itemName={quantityItem.name}
+                />
+              </span>
             </span>
           }
           level="subordinate"
@@ -1781,11 +1788,6 @@ export const BorrowerWorkflow = forwardRef<
             </>
           }
         >
-          <ItemNote
-            key={quantityItem.id}
-            note={quantityItem.itemNote}
-            itemName={quantityItem.name}
-          />
           <form
             id="quantity-form"
             onSubmit={submitQuantity}

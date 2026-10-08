@@ -1010,23 +1010,23 @@ export function InventoryManagement({
                   </label>
                   {field('name', 'שם פריט', !admin || !!selected?.archived)}
                   {field('aliases', 'כינויים, מופרדים בפסיק', !admin || !!selected?.archived)}
-                  <label className="field-label">
+                  {(draft.kind === 'consumable' || draft.lotSize !== '') &&
+                    field('lotSize', 'גודל מארז', !admin || !!selected?.archived)}
+                  <label className="field-label item-editor-note">
                     הערות
                     <textarea
                       className="input-field"
                       value={draft.itemNote}
                       maxLength={500}
-                      rows={5}
-                      disabled={lockedDraft || !admin || !!selected?.archived}
+                      rows={3}
+                      disabled={lockedDraft}
+                      readOnly={!admin || !!selected?.archived}
                       onChange={(event) => {
                         setDraft({ ...draft, itemNote: event.target.value });
                         setDirty(true);
                       }}
                     />
                   </label>
-                  {draft.itemNote.trim() && <p className="item-note-text">{draft.itemNote}</p>}
-                  {(draft.kind === 'consumable' || draft.lotSize !== '') &&
-                    field('lotSize', 'גודל מארז', !admin || !!selected?.archived)}
                 </div>
               </section>
               <section className="item-editor-section" aria-labelledby="item-stock-heading">
