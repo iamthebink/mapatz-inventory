@@ -209,6 +209,7 @@ export function isBorrowerDeskSnapshot(
       !hasExactKeys(item, [
         'id',
         'name',
+        'itemNote',
         'kind',
         'lotSize',
         'balances',
@@ -220,6 +221,8 @@ export function isBorrowerDeskSnapshot(
       ]) ||
       !isSafePositive(item.id) ||
       typeof item.name !== 'string' ||
+      typeof item.itemNote !== 'string' ||
+      item.itemNote.length > 500 ||
       !['non_consumable', 'consumable', 'camp_equipment'].includes(String(item.kind)) ||
       !(item.lotSize === null || isSafePositive(item.lotSize)) ||
       !Array.isArray(item.balances) ||

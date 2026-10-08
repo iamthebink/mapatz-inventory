@@ -261,3 +261,59 @@ test('administrator reclassifies an item after closing its active loan', async (
     db.prepare('SELECT * FROM inventory_events WHERE item_id=? ORDER BY id').all(seed.item.id),
   ).toEqual(events);
 });
+
+test('item notes persist independently and disclose by keyboard across edits and clearing', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  await page.request.post('/api/session/role', {
+    data: { role: 'admin', password: 'e2e-admin-password' },
+  });
+  await page.goto('/management');
+  await page.getByRole('button', { name: 'הוספת פריט חדש' }).click();
+  let dialog = page.getByRole('dialog', { name: 'הוספת פריט חדש' });
+  const name = `Noted creation ${seed.item.id}`;
+  const note = 'First line\nSecond line <literal>';
+  await dialog.getByRole('textbox', { name: 'שם פריט' }).fill(name);
+  await dialog.getByRole('textbox', { name: 'הערות', exact: true }).fill(note);
+  await expect(dialog.getByRole('textbox', { name: 'הערות על השינוי' })).toHaveCount(0);
+  await dialog.getByRole('combobox', { name: /^מיקום/ }).selectOption('1');
+  await dialog.getByRole('textbox', { name: 'זמין' }).fill('2');
+  await expect(dialog.getByRole('textbox', { name: 'הערות על השינוי' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'שמירה' }).click();
+  await expect(dialog).toBeHidden();
+  let indicator = page.getByLabel(`הערות לפריט ${name}`);
+  await indicator.focus();
+  await indicator.press('Enter');
+  await expect(indicator.locator('..').locator('.item-note-text')).toHaveText(note);
+  await expect(indicator.locator('..').locator('.item-note-text')).toHaveCSS(
+    'white-space',
+    'pre-wrap',
+  );
+  await indicator.press('Space');
+  await expect(indicator.locator('..')).not.toHaveAttribute('open');
+  const database = openLedger();
+  expect(
+    database
+      .prepare(
+        'SELECT note FROM inventory_events WHERE item_id=(SELECT id FROM items WHERE name=?)',
+      )
+      .all(name),
+  ).toEqual([{ note: '' }]);
+  await page.getByRole('button', { name, exact: true }).click();
+  dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
+  await dialog.getByRole('textbox', { name: 'הערות', exact: true }).fill('Edited note');
+  await dialog.getByRole('button', { name: 'שמירה' }).click();
+  await expect(dialog).toBeHidden();
+  await page.reload();
+  indicator = page.getByLabel(`הערות לפריט ${name}`);
+  await indicator.press('Space');
+  await expect(indicator.locator('..').locator('.item-note-text')).toHaveText('Edited note');
+  await page.getByRole('button', { name, exact: true }).click();
+  dialog = page.getByRole('dialog', { name: 'עריכת פריט' });
+  await dialog.getByRole('textbox', { name: 'הערות', exact: true }).fill('  \n ');
+  await dialog.getByRole('button', { name: 'שמירה' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByLabel(`הערות לפריט ${name}`)).toHaveCount(0);
+});

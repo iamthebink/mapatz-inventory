@@ -1,3 +1,4 @@
+import { ItemNote } from './ItemNote';
 import { StickyTable } from './StickyTable';
 import {
   ChevronDown,
@@ -193,7 +194,13 @@ export function BorrowerOperationalTables({
                   tabIndex={projection?.compatible ? undefined : -1}
                 >
                   <div>
-                    <strong>{inventory.get(group.itemId)?.name ?? 'פריט לא זמין'}</strong>
+                    <div className="item-name-with-note">
+                      <strong>{inventory.get(group.itemId)?.name ?? 'פריט לא זמין'}</strong>
+                      <ItemNote
+                        note={inventory.get(group.itemId)?.itemNote}
+                        itemName={inventory.get(group.itemId)?.name ?? 'פריט לא זמין'}
+                      />
+                    </div>
                     <p>
                       {(row.direction === 'damaged' || row.condition === 'damaged') && (
                         <TriangleAlert className="size-4 inline-block" aria-hidden="true" />
@@ -271,7 +278,15 @@ export function BorrowerOperationalTables({
                   const menuOpen = openMenu === projection.itemId;
                   return (
                     <tr key={projection.itemId}>
-                      <th scope="row">{itemName}</th>
+                      <th scope="row">
+                        <div className="item-name-with-note">
+                          {itemName}
+                          <ItemNote
+                            note={inventory.get(projection.itemId)?.itemNote}
+                            itemName={itemName}
+                          />
+                        </div>
+                      </th>
                       <td>
                         <bdi dir="ltr" className="operational-quantity">
                           {projection.projectedHeld}
@@ -394,7 +409,15 @@ export function BorrowerOperationalTables({
                   const itemName = inventory.get(projection.itemId)?.name ?? 'פריט לא זמין';
                   return (
                     <tr key={projection.itemId}>
-                      <th scope="row">{itemName}</th>
+                      <th scope="row">
+                        <div className="item-name-with-note">
+                          {itemName}
+                          <ItemNote
+                            note={inventory.get(projection.itemId)?.itemNote}
+                            itemName={itemName}
+                          />
+                        </div>
+                      </th>
                       <td>
                         <bdi dir="ltr" className="operational-quantity">
                           {projection.lostNow}

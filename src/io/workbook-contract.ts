@@ -1,5 +1,5 @@
 export const WORKBOOK_CONTRACT = {
-  version: 8,
+  version: 9,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   filename: 'mapatz-inventory.xlsx',
   sheets: {
@@ -9,7 +9,16 @@ export const WORKBOOK_CONTRACT = {
     },
     resetItems: {
       name: 'Reset Items',
-      columns: ['Name', 'Kind', 'Location', 'Aliases', 'Lot Size', 'Archived', 'Total'],
+      columns: [
+        'Name',
+        'Kind',
+        'Location',
+        'Aliases',
+        'Lot Size',
+        'Archived',
+        'Total',
+        'Item Note',
+      ],
     },
     recoveryLocations: {
       name: 'Recovery Locations',
@@ -33,6 +42,7 @@ export const WORKBOOK_CONTRACT = {
         'Damaged',
         'Lost',
         'Revision',
+        'Item Note',
       ],
     },
     recoveryLoans: {

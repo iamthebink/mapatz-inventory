@@ -91,6 +91,15 @@ export function migrate(db: InventoryDatabase): void {
         'Database uses an unsupported borrower profile schema. Preserve it and use a separate fresh database; no upgrade migration is provided.',
       );
   }
+  if (
+    !freshInstall &&
+    !(db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).some(
+      (column) => column.name === 'item_note',
+    )
+  )
+    throw new Error(
+      'Database uses an unsupported item notes schema. Preserve it and use a separate fresh database or a supported recovery workbook; no upgrade migration is provided.',
+    );
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
     const sql = readFileSync(resolve(here, `migrations/${migration.filename}`), 'utf8');

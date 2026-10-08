@@ -80,6 +80,7 @@ export async function exportWorkbook(
       item.lotSize,
       item.archived,
       item.resetTotal,
+      item.itemNote ?? '',
     ]),
   );
   addSheet(
@@ -106,6 +107,7 @@ export async function exportWorkbook(
       item.damaged,
       item.lost,
       item.revision,
+      item.itemNote ?? '',
     ]),
   );
   addSheet(
@@ -353,7 +355,7 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
       return importError(`Reset Locations contains duplicate name "${location.name}"`);
     locationNames.set(key, location);
   }
-  const rawItems = dataRows(itemSheet, 7);
+  const rawItems = dataRows(itemSheet, 8);
   const items: ResetItem[] = [];
   rawItems.forEach((row, index) => {
     const rowNumber = index + 2;
@@ -384,6 +386,7 @@ export async function parseResetWorkbook(buffer: Buffer): Promise<ResetPayload> 
       aliases: aliases(row[3], `Reset Items row ${rowNumber} Aliases`),
       lotSize,
       archived: optionalBoolean(row[5], `Reset Items row ${rowNumber} Archived`),
+      itemNote: plainText(row[7] ?? '', `Reset Items row ${rowNumber} Item Note`, 500),
       total: integer(row[6], `Reset Items row ${rowNumber} Total`, 0),
     });
   });
@@ -456,7 +459,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
     nextLocationId: integer(revisionRows[0]![3], 'Recovery Next Location ID', 1),
     nextEventId: integer(revisionRows[0]![4], 'Recovery Next Event ID', 1),
   };
-  const items = dataRows(itemSheet, 15).map((row, index) => {
+  const items = dataRows(itemSheet, 16).map((row, index) => {
     const rowNumber = index + 2;
     const kind = requiredText(row[2], `Recovery Items row ${rowNumber} Kind`) as ItemKind;
     if (kind !== 'consumable' && kind !== 'non_consumable' && kind !== 'camp_equipment')
@@ -482,6 +485,7 @@ export async function parseRecoveryWorkbook(buffer: Buffer): Promise<RecoveryPay
       borrowed: integer(row[11], `Recovery Items row ${rowNumber} Borrowed`, 0),
       damaged: integer(row[12], `Recovery Items row ${rowNumber} Damaged`, 0),
       lost: integer(row[13], `Recovery Items row ${rowNumber} Lost`, 0),
+      itemNote: plainText(row[15] ?? '', `Recovery Items row ${rowNumber} Item Note`, 500),
       revision: integer(row[14], `Recovery Items row ${rowNumber} Revision`, 0),
     };
   });

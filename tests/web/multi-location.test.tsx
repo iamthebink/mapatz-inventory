@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BorrowerOperationalTables } from '../../src/web/BorrowerOperationalTables';
 import {
@@ -25,6 +26,7 @@ const snapshot: BorrowerDeskSnapshot = {
       name: 'Shared',
       kind: 'non_consumable',
       aliases: [],
+      itemNote: '',
       lotSize: null,
       archived: false,
       selectable: true,
@@ -109,4 +111,42 @@ it('rejects duplicate placement identities, unknown locations and mismatched loc
     expect(
       isBorrowerDeskSnapshot({ ...snapshot, inventory: [{ ...snapshot.inventory[0]!, balances }] }),
     ).toBe(false);
+});
+
+it('discloses exact multiline item notes in populated pending and lost rows', async () => {
+  const itemNote = 'First line <literal>\nSecond full line';
+  const noted = {
+    ...snapshot,
+    inventory: [{ ...snapshot.inventory[0]!, itemNote }],
+    holdings: [{ itemId: 1, returnable: 5, lost: 2 }],
+  };
+  const state = operationReducer(createOperationState(1, noted), {
+    type: 'stage-borrow',
+    itemId: 1,
+    part: { quantity: 1, note: 'Transaction note', locationId: 1 },
+  });
+  const onReturn = vi.fn();
+  const onRollback = vi.fn();
+  render(
+    <BorrowerOperationalTables
+      state={state}
+      disabled={false}
+      onReturn={onReturn}
+      onRollback={onRollback}
+    />,
+  );
+  const user = userEvent.setup();
+  const pending = document.querySelector<HTMLElement>('.staged-section')!;
+  const pendingIndicator = within(pending).getByLabelText('הערות לפריט Shared');
+  await user.click(pendingIndicator);
+  expect(pendingIndicator.closest('details')!.open).toBe(true);
+  expect(pendingIndicator.closest('details')!.querySelector('p')!.textContent).toBe(itemNote);
+  const lost = document.querySelector<HTMLElement>('.lost-equipment-section')!;
+  await user.click(lost.querySelector('summary')!);
+  const lostIndicator = within(lost).getByLabelText('הערות לפריט Shared');
+  await user.click(lostIndicator);
+  expect(lostIndicator.closest('details')!.open).toBe(true);
+  expect(lostIndicator.closest('details')!.querySelector('p')!.textContent).toBe(itemNote);
+  expect(onReturn).not.toHaveBeenCalled();
+  expect(onRollback).not.toHaveBeenCalled();
 });

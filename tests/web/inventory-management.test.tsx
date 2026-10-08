@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DialogStackProvider } from '../../src/web/Dialog';
 import { InventoryManagement } from '../../src/web/InventoryManagement';
 import type { Item, Location } from '../../src/web/InventoryDialogs';
+import { openDatabase } from '../../src/db/database';
+import { InventoryService } from '../../src/domain/inventory';
 import { installWindowStorage } from '../helpers/window-storage.js';
 const item: Item = {
   id: 1,
   name: 'Hammer',
   kind: 'non_consumable',
+  itemNote: '',
   lotSize: null,
   balances: [{ locationId: 1, available: 20, damaged: 4 }],
   aliases: ['Mallet'],
@@ -63,6 +66,137 @@ afterEach(() => {
   registerLeaveGuard.mockClear();
 });
 describe('inventory management UI', () => {
+  it.each(['stock', 'metadata'] as const)(
+    'omits an unchanged captured note while a stale editor changes %s',
+    async (change) => {
+      const db = openDatabase(':memory:');
+      try {
+        const inventory = new InventoryService(db);
+        const locationId = Number(inventory.listLocations()[0]!.id);
+        const created = inventory.createItem({
+          name: 'Concurrent notes',
+          kind: 'non_consumable',
+          locationId,
+          itemNote: 'Captured note',
+        });
+        inventory.addStock(created.id, 20, '', locationId);
+        const captured = inventory.listItems()[0]!;
+        const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+          const body = JSON.parse(String(init!.body));
+          return respond(inventory.saveInventoryItem({ ...body, itemId: captured.id }));
+        });
+        const user = userEvent.setup();
+        view(
+          true,
+          [captured],
+          [
+            {
+              id: locationId,
+              code: 'test-location',
+              name: 'Location',
+              archived: false,
+              isDefault: false,
+            },
+          ],
+        );
+        await user.click(screen.getByRole('button', { name: captured.name }));
+        inventory.updateItem(captured.id, { name: captured.name, itemNote: 'Newer domain note' });
+        const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+        const field = within(dialog).getByRole('textbox', {
+          name: change === 'stock' ? 'זמין' : 'שם פריט',
+        });
+        await user.clear(field);
+        await user.type(field, change === 'stock' ? '21' : 'Renamed stale editor');
+        await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+        await waitFor(() => expect(fetch).toHaveBeenCalled());
+        const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+        expect(body).not.toHaveProperty('itemNote');
+        expect(inventory.listItems()[0]!.itemNote).toBe('Newer domain note');
+        expect(inventory.listItems()[0]!).toMatchObject(
+          change === 'stock' ? { available: 21 } : { name: 'Renamed stale editor' },
+        );
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each(['consumable', 'non_consumable', 'camp_equipment'])(
+    'creates %s with persistent notes and no stock-event field',
+    async (kind) => {
+      const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond(item));
+      const user = userEvent.setup();
+      view();
+      await user.click(screen.getByRole('button', { name: 'הוספת פריט חדש' }));
+      const dialog = screen.getByRole('dialog', { name: 'הוספת פריט חדש' });
+      await user.selectOptions(within(dialog).getByRole('combobox', { name: 'סוג' }), kind);
+      expect(within(dialog).queryByRole('textbox', { name: 'הערות על השינוי' })).toBeNull();
+      await user.type(
+        within(dialog).getByRole('textbox', { name: 'הערות' }),
+        'Full note\nSecond line',
+      );
+      await user.type(within(dialog).getByRole('textbox', { name: 'שם פריט' }), 'Noted');
+      await user.selectOptions(within(dialog).getByRole('combobox', { name: 'מיקום' }), '1');
+      await user.clear(within(dialog).getByRole('textbox', { name: 'זמין' }));
+      await user.type(within(dialog).getByRole('textbox', { name: 'זמין' }), '3');
+      expect(within(dialog).queryByRole('textbox', { name: 'הערות על השינוי' })).toBeNull();
+      await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+      await waitFor(() => expect(fetch).toHaveBeenCalled());
+      const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+      expect(body.itemNote).toBe('Full note\nSecond line');
+      expect(body).not.toHaveProperty('note');
+    },
+  );
+  it('reads and edits item notes separately from quantity-change notes', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond(item));
+    const user = userEvent.setup();
+    view(true, [{ ...item, itemNote: 'Full text\nSecond line' }]);
+    const indicator = screen.getByLabelText('הערות לפריט Hammer');
+    await user.click(indicator);
+    expect(indicator.closest('details')!.open).toBe(true);
+    expect(indicator.closest('details')!.querySelector('p')!.textContent).toBe(
+      'Full text\nSecond line',
+    );
+    await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+    const metadata = within(dialog).getByRole('textbox', { name: 'הערות' });
+    expect(metadata).toHaveProperty('value', 'Full text\nSecond line');
+    expect(within(dialog).queryByRole('textbox', { name: 'הערות על השינוי' })).toBeNull();
+    await user.clear(metadata);
+    await user.type(metadata, 'Edited metadata');
+    await user.clear(within(dialog).getByRole('textbox', { name: 'זמין' }));
+    await user.type(within(dialog).getByRole('textbox', { name: 'זמין' }), '21');
+    await user.type(
+      within(dialog).getByRole('textbox', { name: 'הערות על השינוי' }),
+      'Stock reason',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(body).toMatchObject({
+      itemNote: 'Edited metadata',
+      note: 'Stock reason',
+      targetAvailable: 21,
+    });
+  });
+  it('hides blank indicators and preserves failed note drafts', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      respond({ error: 'invalid_item_note', message: 'Save failed' }, 400),
+    );
+    view(true, [{ ...item, itemNote: '  \n ' }]);
+    expect(screen.queryByLabelText('הערות לפריט Hammer')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Hammer' }));
+    const dialog = screen.getByRole('dialog', { name: 'עריכת פריט' });
+    const metadata = within(dialog).getByRole('textbox', { name: 'הערות' });
+    await user.clear(metadata);
+    await user.type(metadata, 'Keep this draft');
+    await user.click(within(dialog).getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(metadata).toHaveProperty('value', 'Keep this draft');
+    expect(screen.getByRole('dialog', { name: 'עריכת פריט' })).toBeTruthy();
+  });
+
   it('omits the captured category when saving only metadata', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond(item));
     const user = userEvent.setup();
@@ -103,6 +237,7 @@ describe('inventory management UI', () => {
       kind: 'camp_equipment',
       lotSize: null,
     });
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).not.toHaveProperty('itemNote');
   });
   it.each([
     {

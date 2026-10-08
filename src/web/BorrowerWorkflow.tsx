@@ -1,3 +1,4 @@
+import { ItemNote } from './ItemNote';
 import { projectedLocationAvailability } from './borrower-workflow-state';
 import { StickyTable } from './StickyTable';
 import {
@@ -1780,6 +1781,11 @@ export const BorrowerWorkflow = forwardRef<
             </>
           }
         >
+          <ItemNote
+            key={quantityItem.id}
+            note={quantityItem.itemNote}
+            itemName={quantityItem.name}
+          />
           <form
             id="quantity-form"
             onSubmit={submitQuantity}

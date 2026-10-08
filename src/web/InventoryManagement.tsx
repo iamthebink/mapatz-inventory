@@ -1,3 +1,4 @@
+import { ItemNote } from './ItemNote';
 import { StickyTable } from './StickyTable';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Archive, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
@@ -29,6 +30,7 @@ type Draft = {
   lotSize: string;
   available: string;
   note: string;
+  itemNote: string;
 };
 type Attempt = {
   path: string;
@@ -55,6 +57,7 @@ const itemDraft = (item: Item | null): Draft => ({
   lotSize: item?.lotSize?.toString() ?? '',
   available: '0',
   note: '',
+  itemNote: item?.itemNote ?? '',
 });
 const safeInteger = (text: string, min: number) =>
   /^\d+$/.test(text) && Number.isSafeInteger(Number(text)) && Number(text) >= min;
@@ -431,6 +434,7 @@ export function InventoryManagement({
         key: crypto.randomUUID(),
         ledgerEpoch: editorEpoch,
         name: draft.name.trim(),
+        ...(!item || draft.itemNote !== item.itemNote ? { itemNote: draft.itemNote } : {}),
         ...(!item || draft.kind !== item.kind ? { kind: draft.kind } : {}),
         aliases: draft.aliases
           .split(',')
@@ -442,7 +446,7 @@ export function InventoryManagement({
           ? {
               targetAvailable: Number(draft.available),
               stockRevision: item ? (reviewSnapshot ?? item.stockRevision) : undefined,
-              note: draft.note,
+              ...(item ? { note: draft.note } : {}),
             }
           : {}),
       },
@@ -629,14 +633,17 @@ export function InventoryManagement({
       key: 'name',
       label: 'פריט',
       render: (item) => (
-        <button
-          type="button"
-          className="inventory-link"
-          onClick={() => open({ kind: 'item', item })}
-        >
-          {item.name}
-          {item.archived ? ' (בארכיון)' : ''}
-        </button>
+        <div className="item-name-with-note">
+          <button
+            type="button"
+            className="inventory-link"
+            onClick={() => open({ kind: 'item', item })}
+          >
+            {item.name}
+            {item.archived ? ' (בארכיון)' : ''}
+          </button>
+          <ItemNote note={item.itemNote} itemName={item.name} />
+        </div>
       ),
       sortValue: (item) => item.name,
     },
@@ -1003,6 +1010,21 @@ export function InventoryManagement({
                   </label>
                   {field('name', 'שם פריט', !admin || !!selected?.archived)}
                   {field('aliases', 'כינויים, מופרדים בפסיק', !admin || !!selected?.archived)}
+                  <label className="field-label">
+                    הערות
+                    <textarea
+                      className="input-field"
+                      value={draft.itemNote}
+                      maxLength={500}
+                      rows={5}
+                      disabled={lockedDraft || !admin || !!selected?.archived}
+                      onChange={(event) => {
+                        setDraft({ ...draft, itemNote: event.target.value });
+                        setDirty(true);
+                      }}
+                    />
+                  </label>
+                  {draft.itemNote.trim() && <p className="item-note-text">{draft.itemNote}</p>}
                   {(draft.kind === 'consumable' || draft.lotSize !== '') &&
                     field('lotSize', 'גודל מארז', !admin || !!selected?.archived)}
                 </div>
@@ -1076,6 +1098,7 @@ export function InventoryManagement({
                                 draft.name !== selected.name ||
                                 draft.aliases !== selected.aliases.join(', ') ||
                                 draft.lotSize !== (selected.lotSize?.toString() ?? '') ||
+                                draft.itemNote !== (selected.itemNote ?? '') ||
                                 draft.note !== '' ||
                                 !selected.balances.some(
                                   (balance) => balance.locationId === Number(locationId),
@@ -1118,7 +1141,7 @@ export function InventoryManagement({
                     {adjustment}
                   </p>
                 )}
-                {availableChanged && field('note', 'הערת התאמה (רשות)', !admin)}
+                {selected && availableChanged && field('note', 'הערות על השינוי', !admin)}
                 {reviewRequired && (
                   <div>
                     {currentBalances ? (

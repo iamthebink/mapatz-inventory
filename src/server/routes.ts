@@ -29,6 +29,7 @@ const id = z.coerce.number().int().positive();
 const commandRouteId = z.coerce.number().int().positive();
 const aliases = z.array(z.string().trim().min(1).max(100)).max(20);
 const itemInput = z.object({
+  itemNote: z.string().max(500).optional(),
   name: z.string().trim().min(1).max(100),
   kind: z.enum(['consumable', 'non_consumable', 'camp_equipment']),
   lotSize: positive.nullish(),
@@ -501,6 +502,7 @@ export function apiRouter(
   );
   const inventorySave = z
     .object({
+      itemNote: z.string().max(500).optional(),
       key: z.string().min(8).max(128),
       ledgerEpoch: positive,
       name: z.string().trim().min(1).max(100),

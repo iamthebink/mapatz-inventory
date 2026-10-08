@@ -50,6 +50,7 @@ function snapshot(borrowerId = 7): BorrowerDeskSnapshot {
         id: 11,
         name: 'Tent',
         kind: 'non_consumable',
+        itemNote: '',
         lotSize: null,
         balances: [{ locationId: 1, available: 4, damaged: 0 }],
         archived: false,

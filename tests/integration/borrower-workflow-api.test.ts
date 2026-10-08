@@ -469,6 +469,7 @@ describe('borrower workflow snapshot API', () => {
               id: view.id,
               name: view.name,
               kind: view.kind,
+              itemNote: '',
               lotSize: view.lotSize,
               balances: [
                 {

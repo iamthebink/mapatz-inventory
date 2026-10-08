@@ -32,6 +32,7 @@ function snapshot(overrides: Partial<BorrowerDeskSnapshot> = {}): BorrowerDeskSn
         id: 11,
         name: 'Tent',
         kind: 'non_consumable',
+        itemNote: '',
         lotSize: null,
         balances: [{ locationId: 1, available: 6, damaged: 0 }],
         archived: false,
@@ -65,6 +66,21 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 describe('borrower operation state', () => {
+  it('validates item note text and length in borrower snapshots', () => {
+    const base = snapshot();
+    expect(isBorrowerDeskSnapshot(base)).toBe(true);
+    for (const itemNote of [null, 42, 'x'.repeat(501), undefined]) {
+      expect(
+        isBorrowerDeskSnapshot({ ...base, inventory: [{ ...base.inventory[0], itemNote }] }),
+      ).toBe(false);
+    }
+    expect(
+      isBorrowerDeskSnapshot({
+        ...base,
+        inventory: [{ ...base.inventory[0], itemNote: 'x'.repeat(500) }],
+      }),
+    ).toBe(true);
+  });
   it('keeps consumable issuance out of holdings and fails closed on unsafe issue totals', () => {
     const consumable = {
       ...snapshot().inventory[0]!,

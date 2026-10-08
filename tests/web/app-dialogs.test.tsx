@@ -11,6 +11,7 @@ const hammer: Item = {
   id: 11,
   name: 'פטיש',
   kind: 'non_consumable',
+  itemNote: '',
   lotSize: null,
   balances: [{ locationId: 31, available: 3, damaged: 1 }],
   aliases: ['מקבת'],
@@ -117,6 +118,7 @@ function setup(
         name: String(body.name),
         kind: body.kind as Item['kind'],
         aliases: body.aliases as string[],
+        itemNote: '',
         lotSize: body.lotSize as number | null,
         balances: [
           {

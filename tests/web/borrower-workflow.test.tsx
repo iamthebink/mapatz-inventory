@@ -20,6 +20,7 @@ const item = {
   id: 11,
   name: 'אוהל',
   kind: 'non_consumable' as const,
+  itemNote: '',
   lotSize: null,
   balances: [{ locationId: 1, available: 4, damaged: 0 }],
   archived: false,
@@ -266,6 +267,37 @@ it('returns to the originating summary once when an earlier history listener rer
   }
 });
 describe('active descendant search', () => {
+  it('exposes item notes in holdings and quantity dialogs without staging or copying them', async () => {
+    const itemNote = 'Handle carefully\nFull second line';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = String(input);
+      if (path.startsWith('/api/borrowers/search'))
+        return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+      if (path === '/api/borrowers/7/desk-snapshot')
+        return json({ ...desk(), inventory: [{ ...item, itemNote }] });
+      throw new Error(`Unexpected ${path}`);
+    });
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    const held = document.getElementById('holdings-heading')!.parentElement!;
+    const disclosure = within(held).getByLabelText(`הערות לפריט ${item.name}`);
+    await userEvent.click(disclosure);
+    expect(disclosure.closest('details')!.querySelector('p')!.textContent).toBe(itemNote);
+    await userEvent.click(within(held).getByRole('button', { name: 'החזרת ציוד' }));
+    const dialog = screen.getByRole('dialog', { name: 'החזרת ציוד' });
+    await userEvent.click(within(dialog).getByLabelText(`הערות לפריט ${item.name}`));
+    expect(dialog.querySelector('.item-note-text')!.textContent).toBe(itemNote);
+    expect(within(dialog).getByRole('textbox', { name: /הער/ })).toHaveProperty('value', '');
+    expect(document.querySelector('.staged-section .operational-empty')?.textContent).toBe(
+      'אין פעולות ממתינות',
+    );
+    expect(document.querySelectorAll('#dialog-stack-root > *')).toHaveLength(2);
+  });
   it('keeps focus on the input, skips disabled options, bounds movement, and collapses before Escape can bubble', async () => {
     const selected: string[] = [];
     const escaped = vi.fn();

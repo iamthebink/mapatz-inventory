@@ -572,6 +572,7 @@ export class InventoryService {
 
   createItem(input: {
     name: string;
+    itemNote?: string;
     kind: ItemKind;
     lotSize?: number | null;
     locationId?: number | null;
@@ -580,14 +581,15 @@ export class InventoryService {
     if (input.kind !== 'consumable' && input.lotSize != null)
       throw new DomainError('invalid_lot_size', 'Only consumables may define a lot size');
     if (input.lotSize != null) integer(input.lotSize, 'lotSize');
+    this.validateItemNote(input.itemNote);
     return transaction(this.db, () => {
       this.requireActiveLocation(input.locationId ?? null);
       const name = input.name.trim();
       this.requireUniqueItemName(name);
       const id = allocateIdentity(this.db, 'item');
       this.db
-        .prepare('INSERT INTO items(id,name,kind,lot_size) VALUES (?,?,?,?)')
-        .run(id, name, input.kind, input.lotSize ?? null);
+        .prepare('INSERT INTO items(id,name,kind,lot_size,item_note) VALUES (?,?,?,?,?)')
+        .run(id, name, input.kind, input.lotSize ?? null, input.itemNote ?? '');
       this.setAliases(id, input.aliases ?? []);
       this.db
         .prepare(
@@ -604,12 +606,14 @@ export class InventoryService {
     id: number,
     input: {
       name: string;
+      itemNote?: string;
       kind?: ItemKind;
       lotSize?: number | null;
       locationId?: number | null;
       aliases?: string[];
     },
   ): Item {
+    this.validateItemNote(input.itemNote);
     return transaction(this.db, () => {
       const item = this.requireItem(id);
       const kind = input.kind ?? item.kind;
@@ -629,8 +633,8 @@ export class InventoryService {
       const name = input.name.trim();
       this.requireUniqueItemName(name, id);
       this.db
-        .prepare('UPDATE items SET name=?,kind=?,lot_size=? WHERE id=?')
-        .run(name, kind, lotSize, id);
+        .prepare('UPDATE items SET name=?,kind=?,lot_size=?,item_note=? WHERE id=?')
+        .run(name, kind, lotSize, input.itemNote ?? item.itemNote, id);
       if (input.aliases !== undefined) this.setAliases(id, input.aliases);
       return this.getItem(id);
     });
@@ -641,6 +645,7 @@ export class InventoryService {
     ledgerEpoch?: number;
     itemId?: number;
     name: string;
+    itemNote?: string;
     kind?: ItemKind;
     aliases: string[];
     lotSize: number | null;
@@ -650,6 +655,7 @@ export class InventoryService {
     note?: string;
   }): Item {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    this.validateItemNote(input.itemNote);
     return transaction(this.db, () => {
       this.requireBusinessCommandKey(input.key);
       this.requireInventoryEpoch(input.ledgerEpoch);
@@ -685,8 +691,14 @@ export class InventoryService {
         if (input.lotSize != null) integer(input.lotSize, 'lotSize');
         this.requireUniqueItemName(input.name.trim(), input.itemId);
         this.db
-          .prepare('UPDATE items SET name=?,kind=?,lot_size=? WHERE id=?')
-          .run(input.name.trim(), kind, input.lotSize, input.itemId);
+          .prepare('UPDATE items SET name=?,kind=?,lot_size=?,item_note=? WHERE id=?')
+          .run(
+            input.name.trim(),
+            kind,
+            input.lotSize,
+            input.itemNote ?? item.itemNote,
+            input.itemId,
+          );
         this.ensureBalance(input.itemId, input.locationId!);
         this.setAliases(input.itemId, input.aliases);
       }
@@ -706,7 +718,7 @@ export class InventoryService {
             Math.abs(delta),
             null,
             null,
-            input.note ?? '',
+            input.itemId === undefined ? '' : (input.note ?? ''),
             input.locationId!,
           );
       }
@@ -734,6 +746,7 @@ export class InventoryService {
 
   private createItemInTransaction(input: {
     name: string;
+    itemNote?: string;
     kind?: ItemKind;
     lotSize: number | null;
     locationId: number | null;
@@ -746,8 +759,8 @@ export class InventoryService {
     this.requireUniqueItemName(input.name.trim());
     const id = allocateIdentity(this.db, 'item');
     this.db
-      .prepare('INSERT INTO items(id,name,kind,lot_size) VALUES (?,?,?,?)')
-      .run(id, input.name.trim(), input.kind, input.lotSize);
+      .prepare('INSERT INTO items(id,name,kind,lot_size,item_note) VALUES (?,?,?,?,?)')
+      .run(id, input.name.trim(), input.kind, input.lotSize, input.itemNote ?? '');
     this.setAliases(id, input.aliases);
     this.db
       .prepare('INSERT INTO inventory_baselines(item_id,quantity,through_event_id) VALUES (?,0,0)')
@@ -755,6 +768,11 @@ export class InventoryService {
     this.initializeItemState(id);
     this.ensureBalance(id, input.locationId!);
     return this.getItem(id);
+  }
+
+  private validateItemNote(value: unknown): void {
+    if (value !== undefined && (typeof value !== 'string' || value.length > 500))
+      throw new DomainError('invalid_item_note', 'הערות הפריט ארוכות מדי או לא תקינות');
   }
 
   private requireUniqueItemName(name: string, excludedItemId?: number): void {
@@ -2374,6 +2392,7 @@ export class InventoryService {
       return {
         id: item.id,
         name: item.name,
+        itemNote: item.itemNote,
         kind: item.kind,
         lotSize: item.lotSize,
         balances: item.balances,
@@ -2450,6 +2469,7 @@ export class InventoryService {
   private itemFromRow = (row: Row): Item => ({
     id: Number(row.id),
     name: String(row.name),
+    itemNote: String(row.item_note),
     kind: row.kind,
     lotSize: row.lot_size == null ? null : Number(row.lot_size),
     balances: this.balances(Number(row.id)),

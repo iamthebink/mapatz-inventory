@@ -11,6 +11,7 @@ const item = (id: number, name: string, available = 5): Item => ({
   name,
   kind: 'consumable',
   aliases: [],
+  itemNote: '',
   lotSize: null,
   balances: [{ locationId: 1, available, damaged: 0 }],
   archived: false,

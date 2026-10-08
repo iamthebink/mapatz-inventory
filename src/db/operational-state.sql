@@ -1,3 +1,5 @@
+ALTER TABLE items ADD COLUMN item_note TEXT NOT NULL DEFAULT '' CHECK (length(item_note) <= 500);
+
 CREATE TABLE item_state (
   item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
   borrowed INTEGER NOT NULL DEFAULT 0 CHECK (borrowed >= 0),

@@ -1482,3 +1482,118 @@ test('keeps the ledger schema free of transaction grouping or receipt relations'
   ]);
   expect(eventColumns.some((name) => /batch|transaction|receipt/i.test(name))).toBe(false);
 });
+
+test.describe('item notes on touch workflows', () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+  test('discloses full notes during loan and return without changing workflow state', async ({
+    page,
+    seed,
+    openLedger,
+  }) => {
+    const note = `Operational item note\n${'x'.repeat(430)}\nFinal instruction`;
+    await page.request.post('/api/session/role', {
+      data: { role: 'admin', password: 'e2e-admin-password' },
+    });
+    const updated = await page.request.put(`/api/items/${seed.item.id}`, {
+      data: { name: seed.item.name, itemNote: note },
+    });
+    expect(updated.ok()).toBeTruthy();
+    await openSeededCard(page, seed.borrower.playaName);
+    const itemSearch = page.getByRole('combobox', { name: 'חיפוש פריט' });
+    await itemSearch.fill(seed.item.name);
+    await itemSearch.press('ArrowDown');
+    await itemSearch.press('Enter');
+    let dialog = page.getByRole('dialog', { name: 'הוספת השאלה' });
+    const indicator = dialog.getByLabel(`הערות לפריט ${seed.item.name}`);
+    await indicator.tap();
+    await expect(dialog.locator('.item-note-text')).toHaveText(note);
+    const text = dialog.locator('.item-note-text');
+    expect(await text.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const bounds = await text.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    const quantityControl = dialog.getByRole('spinbutton', { name: 'כמות' });
+    await quantityControl.scrollIntoViewIfNeeded();
+    await expect(quantityControl).toBeInViewport();
+    const confirmControl = dialog.getByRole('button', { name: 'אישור', exact: true });
+    await confirmControl.scrollIntoViewIfNeeded();
+    await expect(confirmControl).toBeInViewport();
+
+    await expect(page.locator('#dialog-stack-root > *')).toHaveCount(2);
+    await expect(dialog.getByRole('textbox', { name: 'הערה (רשות)' })).toHaveValue('');
+    await expect(page.locator('.staged-section')).toContainText('אין פעולות ממתינות');
+    await indicator.tap();
+    await dialog.getByRole('textbox', { name: 'הערה (רשות)' }).fill('Loan event reason');
+    await dialog.getByRole('button', { name: 'אישור', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'אישור פעולות', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: 'אישור פעולות' })
+      .getByRole('button', { name: 'אישור ושמירה' })
+      .click();
+    await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
+    const database = openLedger();
+    expect(database.prepare('SELECT item_note FROM items WHERE id=?').get(seed.item.id)).toEqual({
+      item_note: note,
+    });
+    expect(
+      database
+        .prepare(
+          "SELECT note FROM inventory_events WHERE item_id=? AND kind='checked_out' ORDER BY id DESC LIMIT 1",
+        )
+        .get(seed.item.id),
+    ).toEqual({ note: 'Loan event reason' });
+    await openSeededCard(page, seed.borrower.playaName);
+    const holding = page
+      .locator('.holdings-section')
+      .getByRole('row')
+      .filter({ has: page.getByLabel(`הערות לפריט ${seed.item.name}`) });
+    await holding.getByRole('button', { name: 'החזרת ציוד' }).press('Enter');
+    dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
+    await dialog.getByRole('spinbutton', { name: 'כמות' }).fill('1');
+    const returnIndicator = dialog.getByLabel(`הערות לפריט ${seed.item.name}`);
+    await returnIndicator.focus();
+    await returnIndicator.press('Space');
+    await expect(dialog.locator('.item-note-text')).toHaveText(note);
+    await expect(dialog.getByRole('spinbutton', { name: 'כמות' })).toHaveValue('1');
+    await expect(dialog.getByRole('textbox', { name: 'הערה (רשות)' })).toHaveValue('');
+    await dialog.getByRole('textbox', { name: 'הערה (רשות)' }).fill('Return event reason');
+    await dialog.getByRole('button', { name: 'אישור', exact: true }).click();
+    await page.getByRole('button', { name: 'אישור פעולות', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: 'אישור פעולות' })
+      .getByRole('button', { name: 'אישור ושמירה' })
+      .click();
+    await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
+    expect(
+      database
+        .prepare(
+          "SELECT note FROM inventory_events WHERE item_id=? AND kind='returned_usable' ORDER BY id DESC LIMIT 1",
+        )
+        .get(seed.item.id),
+    ).toEqual({ note: 'Return event reason' });
+    expect(database.prepare('SELECT item_note FROM items WHERE id=?').get(seed.item.id)).toEqual({
+      item_note: note,
+    });
+    await page.request.put(`/api/items/${seed.item.id}`, {
+      data: { name: seed.item.name, itemNote: 'Fresh edited note' },
+    });
+    await openSeededCard(page, seed.borrower.playaName);
+    let refreshed = page.locator('.holdings-section').getByLabel(`הערות לפריט ${seed.item.name}`);
+    await refreshed.tap();
+    await expect(refreshed.locator('..').locator('.item-note-text')).toHaveText(
+      'Fresh edited note',
+    );
+    await page
+      .getByRole('dialog', { name: /כרטיס שואל/ })
+      .getByRole('button', { name: 'סגירה', exact: true })
+      .last()
+      .click();
+    await page.request.put(`/api/items/${seed.item.id}`, {
+      data: { name: seed.item.name, itemNote: '' },
+    });
+    await openSeededCard(page, seed.borrower.playaName);
+    refreshed = page.locator('.holdings-section').getByLabel(`הערות לפריט ${seed.item.name}`);
+    await expect(refreshed).toHaveCount(0);
+  });
+});

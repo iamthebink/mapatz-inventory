@@ -1685,3 +1685,37 @@
     display: none;
   }
 }
+
+.item-name-with-note {
+  display: flex;
+  align-items: start;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+.item-note {
+  max-width: 100%;
+  min-width: 0;
+}
+.item-note summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  cursor: pointer;
+  border-radius: 0.5rem;
+  color: var(--color-ctp-text);
+}
+.item-note summary::-webkit-details-marker {
+  display: none;
+}
+.item-note summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.item-note-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-weight: normal;
+  max-width: 40rem;
+}

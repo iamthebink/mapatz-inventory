@@ -47,6 +47,58 @@ function expectRecoveredState(
     expect(actualHighWater[field]).toBeGreaterThanOrEqual(expectedHighWater[field]);
 }
 describe('inventory API permission and edge-case matrix', () => {
+  it('validates and authorizes item metadata across direct and management routes', async () => {
+    const { db, inventory, agent } = fixture();
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const body = {
+      name: 'Noted API',
+      kind: 'non_consumable',
+      locationId,
+      itemNote: 'API note\nSecond line',
+    };
+    await agent.post('/api/items').send(body).expect(403);
+    await role(agent, 'admin', 'admin-pass');
+    await agent
+      .post('/api/items')
+      .send({ ...body, itemNote: 'x'.repeat(501) })
+      .expect(400);
+    const created = await agent.post('/api/items').send(body).expect(201);
+    expect(created.body.itemNote).toBe(body.itemNote);
+    const command = {
+      key: 'api-item-note-edit',
+      ledgerEpoch: inventory.inventoryEpoch(),
+      name: body.name,
+      locationId,
+      lotSize: null,
+      aliases: [],
+      itemNote: 'Changed',
+    };
+    await agent
+      .put(`/api/inventory/items/${created.body.id}`)
+      .send({ ...command, itemNote: 42 })
+      .expect(400);
+    await agent.put(`/api/inventory/items/${created.body.id}`).send(command).expect(200);
+    const borrower = inventory.createBorrower({
+      fullName: 'Reader',
+      playaName: '',
+      campDepartment: '',
+    });
+    const snapshot = await agent.get(`/api/borrowers/${borrower.id}/desk-snapshot`).expect(200);
+    expect(snapshot.body.inventory[0].itemNote).toBe('Changed');
+    expect(db.prepare('SELECT * FROM inventory_events').all()).toEqual([]);
+    await agent
+      .put(`/api/items/${created.body.id}`)
+      .send({ name: body.name, itemNote: '' })
+      .expect(200);
+    expect((await agent.get('/api/items')).body[0].itemNote).toBe('');
+    await role(agent, 'operator');
+    await agent
+      .put(`/api/items/${created.body.id}`)
+      .send({ name: body.name, itemNote: 'Forbidden' })
+      .expect(403);
+    db.close();
+  });
+
   it('accepts category through both admin edit routes and rejects an operator or a concurrent loan', async () => {
     const { db, inventory, agent } = fixture();
     const locationId = Number(inventory.listLocations()[0]!.id);

@@ -25,6 +25,7 @@ export interface TransferLocation {
 }
 
 export interface TransferItem {
+  itemNote?: string;
   id: number;
   name: string;
   kind: ItemKind;
@@ -89,6 +90,7 @@ export interface InventoryTransferSnapshot {
 }
 
 export interface ResetItem {
+  itemNote?: string;
   name: string;
   kind: ItemKind;
   location: string | null;
@@ -220,6 +222,7 @@ function utcTimestamp(value: string): number {
 
 function identityMetadata(item: ResetItem | RecoveryItem): string {
   const common = {
+    itemNote: item.itemNote ?? '',
     name: normalizeItemName(item.name),
     kind: item.kind,
     aliases: [...item.aliases].sort(),
@@ -254,6 +257,11 @@ export function validateResetPayload(payload: ResetPayload): ResetPayload {
   const placements = new Set<string>();
   const totals = new Map<string, number>();
   for (const item of payload.items) {
+    if (
+      item.itemNote !== undefined &&
+      (typeof item.itemNote !== 'string' || item.itemNote.length > 500)
+    )
+      invalidWorkbook('Item Note must be text of at most 500 characters');
     if (!Number.isSafeInteger(item.total) || item.total < 0 || (item.archived && item.total > 0))
       invalidWorkbook('Invalid reset quantity');
     const location = locations.get(item.location?.toLocaleLowerCase() ?? '');
@@ -316,6 +324,11 @@ export function validateRecoveryPayload(payload: RecoveryPayload): RecoveryPaylo
   const physicalTotals = new Map<number, number>();
   const itemNames = new Set<string>();
   for (const item of payload.items) {
+    if (
+      item.itemNote !== undefined &&
+      (typeof item.itemNote !== 'string' || item.itemNote.length > 500)
+    )
+      invalidWorkbook('Item Note must be text of at most 500 characters');
     safe(item.id, 'Item ID', true);
     for (const field of [
       'available',
@@ -599,6 +612,7 @@ export class InventoryTransferService {
       return {
         id: Number(row.id),
         name: String(row.name),
+        itemNote: String(row.item_note),
         kind: row.kind as ItemKind,
         location: row.location_name == null ? null : String(row.location_name),
         aliases: aliases.get(Number(row.id)) ?? [],
@@ -733,8 +747,17 @@ export class InventoryTransferService {
         const item = placements[0]!;
         const itemId = allocateIdentity(this.db, 'item');
         this.db
-          .prepare('INSERT INTO items(id,name,kind,lot_size,archived) VALUES (?,?,?,?,?)')
-          .run(itemId, item.name, item.kind, item.lotSize, Number(item.archived));
+          .prepare(
+            'INSERT INTO items(id,name,kind,lot_size,archived,item_note) VALUES (?,?,?,?,?,?)',
+          )
+          .run(
+            itemId,
+            item.name,
+            item.kind,
+            item.lotSize,
+            Number(item.archived),
+            item.itemNote ?? '',
+          );
         this.db.prepare('INSERT INTO item_state(item_id) VALUES (?)').run(itemId);
         for (const alias of item.aliases)
           this.db
@@ -840,9 +863,17 @@ export class InventoryTransferService {
           itemIds.set(item.id, itemId);
           this.db
             .prepare(
-              'INSERT INTO items(id,name,kind,lot_size,archived,created_at) VALUES (?,?,?,?,?,?)',
+              'INSERT INTO items(id,name,kind,lot_size,archived,created_at,item_note) VALUES (?,?,?,?,?,?,?)',
             )
-            .run(itemId, item.name, item.kind, item.lotSize, Number(item.archived), item.createdAt);
+            .run(
+              itemId,
+              item.name,
+              item.kind,
+              item.lotSize,
+              Number(item.archived),
+              item.createdAt,
+              item.itemNote ?? '',
+            );
           this.db
             .prepare('INSERT INTO item_state(item_id,borrowed,lost,revision) VALUES (?,?,?,?)')
             .run(itemId, item.borrowed, item.lost, item.revision);

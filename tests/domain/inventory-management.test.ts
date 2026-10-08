@@ -1,11 +1,90 @@
 import { describe, expect, it } from 'vitest';
-import { openDatabase } from '../../src/db/database.js';
+import { migrate, openDatabase } from '../../src/db/database.js';
 import { InventoryService } from '../../src/domain/inventory.js';
 const setup = () => {
   const db = openDatabase(':memory:');
   return { db, inventory: new InventoryService(db) };
 };
 describe('inventory management commands', () => {
+  it('rejects obsolete item schemas with a preservation instruction', () => {
+    const { db } = setup();
+    db.exec('ALTER TABLE items DROP COLUMN item_note');
+    expect(() => migrate(db)).toThrow(/unsupported item notes schema.*Preserve/);
+    expect(db.prepare('SELECT count(*) count FROM items').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
+  it.each(
+    (['consumable', 'non_consumable', 'camp_equipment'] as const).flatMap((kind) =>
+      [0, 3].map((stock) => ({ kind, stock })),
+    ),
+  )('saves $kind notes independently at initial stock $stock', ({ kind, stock }) => {
+    const { db, inventory } = setup();
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const note = 'First line\nSecond line <literal>';
+    const item = inventory.saveInventoryItem({
+      key: 'item-note-create',
+      name: 'Noted',
+      kind,
+      aliases: [],
+      lotSize: null,
+      locationId,
+      targetAvailable: stock,
+      itemNote: note,
+      note: 'must not become an initial event note',
+    });
+    expect(item.itemNote).toBe(note);
+    expect(db.prepare('SELECT note FROM inventory_events').all()).toEqual(
+      stock ? [{ note: '' }] : [],
+    );
+    const borrower = inventory.createBorrower({
+      fullName: 'Reader',
+      playaName: '',
+      campDepartment: '',
+    });
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).inventory[0]!.itemNote).toBe(note);
+    db.close();
+  });
+  it('edits and clears metadata without events, while stock changes retain their own notes', () => {
+    const { db, inventory } = setup();
+    const locationId = Number(inventory.listLocations()[0]!.id);
+    const item = inventory.createItem({
+      name: 'Noted',
+      kind: 'non_consumable',
+      locationId,
+      itemNote: 'Original',
+    });
+    const save = {
+      key: 'item-note-edit',
+      itemId: item.id,
+      name: item.name,
+      aliases: [],
+      lotSize: null,
+      locationId,
+      itemNote: 'Edited\nFull text',
+    };
+    expect(inventory.saveInventoryItem(save).itemNote).toBe(save.itemNote);
+    expect(db.prepare('SELECT * FROM inventory_events').all()).toEqual([]);
+    const adjusted = inventory.saveInventoryItem({
+      ...save,
+      key: 'item-note-stock',
+      targetAvailable: 3,
+      stockRevision: item.stockRevision,
+      note: 'Restock reason',
+    });
+    expect(adjusted.itemNote).toBe(save.itemNote);
+    expect(db.prepare('SELECT note FROM inventory_events').get()).toEqual({
+      note: 'Restock reason',
+    });
+    expect(inventory.updateItem(item.id, { name: item.name }).itemNote).toBe(save.itemNote);
+    expect(inventory.updateItem(item.id, { name: item.name, itemNote: '' }).itemNote).toBe('');
+    expect(() =>
+      inventory.updateItem(item.id, { name: item.name, itemNote: 'x'.repeat(501) }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_item_note' }));
+    expect(inventory.listItems()[0]!.itemNote).toBe('');
+    db.close();
+  });
+
   it.each(
     (['consumable', 'non_consumable', 'camp_equipment'] as const).flatMap((from) =>
       (['consumable', 'non_consumable', 'camp_equipment'] as const)

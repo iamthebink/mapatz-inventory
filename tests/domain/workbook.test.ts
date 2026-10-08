@@ -6,6 +6,7 @@ import { openDatabase } from '../../src/db/database.js';
 import {
   InventoryTransferService,
   type InventoryTransferSnapshot,
+  type ResetPayload,
   validateRecoveryPayload,
 } from '../../src/domain/import-export.js';
 import { InventoryService } from '../../src/domain/inventory.js';
@@ -53,6 +54,95 @@ const emptySnapshot: InventoryTransferSnapshot = {
   },
 };
 describe('inventory XLSX workbook', () => {
+  it.each(['conflicting placements', 'non-text', 'oversized'] as const)(
+    'rejects reset item notes with %s atomically',
+    async (failure) => {
+      const db = openDatabase(':memory:');
+      try {
+        const inventory = new InventoryService(db);
+        const transfer = new InventoryTransferService(db);
+        const first = Number(inventory.listLocations()[0]!.id);
+        const second = Number(inventory.createLocation('reset-note-second', 'Second').id);
+        const item = inventory.createItem({
+          name: 'Retained item',
+          kind: 'non_consumable',
+          locationId: first,
+          itemNote: 'Retained note\nSecond line',
+        });
+        inventory.addStock(item.id, 2, 'Retained event', first);
+        inventory.addStock(item.id, 1, '', second);
+        const before = transfer.snapshot();
+        const epoch = inventory.inventoryEpoch();
+        const bytes = await exportWorkbook(before);
+        const payload = await parseResetWorkbook(bytes);
+        const invalidNote =
+          failure === 'conflicting placements'
+            ? 'Conflicting note'
+            : failure === 'non-text'
+              ? 42
+              : 'x'.repeat(501);
+        const workbook = await load(bytes);
+        workbook
+          .getWorksheet(WORKBOOK_CONTRACT.sheets.resetItems.name)!
+          .getRow(3)
+          .getCell(8).value = invalidNote;
+        await expect(parseResetWorkbook(await save(workbook))).rejects.toThrow(
+          failure === 'conflicting placements' ? /metadata disagrees/ : /Item Note/,
+        );
+        const invalidPayload = {
+          ...payload,
+          items: payload.items.map((row, index) =>
+            index === 1 ? { ...row, itemNote: invalidNote } : row,
+          ),
+        } as unknown as ResetPayload;
+        expect(() => transfer.replaceWithReset(invalidPayload)).toThrow(
+          failure === 'conflicting placements' ? /metadata disagrees/ : /Item Note/,
+        );
+        expect(transfer.snapshot()).toEqual(before);
+        expect(inventory.inventoryEpoch()).toBe(epoch);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it('preserves literal item notes in reset and recovery, including multiple placements', async () => {
+    const db = openDatabase(':memory:');
+    const inventory = new InventoryService(db);
+    const transfer = new InventoryTransferService(db);
+    const first = Number(inventory.listLocations()[0]!.id);
+    const second = Number(inventory.createLocation('second-note', 'Second').id);
+    const itemNote = '  Literal <text>\nSecond line  ';
+    const item = inventory.createItem({
+      name: 'Noted export',
+      kind: 'non_consumable',
+      locationId: first,
+      itemNote,
+    });
+    inventory.addStock(item.id, 2, 'Transaction note', first);
+    inventory.addStock(item.id, 1, 'Second event', second);
+    const bytes = await exportWorkbook(transfer.snapshot());
+    const recovery = await parseRecoveryWorkbook(bytes);
+    const reset = await parseResetWorkbook(bytes);
+    expect(recovery.items.map((row) => row.itemNote)).toEqual([itemNote, itemNote]);
+    expect(reset.items.map((row) => row.itemNote)).toEqual([itemNote, itemNote]);
+    transfer.replaceWithRecovery(recovery);
+    expect(inventory.listItems()[0]!.itemNote).toBe(itemNote);
+    expect(transfer.snapshot().events.map((event) => event.note)).toEqual([
+      'Transaction note',
+      'Second event',
+    ]);
+    transfer.replaceWithReset(reset);
+    expect(inventory.listItems()[0]!.itemNote).toBe(itemNote);
+    const workbook = await load(bytes);
+    const sheet = workbook.getWorksheet(WORKBOOK_CONTRACT.sheets.recoveryItems.name)!;
+    sheet.getRow(3).getCell(16).value = 'Different metadata';
+    await expect(parseRecoveryWorkbook(await save(workbook))).rejects.toThrow(/metadata disagrees/);
+    sheet.getRow(2).getCell(16).value = 'x'.repeat(501);
+    await expect(parseRecoveryWorkbook(await save(workbook))).rejects.toThrow(/Item Note/);
+    db.close();
+  });
+
   it('accepts genuinely empty optional recovery borrower cells', async () => {
     const snapshot: InventoryTransferSnapshot = {
       ...emptySnapshot,
@@ -263,6 +353,7 @@ describe('inventory XLSX workbook', () => {
           aliases: ['Table'],
           lotSize: null,
           archived: false,
+          itemNote: '',
           total: 6,
         },
       ],
@@ -284,6 +375,7 @@ describe('inventory XLSX workbook', () => {
           aliases: ['Table'],
           lotSize: null,
           archived: false,
+          itemNote: '',
           total: 6,
         },
       ],
@@ -333,6 +425,7 @@ describe('inventory XLSX workbook', () => {
           aliases: ['Water'],
           lotSize: 12,
           archived: false,
+          itemNote: '',
           total: 100,
         },
         {
@@ -342,6 +435,7 @@ describe('inventory XLSX workbook', () => {
           aliases: ['Tent'],
           lotSize: null,
           archived: false,
+          itemNote: '',
           total: 10,
         },
         {
@@ -351,6 +445,7 @@ describe('inventory XLSX workbook', () => {
           aliases: [],
           lotSize: null,
           archived: true,
+          itemNote: '',
           total: 0,
         },
       ],
@@ -486,6 +581,7 @@ describe('inventory XLSX workbook', () => {
       12,
       false,
       90,
+      '',
     ]);
     const serialized = workbook.worksheets
       .flatMap((sheet) => sheet.getSheetValues())
@@ -519,6 +615,7 @@ describe('inventory XLSX workbook', () => {
           aliases: [],
           lotSize: null,
           archived: false,
+          itemNote: '',
           total: 0,
         },
         {
@@ -528,6 +625,7 @@ describe('inventory XLSX workbook', () => {
           aliases: [],
           lotSize: null,
           archived: false,
+          itemNote: '',
           total: 3,
         },
         {
@@ -537,6 +635,7 @@ describe('inventory XLSX workbook', () => {
           aliases: ['alias'],
           lotSize: 5,
           archived: true,
+          itemNote: '',
           total: 0,
         },
       ],
@@ -665,6 +764,7 @@ describe('inventory XLSX workbook', () => {
           aliases: [],
           lotSize: null,
           archived: false,
+          itemNote: '',
           total: 6,
         },
       ],

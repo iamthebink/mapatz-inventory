@@ -24,6 +24,7 @@ export interface LocationBalance {
 }
 
 export interface Item {
+  itemNote: string;
   id: number;
   name: string;
   kind: ItemKind;
