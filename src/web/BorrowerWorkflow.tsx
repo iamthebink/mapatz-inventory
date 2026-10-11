@@ -149,7 +149,7 @@ function OperationReview({ state }: { state: OperationState }) {
           });
         for (const part of group.return)
           rows.push({
-            label: `הוחזרו ${part.usable + part.damaged}, ${part.damaged} פגומים`,
+            label: `הוחזרו ${part.usable + part.damaged}${part.damaged > 0 ? `, ${part.damaged} פגומים` : ''}`,
             returned: true,
             damaged: part.damaged,
             quantity: part.usable + part.damaged,

@@ -152,10 +152,10 @@ export function BorrowerOperationalTables({
                 rows.push({
                   direction: 'return',
                   quantity: total,
-                  label: `הוחזרו ${total}, ${damaged} פגומים`,
+                  label: `הוחזרו ${total}${damaged > 0 ? `, ${damaged} פגומים` : ''}`,
                   notes: group.return.map(
                     (part) =>
-                      `${attribution(part, part.usable + part.damaged)} · ${part.damaged} פגומים`,
+                      `${attribution(part, part.usable + part.damaged)}${part.damaged > 0 ? ` · ${part.damaged} פגומים` : ''}`,
                   ),
                 });
               if ((group.lost ?? []).length)

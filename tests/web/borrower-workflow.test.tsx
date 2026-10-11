@@ -604,7 +604,10 @@ describe('borrower desk workflow', () => {
       await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
       const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
       expect(pending.querySelectorAll('.borrower-pending-row')).toHaveLength(1);
-      expect(pending.textContent).toContain(`הוחזרו ${total}, ${expected} פגומים`);
+      expect(pending.textContent).not.toContain('0 פגומים');
+      expect(pending.textContent).toContain(
+        `הוחזרו ${total}${expected > 0 ? `, ${expected} פגומים` : ''}`,
+      );
       expectHeldQuantity(1);
       if (remove) {
         await userEvent.click(within(pending).getByRole('button', { name: 'ביטול פעולה' }));
@@ -615,7 +618,10 @@ describe('borrower desk workflow', () => {
       await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
       const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
       expect(review.querySelectorAll('.borrower-review-row')).toHaveLength(1);
-      expect(review.textContent).toContain(`הוחזרו ${total}, ${expected} פגומים`);
+      expect(review.textContent).not.toContain('0 פגומים');
+      expect(review.textContent).toContain(
+        `הוחזרו ${total}${expected > 0 ? `, ${expected} פגומים` : ''}`,
+      );
       await userEvent.click(within(review).getByRole('button', { name: 'אישור ושמירה' }));
       await waitFor(() => expect(submitted).toBeDefined());
       expect(submitted).toMatchObject({
@@ -699,8 +705,7 @@ describe('borrower desk workflow', () => {
     quantityInput = screen.getByRole('spinbutton', { name: /כמות/ }) as HTMLInputElement;
     expect(quantityInput.value).toBe('2');
     expect(
-      (within(dialog).getByRole('checkbox', { name: 'פגומים' }) as HTMLInputElement)
-        .checked,
+      (within(dialog).getByRole('checkbox', { name: 'פגומים' }) as HTMLInputElement).checked,
     ).toBe(false);
     await userEvent.clear(quantityInput);
     await userEvent.type(quantityInput, '1');
@@ -746,11 +751,11 @@ describe('borrower desk workflow', () => {
     await userEvent.click(damaged);
     await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText(/הוחזרו 2, 0 פגומים/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 2/)).toBeTruthy();
     expect(within(pending).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
-    expect(within(review).getByText(/הוחזרו 2, 0 פגומים/)).toBeTruthy();
+    expect(within(review).getByText(/הוחזרו 2/)).toBeTruthy();
     expect(within(review).getByText(/נמצא והוחזר · פגום · 1/)).toBeTruthy();
   });
   it('rejects a borrow above remaining stock without adding it to the transaction', async () => {
@@ -878,13 +883,13 @@ describe('borrower desk workflow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'אישור פעולות' }));
     const review = screen.getByRole('dialog', { name: 'אישור פעולות' });
     const rows = within(review)
-      .getAllByText(/הוחזרו [12], 0 פגומים/)
+      .getAllByText(/הוחזרו [12]/)
       .map((label) => label.closest('.borrower-review-row'));
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.textContent).toContain('הוחזרו 1, 0 פגומים');
+    expect(rows[0]?.textContent).toContain('הוחזרו 1');
     expect(rows[0]?.textContent).toContain('first returned unit');
     expect(rows[0]?.textContent).not.toContain('next returned units');
-    expect(rows[1]?.textContent).toContain('הוחזרו 2, 0 פגומים');
+    expect(rows[1]?.textContent).toContain('הוחזרו 2');
     expect(rows[1]?.textContent).toContain('next returned units');
     expect(rows[1]?.textContent).not.toContain('first returned unit');
   });
@@ -1198,7 +1203,7 @@ describe('borrower desk workflow', () => {
     }) as HTMLInputElement;
     expect(returnQuantity.value).toBe('2');
     await userEvent.click(within(returnDialog).getByRole('button', { name: 'אישור' }));
-    expect(within(pendingTransactions).getByText(/הוחזרו 2, 0 פגומים/)).toBeTruthy();
+    expect(within(pendingTransactions).getByText(/הוחזרו 2/)).toBeTruthy();
     expect(within(pendingTransactions).queryByText(/[+−-]\d/)).toBeNull();
     await waitFor(() => expect(document.activeElement?.tagName).toBe('BUTTON'));
     expect(screen.getAllByRole('button', { name: 'ביטול פעולה' })).toHaveLength(2);
@@ -1441,7 +1446,7 @@ describe('borrower desk workflow', () => {
     await confirmSave();
     expect(await screen.findAllByText('יתרת הציוד אצל השואל השתנתה')).not.toHaveLength(0);
     const pending = screen.getByRole('region', { name: 'פעולות ממתינות' });
-    expect(within(pending).getByText(/הוחזרו 1, 0 פגומים/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 1/)).toBeTruthy();
     const lossRow = within(pending)
       .getByText(/סמן כאבוד · 1/)
       .closest('.borrower-pending-row')!;
@@ -1450,7 +1455,7 @@ describe('borrower desk workflow', () => {
       within(lossRow as HTMLElement).getByRole('button', { name: 'ביטול פעולה' }),
     );
     expect(within(pending).queryByText(/סמן כאבוד · 1/)).toBeNull();
-    expect(within(pending).getByText(/הוחזרו 1, 0 פגומים/)).toBeTruthy();
+    expect(within(pending).getByText(/הוחזרו 1/)).toBeTruthy();
     await confirmSave();
     await waitFor(() => expect(postedBodies).toHaveLength(2));
     expect(postedBodies[0]?.items[0]).toMatchObject({

@@ -930,7 +930,7 @@ test('reconciles a stale combined held balance before a deliberate retry', async
   });
   const pending = page.locator('.staged-section');
   await expect(pending.getByText('יתרת הציוד אצל השואל השתנתה')).toHaveCount(2);
-  await expect(pending.getByText(/הוחזרו 1, 0 פגומים/)).toBeVisible();
+  await expect(pending.getByText(/הוחזרו 1/)).toBeVisible();
   await expect(pending.getByText(/סמן כאבוד · 1/)).toBeVisible();
   await expect(pending.getByText(/השאלה · 1/)).toBeVisible();
   await expect(pending.getByRole('button', { name: 'ביטול פעולה' })).toHaveCount(3);
