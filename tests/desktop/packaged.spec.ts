@@ -1629,6 +1629,17 @@ test('confirmation renderer crash cancels and permits another confirmation and o
     const opened = context.application.waitForEvent('window');
     await initiateReset(context.page);
     await (await opened).waitForURL('**/reset.html');
+    // Electron shows the confirmation only after its loadURL promise resolves.
+    // A crash before that point tests window-load failure rather than an open dialog's recovery.
+    await expect
+      .poll(() =>
+        context.application.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()
+            .find((candidate) => candidate.webContents.getURL().endsWith('/reset.html'))
+            ?.isVisible(),
+        ),
+      )
+      .toBe(true);
     await context.application.evaluate(({ BrowserWindow }) => {
       const confirmation = BrowserWindow.getAllWindows().find((candidate) =>
         candidate.webContents.getURL().endsWith('/reset.html'),
