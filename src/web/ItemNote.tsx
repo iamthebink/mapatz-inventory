@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { StickyNote, X } from 'lucide-react';
+import { StickyNote, X } from './icons';
 
 export function ItemNote({ note, itemName }: { note?: string; itemName: string }) {
   const id = useId();

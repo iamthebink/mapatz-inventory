@@ -12,7 +12,7 @@ import {
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { X } from './icons';
 
 export type DialogLevel = 'root' | 'subordinate';
 export type DialogRole = 'dialog' | 'alertdialog';

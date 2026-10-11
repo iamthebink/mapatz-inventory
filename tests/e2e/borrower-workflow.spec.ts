@@ -4,15 +4,15 @@ import { expect, test } from './fixtures';
 test('opens the borrower desk directly through the frontdesk alias', async ({ page }) => {
   await page.goto('/frontdesk');
   await expect(page).toHaveURL(/\/frontdesk$/);
-  await expect(page.getByRole('heading', { name: 'דלפק השאלות' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'דלפק השאלות' })).toHaveAttribute(
+  await expect(page.getByRole('heading', { name: 'מה מוזגים לך?' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'בר ההשאלות' })).toHaveAttribute(
     'aria-current',
     'page',
   );
 });
 async function openSeededCard(page: Page, playaName: string) {
   await page.goto('/management');
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await expect(search).toBeFocused();
   await search.fill(playaName);
@@ -172,7 +172,7 @@ test('browses, filters, and opens the responsive borrower directory without dial
   seed,
 }) => {
   await page.goto('/management');
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   const create = page.getByRole('button', { name: 'יצירת שואל חדש' });
   const header = page.locator('.borrower-workflow-header');
@@ -196,7 +196,7 @@ test('browses, filters, and opens the responsive borrower directory without dial
   await expect(activeRow).toBeVisible();
   await page.setViewportSize({ width: 320, height: 720 });
   const [headingBox, createBox] = await Promise.all([
-    page.getByRole('heading', { name: 'דלפק השאלות' }).boundingBox(),
+    page.getByRole('heading', { name: 'מה מוזגים לך?' }).boundingBox(),
     create.boundingBox(),
   ]);
   expect(createBox!.y).toBeGreaterThan(headingBox!.y);
@@ -754,7 +754,7 @@ test('resolves an ambiguous committed response after reload without duplicating 
   expect(envelope).toBeTruthy();
   await page.unrouteAll({ behavior: 'wait' });
   await page.reload();
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   expect(
     await page.evaluate(() =>
@@ -1158,7 +1158,7 @@ test('resolves a committed-but-lost creation with the exact envelope before retr
   openLedger,
 }) => {
   await page.goto('/');
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const create = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   const playaName = `created-${Date.now()}`;
@@ -1243,7 +1243,7 @@ test('keeps duplicate borrower values and archived-match guidance with one error
   openLedger,
 }) => {
   await page.goto('/');
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const create = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   const playaName = create.getByLabel('שם פלאיה');

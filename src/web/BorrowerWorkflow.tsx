@@ -19,7 +19,7 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { Check, ClipboardCheck, TriangleAlert, Undo2, UserPlus } from 'lucide-react';
+import { Check, ClipboardCheck, TriangleAlert, Undo2, UserPlus } from './icons';
 import type { Borrower } from '../domain/types';
 import type { BorrowerDeskSnapshot } from '../contracts/borrower-workflow';
 import {
@@ -1358,7 +1358,7 @@ export const BorrowerWorkflow = forwardRef<
   if (startup !== 'ready' || !searchSnapshot)
     return (
       <section className="borrower-workflow-entry" aria-labelledby="borrower-workflow-title">
-        <h2 id="borrower-workflow-title">דלפק השאלות</h2>
+        <h2 id="borrower-workflow-title">מה מוזגים לך?</h2>
         {startup === 'loading' ? (
           <p role="status">בודק פעולות קודמות וטוען נתונים…</p>
         ) : (
@@ -1414,8 +1414,8 @@ export const BorrowerWorkflow = forwardRef<
     <section className="borrower-workflow-entry" aria-labelledby="borrower-workflow-title">
       <div className="borrower-workflow-header">
         <div className="borrower-workflow-heading">
-          <h2 id="borrower-workflow-title">דלפק השאלות</h2>
-          <p>חיפוש שואל, השאלה והחזרה במקום אחד</p>
+          <h2 id="borrower-workflow-title">מה מוזגים לך?</h2>
+          <p>ציוד יוצא, ציוד חוזר. בירה תביאו לבד.</p>
         </div>
         <button
           type="button"

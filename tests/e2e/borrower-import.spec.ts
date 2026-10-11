@@ -31,7 +31,7 @@ test('admin replaces borrowers only after confirming equipment returns', async (
     .getByRole('navigation', { name: 'ניווט ראשי' })
     .getByRole('link', { name: 'ניהול' })
     .click();
-  await page.getByRole('tab', { name: 'ייבוא וייצוא' }).click();
+  await page.getByRole('tab', { name: 'השיירה · ייבוא וייצוא' }).click();
   await page.getByRole('button', { name: 'ייבוא שואלים מקובץ' }).click();
   const dialog = page.getByRole('dialog', { name: 'ייבוא שואלים מקובץ' });
   await dialog.getByLabel('קובץ שואלים').setInputFiles({
@@ -94,7 +94,7 @@ test('admin replaces borrowers only after confirming equipment returns', async (
     ledger.prepare('SELECT archived FROM borrowers WHERE playa_name=?').get('import-browser')
       ?.archived,
   ).toBe(0);
-  await page.getByRole('tab', { name: 'שואלים' }).click();
+  await page.getByRole('tab', { name: 'אידיוטים' }).click();
   await expect(page.getByText('שואל מיובא', { exact: true })).toBeVisible();
 });
 
@@ -119,7 +119,7 @@ test('admin imports with default merge while preserving absent borrowers and the
     .getByRole('navigation', { name: 'ניווט ראשי' })
     .getByRole('link', { name: 'ניהול' })
     .click();
-  await page.getByRole('tab', { name: 'ייבוא וייצוא' }).click();
+  await page.getByRole('tab', { name: 'השיירה · ייבוא וייצוא' }).click();
   await page.getByRole('button', { name: 'ייבוא שואלים מקובץ' }).click();
   const dialog = page.getByRole('dialog', { name: 'ייבוא שואלים מקובץ' });
   await dialog.getByLabel('קובץ שואלים').setInputFiles({
@@ -151,6 +151,6 @@ test('admin imports with default merge while preserving absent borrowers and the
       .prepare('SELECT COUNT(*) count FROM inventory_events WHERE related_event_id=?')
       .get(seed.checkoutId)?.count,
   ).toBe(0);
-  await page.getByRole('tab', { name: 'שואלים' }).click();
+  await page.getByRole('tab', { name: 'אידיוטים' }).click();
   await expect(page.getByText('שואל ממוזג', { exact: true })).toBeVisible();
 });

@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleX, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { CheckCircle2, CircleX, TriangleAlert, X, type AppIcon } from './icons';
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDialogStack } from './Dialog';
@@ -17,7 +17,7 @@ const EXIT_FALLBACK_MS = 250;
 
 const toastPresentation: Record<
   ToastTone,
-  { icon: LucideIcon; accessibleTone: string; role: 'status' | 'alert' }
+  { icon: AppIcon; accessibleTone: string; role: 'status' | 'alert' }
 > = {
   success: { icon: CheckCircle2, accessibleTone: 'הצלחה', role: 'status' },
   warning: { icon: TriangleAlert, accessibleTone: 'אזהרה', role: 'alert' },

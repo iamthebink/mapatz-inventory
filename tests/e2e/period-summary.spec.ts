@@ -24,7 +24,7 @@ test('waits for startup recovery before reading a direct summary and offers retr
   expect(summaryReads).toBe(0);
   allowRecovery = true;
   await retry.click();
-  await expect(page.getByRole('heading', { name: 'סיכום' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'מסדר בושה יומי' })).toBeVisible();
   await expect.poll(() => summaryReads).toBeGreaterThan(0);
 });
 
@@ -45,8 +45,11 @@ test('does not mount the borrower workflow in inventory management', async ({ pa
 
 test('keeps summary search and expansion through a guarded card return', async ({ page, seed }) => {
   await page.goto('/summary');
-  await expect(page.getByRole('link', { name: 'סיכום' })).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('heading', { name: 'סיכום' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'מסדר בושה יומי' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByRole('heading', { name: 'מסדר בושה יומי' })).toBeVisible();
   const search = page.getByRole('searchbox', { name: 'חיפוש שואל' });
   await search.fill(seed.borrower.playaName);
   const row = page

@@ -106,7 +106,7 @@ async function freshApp(traceScreenshots = true) {
   await page.locator('#confirmation').fill('camp-password-123');
   await page.getByRole('button', { name: 'שמירה ופתיחה' }).click();
   await page.waitForURL('http://127.0.0.1:*/');
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
   return { application, page, profile, launch, executablePath };
 }
@@ -317,7 +317,7 @@ test('lost response survives replacement, replays once, and retains credential a
     });
     const page = await application.firstWindow();
     await page.waitForURL(`${origin}/`);
-    await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+    await page.getByRole('link', { name: 'בר ההשאלות' }).click();
     await expect
       .poll(() =>
         page.evaluate((key) => localStorage.getItem(`mapatz:frozen-attempt:v1:${key}`), key),
@@ -650,7 +650,7 @@ for (const response of [0, 1])
         expect(await readFile(retryMarker, 'utf8')).toBe('retry');
         application = await context.launch();
         const page = await application.firstWindow();
-        await expect(page.getByRole('link', { name: 'דלפק השאלות' })).toBeVisible();
+        await expect(page.getByRole('link', { name: 'בר ההשאלות' })).toBeVisible();
         await expect(page.locator('#password')).toHaveCount(0);
       }
     } finally {
@@ -1586,7 +1586,7 @@ test('admin settings reset button requires admin and returns from local cancella
   const context = await freshApp();
   try {
     await context.page.getByRole('link', { name: 'ניהול', exact: true }).click();
-    await context.page.getByRole('tab', { name: /הרשאות והגדרות/ }).click();
+    await context.page.getByRole('tab', { name: /שיט חשוב/ }).click();
     await expect(
       context.page.getByRole('button', { name: 'איפוס מערכת', exact: true }),
     ).toBeDisabled();
@@ -1598,7 +1598,7 @@ test('admin settings reset button requires admin and returns from local cancella
       });
     });
     await context.page.reload();
-    await context.page.getByRole('tab', { name: /הרשאות והגדרות/ }).click();
+    await context.page.getByRole('tab', { name: /שיט חשוב/ }).click();
     const reset = context.page.getByRole('button', { name: 'איפוס מערכת', exact: true });
     await expect(reset).toBeEnabled();
     const opened = context.application.waitForEvent('window');

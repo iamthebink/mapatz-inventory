@@ -1,4 +1,4 @@
-import { Eye, EyeOff, KeyRound } from 'lucide-react';
+import { Eye, EyeOff, KeyRound } from './icons';
 import { forwardRef, useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { formatAdminCountdown } from './admin-mode';
 import { Dialog } from './Dialog';

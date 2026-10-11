@@ -6,7 +6,7 @@ test('creates a full-name-only borrower with empty optional fields', async ({
 }) => {
   const name = `שם מלא בלבד ${Date.now()}`;
   await page.goto('/');
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const form = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   await form.getByLabel('שם מלא').fill(name);
@@ -39,7 +39,7 @@ test('suggests camps outside filtered search and warns before creating a distinc
     },
   });
   expect(create.status()).toBe(201);
-  await page.getByRole('link', { name: 'דלפק השאלות' }).click();
+  await page.getByRole('link', { name: 'בר ההשאלות' }).click();
   await page.getByRole('searchbox', { name: 'חיפוש שואל' }).fill('no matching directory profile');
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const form = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
@@ -65,7 +65,7 @@ test('management Enter submission without blur preserves similar-profile guidanc
   const authentication = page.getByRole('dialog', { name: 'הפעלת מצב מנהל' });
   await authentication.locator('input[name="password"]').fill('e2e-admin-password');
   await authentication.getByRole('button', { name: 'הפעל מצב מנהל' }).click();
-  await page.getByRole('tab', { name: /שואלים/ }).click();
+  await page.getByRole('tab', { name: /אידיוטים/ }).click();
   await page.getByRole('button', { name: 'יצירת שואל חדש' }).click();
   const form = page.getByRole('dialog', { name: 'יצירת שואל חדש' });
   const name = form.getByLabel('שם מלא');

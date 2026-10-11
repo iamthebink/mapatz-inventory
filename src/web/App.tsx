@@ -17,18 +17,19 @@ import {
   Eye,
   EyeOff,
   KeyRound,
-  CalendarDays,
+  BeerTap,
+  Monkey,
+  Camel,
+  Robot,
   Pencil,
-  Radio,
   RotateCcw,
-  Settings2,
   ShieldCheck,
   Trash2,
   Upload,
   UserPlus,
   Users,
-  type LucideIcon,
-} from 'lucide-react';
+  type AppIcon,
+} from './icons';
 import {
   AdminModeControl,
   AdminModeStatus,
@@ -131,23 +132,28 @@ const ledgerEventName = (event: LedgerEvent) =>
   event.kind === 'stock_removed' && event.note === 'ארכוב פריט'
     ? 'איפוס מלאי בארכוב'
     : (eventNames[event.kind] ?? event.kind);
-const navigation: { key: Tab; label: string; icon: LucideIcon }[] = [
-  { key: 'desk', label: 'דלפק השאלות', icon: Users },
-  { key: 'radios', label: 'מכשירי קשר', icon: Radio },
-  { key: 'summary', label: 'סיכום', icon: CalendarDays },
-  { key: 'ledger', label: 'יומן', icon: BookOpen },
-  { key: 'catalogs', label: 'ניהול', icon: Settings2 },
+const navigation: { key: Tab; label: string; icon: AppIcon }[] = [
+  { key: 'desk', label: 'בר ההשאלות', icon: BeerTap },
+  { key: 'radios', label: 'סקיינט · קשר', icon: Robot },
+  { key: 'summary', label: 'מסדר בושה יומי', icon: ClipboardList },
+  { key: 'ledger', label: 'יומנה של אנה', icon: BookOpen },
+  { key: 'catalogs', label: 'ניהול', icon: Monkey },
 ];
 const managementNavigation: {
   key: ManagementTab;
   label: string;
   description: string;
-  icon: LucideIcon;
+  icon: AppIcon;
 }[] = [
-  { key: 'inventory', label: 'מלאי ומיקומים', description: 'פריטים, יתרות ומיקומים', icon: Boxes },
-  { key: 'borrowers', label: 'שואלים', description: 'אנשים וארגונים', icon: Users },
-  { key: 'data', label: 'ייבוא וייצוא', description: 'איפוס ושחזור מקובץ', icon: Download },
-  { key: 'access', label: 'הרשאות והגדרות', description: 'סיסמאות ומכשירי קשר', icon: ShieldCheck },
+  {
+    key: 'inventory',
+    label: 'המכולה · מלאי ומיקומים',
+    description: 'פריטים, יתרות ומיקומים',
+    icon: Boxes,
+  },
+  { key: 'borrowers', label: 'אידיוטים', description: 'אנשים וארגונים', icon: Users },
+  { key: 'data', label: 'השיירה · ייבוא וייצוא', description: 'איפוס ושחזור מקובץ', icon: Camel },
+  { key: 'access', label: 'שיט חשוב', description: 'סיסמאות ומכשירי קשר', icon: ShieldCheck },
 ];
 
 function join(...values: (string | number | null | undefined)[]) {
@@ -1019,7 +1025,7 @@ export function App() {
                   else complete();
                 }}
               >
-                <Icon className="size-4" />
+                <Icon className="size-6 shrink-0" />
                 {label}
               </a>
             </div>
@@ -1095,8 +1101,8 @@ export function App() {
           </div>
         )}
         {tab === 'summary' && workflowStartup !== 'ready' && (
-          <section className="period-summary" aria-label="סיכום">
-            <h2>סיכום</h2>
+          <section className="period-summary" aria-label="מסדר בושה יומי">
+            <h2>מסדר בושה יומי</h2>
             {workflowStartup === 'loading' ? (
               <p role="status">בודק פעולות שמורות…</p>
             ) : (
@@ -1122,9 +1128,9 @@ export function App() {
         />
         {tab === 'catalogs' && (
           <PageSection
-            title="ניהול"
-            description="כלי תחזוקה מסודרים לפי תחום אחריות"
-            icon={Settings2}
+            title="ברוכים הבאים לג׳ונגל."
+            description="גם לכאוס יש מיקום במכולה."
+            icon={Monkey}
           >
             <div className="management-tabs" role="tablist">
               {managementNavigation.map(({ key, label, description, icon: Icon }) => (
@@ -1144,7 +1150,7 @@ export function App() {
                     setManagementTab(key);
                   }}
                 >
-                  <Icon className="size-5" />
+                  <Icon className="size-6 shrink-0" />
                   <span>
                     <strong>{label}</strong>
                     <small>{description}</small>
@@ -1376,9 +1382,9 @@ export function App() {
         )}
         {tab === 'ledger' && (
           <PageSection
-            title="יומן אירועים"
+            title="יומנה של אנה"
             description="תיעוד בלתי־ניתן לשינוי של כל תנועות המלאי"
-            icon={ClipboardList}
+            icon={BookOpen}
           >
             <DataTable
               rows={ledger}
@@ -1623,7 +1629,7 @@ function PageSection({
 }: {
   title: string;
   description: string;
-  icon: LucideIcon;
+  icon: AppIcon;
   children: ReactNode;
 }) {
   return (
@@ -1651,7 +1657,7 @@ function ActionCard({
 }: {
   title: string;
   description: string;
-  icon: LucideIcon;
+  icon: AppIcon;
   disabled: boolean;
   onSubmit: (form: FormData) => boolean | Promise<boolean>;
   children: ReactNode;
@@ -1789,7 +1795,7 @@ function SmallButton({
   children,
   ...props
 }: {
-  icon: LucideIcon;
+  icon: AppIcon;
   tone?: 'destructive' | 'warning' | 'positive';
   children: ReactNode;
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -1834,7 +1840,7 @@ function RowActions({
 }
 function CatalogBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-ctp-surface bg-white p-4 shadow-sm sm:p-5">
+    <section className="rounded-2xl border border-ctp-surface bg-paper p-4 shadow-sm sm:p-5">
       <h3 className="mb-4 font-semibold">{title}</h3>
       {children}
     </section>

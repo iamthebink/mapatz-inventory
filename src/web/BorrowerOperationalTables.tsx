@@ -7,8 +7,8 @@ import {
   SearchCheck,
   TriangleAlert,
   Undo2,
-  type LucideIcon,
-} from 'lucide-react';
+  type AppIcon,
+} from './icons';
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { projectItem, projectedItems, type OperationState } from './borrower-workflow-state';
 
@@ -26,7 +26,7 @@ const conflictLabels: Record<string, string> = {
 
 export type ReturnCondition = 'usable' | 'mark-lost' | 'found';
 
-const actions: Record<ReturnCondition, { label: string; icon: LucideIcon; description: string }> = {
+const actions: Record<ReturnCondition, { label: string; icon: AppIcon; description: string }> = {
   usable: {
     label: 'החזרת ציוד',
     icon: CircleCheck,

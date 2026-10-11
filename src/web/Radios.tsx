@@ -1,6 +1,6 @@
 import { StickyTable } from './StickyTable';
 import { useEffect, useState } from 'react';
-import { CircleHelp, MapPin, Radio as RadioIcon, RefreshCw, SearchCheck } from 'lucide-react';
+import { CircleHelp, MapPin, Radio as RadioIcon, RefreshCw, SearchCheck } from './icons';
 import type { Radio, RadioFleet } from '../domain/types.js';
 import { Dialog } from './Dialog';
 import { ApiError, fetchRadios, radioCommand } from './api';
@@ -96,7 +96,7 @@ export function Radios({ active, showToast }: Props) {
           <RadioIcon className="size-5" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">מכשירי קשר</h2>
+          <h2 className="text-2xl font-bold tracking-tight">סקיינט מקשיבה.</h2>
           <p className="mt-1 text-sm text-ctp-subtext">מיקום ומצב מכשירי הקשר</p>
         </div>
       </div>

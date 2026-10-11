@@ -1,6 +1,6 @@
 import { StickyTable } from './StickyTable';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from './icons';
 
 export type TableColumn<T> = {
   key: string;

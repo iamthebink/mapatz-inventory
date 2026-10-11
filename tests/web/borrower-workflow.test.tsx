@@ -1099,7 +1099,7 @@ describe('borrower desk workflow', () => {
     expect(within(catalog).getByRole('option', { name: /צילייה/ })).toBeTruthy();
     expect(within(catalog).queryByRole('option', { name: /פריט ישן/ })).toBeNull();
     const usableAction = screen.getByRole('button', { name: 'החזרת ציוד' });
-    expect(usableAction.querySelector('svg[aria-hidden="true"].lucide-circle-check')).toBeTruthy();
+    expect(usableAction.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     const moreAction = screen.getByRole('button', { name: 'אפשרויות נוספות' });
     expect(moreAction.textContent).not.toMatch(/…|\.\.\./);
     await userEvent.click(moreAction);

@@ -1,7 +1,7 @@
 import { ItemNote } from './ItemNote';
 import { StickyTable } from './StickyTable';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Archive, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
+import { Archive, Pencil, RotateCcw, Trash2, TriangleAlert } from './icons';
 import { ApiError, api } from './api';
 import { DataTable, type TableColumn } from './DataTable';
 import { Dialog } from './Dialog';

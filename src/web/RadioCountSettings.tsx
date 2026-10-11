@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw } from './icons';
 import type { RadioFleet } from '../domain/types.js';
 import { Dialog } from './Dialog';
 import { fetchRadios, radioCommand } from './api';

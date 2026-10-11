@@ -1,27 +1,30 @@
 @import 'tailwindcss';
 
 @theme {
+  /* Legacy ctp aliases: base=sand, mantle=soft sand, surface/crust=border,
+     text=ink, subtext=muted, lavender=clay, green=oasis; other accents are semantic. */
+  --color-paper: #fffaf0;
   --font-sans: 'Heebo', 'Noto Sans Hebrew', ui-sans-serif, system-ui, sans-serif;
-  --color-ctp-rosewater: #dc8a78;
-  --color-ctp-flamingo: #dd7878;
-  --color-ctp-pink: #ea76cb;
-  --color-ctp-mauve: #8839ef;
-  --color-ctp-red: #d20f39;
-  --color-ctp-maroon: #e64553;
-  --color-ctp-peach: #fe640b;
-  --color-ctp-yellow: #df8e1d;
-  --color-ctp-green: #40a02b;
-  --color-ctp-teal: #179299;
-  --color-ctp-sky: #04a5e5;
-  --color-ctp-blue: #1e66f5;
-  --color-ctp-lavender: #7287fd;
-  --color-ctp-text: #4c4f69;
-  --color-ctp-subtext: #6c6f85;
-  --color-ctp-overlay: #9ca0b0;
-  --color-ctp-surface: #dce0e8;
-  --color-ctp-mantle: #e6e9ef;
-  --color-ctp-base: #eff1f5;
-  --color-ctp-crust: #dce0e8;
+  --color-ctp-rosewater: #a9674f;
+  --color-ctp-flamingo: #9c533e;
+  --color-ctp-pink: #875165;
+  --color-ctp-mauve: #74536b;
+  --color-ctp-red: #a3342e;
+  --color-ctp-maroon: #812923;
+  --color-ctp-peach: #95521d;
+  --color-ctp-yellow: #856016;
+  --color-ctp-green: #416348;
+  --color-ctp-teal: #3f6860;
+  --color-ctp-sky: #496963;
+  --color-ctp-blue: #783b25;
+  --color-ctp-lavender: #984c31;
+  --color-ctp-text: #3d3026;
+  --color-ctp-subtext: #73604e;
+  --color-ctp-overlay: #826d56;
+  --color-ctp-surface: #d9c8ad;
+  --color-ctp-mantle: #e6d3b6;
+  --color-ctp-base: #efe4d1;
+  --color-ctp-crust: #d9c8ad;
   --color-admin-chrome: #fffbf0;
   --color-admin-soft: #fff8e7;
   --color-admin-line: #b77912;
@@ -59,7 +62,7 @@
     opacity: 0.5;
   }
   :focus-visible {
-    outline: 3px solid color-mix(in srgb, var(--color-ctp-lavender) 35%, transparent);
+    outline: 3px solid color-mix(in srgb, var(--color-ctp-lavender) 85%, transparent);
     outline-offset: 2px;
   }
 }
@@ -80,7 +83,7 @@
   .app-header {
     min-height: 76px;
     border-bottom: 1px solid color-mix(in srgb, var(--color-ctp-crust) 10%, transparent);
-    background: color-mix(in srgb, white 80%, transparent);
+    background: color-mix(in srgb, var(--color-paper) 80%, transparent);
     backdrop-filter: blur(24px);
     transition:
       background-color 150ms ease,
@@ -129,7 +132,7 @@
     display: block;
   }
   .admin-mode-control {
-    @apply justify-self-start rounded-xl border border-ctp-surface bg-white text-xs font-semibold text-ctp-subtext shadow-sm transition hover:border-ctp-lavender/30 hover:text-ctp-text;
+    @apply justify-self-start rounded-xl border border-ctp-surface bg-paper text-xs font-semibold text-ctp-subtext shadow-sm transition hover:border-ctp-lavender/30 hover:text-ctp-text;
     grid-area: control;
     width: 128px;
     height: 44px;
@@ -181,16 +184,16 @@
     background: color-mix(in srgb, var(--color-admin-chrome) 94%, transparent);
   }
   .nav-item {
-    @apply flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-ctp-subtext transition hover:bg-white hover:text-ctp-text;
+    @apply flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-ctp-subtext transition hover:bg-paper hover:text-ctp-text;
   }
   .nav-item.active {
-    @apply bg-white text-ctp-lavender shadow-sm;
+    @apply bg-ctp-lavender text-paper shadow-sm;
   }
   .nav-separator {
     @apply mx-2 h-6 w-px shrink-0 bg-ctp-surface;
   }
   .period-summary {
-    @apply space-y-5 rounded-2xl bg-white p-5 shadow-sm;
+    @apply space-y-5 rounded-2xl bg-paper p-5 shadow-sm;
   }
   .period-summary h2 {
     @apply text-xl font-semibold;
@@ -251,7 +254,7 @@
     @apply pointer-events-none fixed inset-x-0 bottom-4 z-90 flex justify-center px-4 sm:right-4 sm:left-auto sm:w-full sm:max-w-md sm:px-0;
   }
   .toast {
-    @apply pointer-events-none flex w-full items-start gap-3 rounded-2xl border bg-white px-4 py-3 shadow-xl;
+    @apply pointer-events-none flex w-full items-start gap-3 rounded-2xl border bg-paper px-4 py-3 shadow-xl;
     animation: toast-enter 160ms ease-out;
   }
   .toast-dismiss:not(:disabled) {
@@ -279,22 +282,22 @@
     @apply border-ctp-red/25 text-ctp-red;
   }
   .input-field {
-    @apply block w-full rounded-xl border border-ctp-surface bg-white px-3 py-2.5 text-sm text-ctp-text shadow-sm transition placeholder:text-ctp-overlay hover:border-ctp-overlay focus:border-ctp-lavender focus:outline-none focus:ring-3 focus:ring-ctp-lavender/15;
+    @apply block w-full rounded-xl border border-ctp-surface bg-paper px-3 py-2.5 text-sm text-ctp-text shadow-sm transition placeholder:text-ctp-overlay hover:border-ctp-overlay focus:border-ctp-lavender focus:outline-none focus:ring-3 focus:ring-ctp-lavender/15;
   }
   .field-label {
     @apply grid gap-1.5 text-sm font-medium text-ctp-subtext;
   }
   .primary-button {
-    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl bg-ctp-lavender px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-blue disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-ctp-lavender;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl bg-ctp-lavender px-4 py-2.5 text-sm font-semibold text-paper shadow-sm transition hover:bg-ctp-blue disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-ctp-lavender;
   }
   .secondary-button {
-    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl border border-ctp-surface bg-white px-4 py-2.5 text-sm font-semibold text-ctp-text transition hover:bg-ctp-base disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-white;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl border border-ctp-surface bg-paper px-4 py-2.5 text-sm font-semibold text-ctp-text transition hover:bg-ctp-base disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-paper;
   }
   .icon-button {
     @apply grid size-10 place-items-center rounded-lg text-ctp-subtext transition hover:bg-ctp-base hover:text-ctp-text;
   }
   .small-button {
-    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-ctp-surface bg-white px-2.5 py-1.5 text-xs font-medium text-ctp-subtext transition hover:border-ctp-lavender/30 hover:bg-ctp-lavender/5 hover:text-ctp-lavender disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-ctp-surface disabled:hover:bg-white disabled:hover:text-ctp-subtext;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-ctp-surface bg-paper px-2.5 py-1.5 text-xs font-medium text-ctp-subtext transition hover:border-ctp-lavender/30 hover:bg-ctp-lavender/5 hover:text-ctp-lavender disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-ctp-surface disabled:hover:bg-paper disabled:hover:text-ctp-subtext;
   }
   .small-button[data-tone='destructive'],
   .small-button[data-tone='warning'] {
@@ -304,7 +307,7 @@
     @apply text-ctp-green hover:border-ctp-green/30 hover:bg-ctp-green/5 hover:text-ctp-green;
   }
   .small-button[data-tone]:disabled:hover {
-    @apply border-ctp-surface bg-white;
+    @apply border-ctp-surface bg-paper;
   }
   :where(
     .primary-button,
@@ -320,7 +323,7 @@
     outline-offset: 2px;
   }
   .action-card {
-    @apply rounded-2xl border border-ctp-surface bg-white p-5 shadow-sm;
+    @apply rounded-2xl border border-ctp-surface bg-paper p-5 shadow-sm;
   }
   .permission-note {
     @apply mt-4 flex items-center gap-2 rounded-xl border border-ctp-yellow/20 bg-ctp-yellow/10 px-4 py-3 text-sm text-ctp-yellow;
@@ -329,7 +332,7 @@
     @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-4;
   }
   .management-tabs button {
-    @apply flex items-center gap-3 rounded-2xl border border-ctp-surface bg-white p-4 text-right text-ctp-subtext shadow-sm transition hover:border-ctp-lavender/30 hover:text-ctp-text;
+    @apply flex items-center gap-3 rounded-2xl border border-ctp-surface bg-paper p-4 text-right text-ctp-subtext shadow-sm transition hover:border-ctp-lavender/30 hover:text-ctp-text;
   }
   .management-tabs button.active {
     @apply border-ctp-lavender/40 bg-ctp-lavender/5 text-ctp-lavender ring-2 ring-ctp-lavender/10;
@@ -350,7 +353,7 @@
     @apply flex flex-wrap items-center justify-between gap-3;
   }
   .inventory-view-switch {
-    @apply inline-flex rounded-xl border border-ctp-surface bg-white p-1 shadow-sm;
+    @apply inline-flex rounded-xl border border-ctp-surface bg-paper p-1 shadow-sm;
   }
   .inventory-view-switch button {
     @apply rounded-lg px-5 py-2 text-sm font-semibold text-ctp-subtext transition hover:text-ctp-text;
@@ -449,7 +452,7 @@
     @apply size-4 accent-ctp-lavender;
   }
   .table-shell {
-    @apply overflow-x-auto rounded-2xl border border-ctp-surface bg-white shadow-sm;
+    @apply overflow-x-auto rounded-2xl border border-ctp-surface bg-paper shadow-sm;
   }
   .sticky-table > thead > tr > th {
     position: relative;
@@ -533,7 +536,7 @@
     z-index: 100;
   }
   .dialog {
-    @apply relative w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/60 bg-white p-5 shadow-2xl sm:p-6;
+    @apply relative w-full max-w-2xl overflow-y-auto rounded-3xl border border-paper/60 bg-paper p-5 shadow-2xl sm:p-6;
     max-height: calc(100dvh - 2rem);
     min-width: 0;
   }
@@ -660,7 +663,7 @@
     @apply mt-4 rounded-xl border border-ctp-red/20 bg-ctp-red/5 px-3 py-2 text-sm text-ctp-red;
   }
   .dialog-destructive {
-    border-color: color-mix(in srgb, var(--color-ctp-red) 28%, white);
+    border-color: color-mix(in srgb, var(--color-ctp-red) 28%, var(--color-paper));
   }
   .dialog-destructive .dialog-title {
     @apply text-ctp-red;
@@ -673,7 +676,7 @@
     padding: 0;
   }
   .danger-button {
-    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl bg-ctp-red px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-ctp-maroon disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-ctp-red;
+    @apply inline-flex min-h-10 min-w-10 items-center justify-center gap-2 rounded-xl bg-ctp-red px-4 py-2.5 text-sm font-semibold text-paper shadow-sm transition hover:bg-ctp-maroon disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-ctp-red;
   }
   .borrower-workflow-entry {
     min-width: 0;
@@ -700,10 +703,10 @@
     flex: none;
   }
   .borrower-search-row {
-    @apply mt-6 rounded-2xl border border-ctp-surface bg-white p-4 shadow-sm;
+    @apply mt-6 rounded-2xl border border-ctp-surface bg-paper p-4 shadow-sm;
   }
   .borrower-directory {
-    @apply mt-4 min-w-0 overflow-hidden rounded-2xl border border-ctp-surface bg-white shadow-sm;
+    @apply mt-4 min-w-0 overflow-hidden rounded-2xl border border-ctp-surface bg-paper shadow-sm;
   }
   .borrower-directory-summary {
     @apply flex flex-wrap items-baseline justify-between gap-2 border-b border-ctp-surface px-4 py-3;
@@ -766,7 +769,7 @@
     min-width: 0;
   }
   .combobox-list {
-    @apply absolute inset-x-0 z-30 mt-1 max-h-72 overflow-y-auto rounded-xl border border-ctp-surface bg-white p-1 shadow-xl;
+    @apply absolute inset-x-0 z-30 mt-1 max-h-72 overflow-y-auto rounded-xl border border-ctp-surface bg-paper p-1 shadow-xl;
   }
   .combobox-group-label {
     @apply px-3 py-2 text-xs font-semibold text-ctp-subtext;
@@ -813,7 +816,7 @@
     min-width: 0;
     border: 1px solid var(--color-ctp-surface);
     border-radius: 16px;
-    background: white;
+    background: var(--color-paper);
   }
   .operational-section h3 {
     @apply px-4 pt-4 font-semibold;
@@ -927,7 +930,7 @@
     position: relative;
   }
   .borrower-action-menu {
-    @apply absolute z-40 mt-1 grid rounded-xl border border-ctp-surface bg-white p-1 shadow-xl;
+    @apply absolute z-40 mt-1 grid rounded-xl border border-ctp-surface bg-paper p-1 shadow-xl;
     inset-inline-end: 0;
     width: min(13rem, calc(100vw - 3rem));
   }
@@ -1333,10 +1336,10 @@
   }
 }
 
-/* Recovery owns a white viewport; the shared stack still owns modal isolation. */
+/* Recovery owns a paper viewport; the shared stack still owns modal isolation. */
 .dialog-backdrop-recovery {
   padding: 0;
-  background: white;
+  background: var(--color-paper);
   backdrop-filter: none;
 }
 .dialog-recovery {
@@ -1347,7 +1350,7 @@
   padding: 0;
   border: 0;
   border-radius: 0;
-  background: white;
+  background: var(--color-paper);
   box-shadow: none;
   overflow: hidden;
 }
@@ -1388,7 +1391,7 @@
   z-index: 1;
   margin: 0;
   padding: 4px 16px;
-  background: white;
+  background: var(--color-paper);
 }
 .admin-recovery-content {
   display: grid;
@@ -1423,7 +1426,7 @@
 }
 .recovery-compliment-option:has(input:checked) {
   border-color: var(--color-ctp-lavender);
-  background: color-mix(in srgb, var(--color-ctp-lavender) 8%, white);
+  background: color-mix(in srgb, var(--color-ctp-lavender) 8%, var(--color-paper));
 }
 .recovery-compliment-option input {
   flex-shrink: 0;
@@ -1532,7 +1535,7 @@
 .recovery-reward-clap strong {
   padding: 4px 12px;
   border-radius: 8px;
-  background: white;
+  background: var(--color-paper);
 }
 .recovery-reward-stamp {
   width: max-content;
@@ -1541,7 +1544,7 @@
   border: 6px double currentColor;
   border-radius: 8px;
   color: var(--color-ctp-green);
-  background: white;
+  background: var(--color-paper);
   font-size: clamp(1.6rem, 6vw, 2.5rem);
   animation: recovery-stamp var(--recovery-celebration-duration) ease both;
 }

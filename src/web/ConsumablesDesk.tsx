@@ -1,7 +1,7 @@
 import type { Location } from './InventoryDialogs';
 import { StickyTable } from './StickyTable';
 import { useEffect, useRef, useState } from 'react';
-import { Check, ClipboardCheck, PackageMinus, RefreshCw, Undo2 } from 'lucide-react';
+import { Check, ClipboardCheck, PackageMinus, RefreshCw, Undo2 } from './icons';
 import type { Item } from '../domain/types';
 import { Dialog } from './Dialog';
 import { sendConsumableBatchCommand } from './api';

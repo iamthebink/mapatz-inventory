@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw } from './icons';
 import { desktop } from './desktop';
 import { initializeFrozenAttemptRecovery } from './borrower-workflow-recovery';
 import { sendFrozenBorrowerAttempt } from './api';

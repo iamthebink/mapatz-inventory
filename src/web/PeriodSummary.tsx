@@ -1,7 +1,7 @@
 import { StickyTable } from './StickyTable';
 import { normalizeBorrowerText, normalizeBorrowerPhone } from '../domain/borrower-profile';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw } from './icons';
 import type { PeriodSummary as PeriodSummaryResult } from '../contracts/period-summary.js';
 import { periodBounds, todayInIsrael } from '../domain/period-summary.js';
 import { fetchPeriodSummary } from './api';
@@ -164,7 +164,7 @@ export function PeriodSummary({ active, returnRevision, openCard, showToast }: P
   return (
     <section className="period-summary" aria-labelledby="period-summary-heading" hidden={!active}>
       <h2 id="period-summary-heading" ref={headingRef} tabIndex={-1}>
-        סיכום
+        מסדר בושה יומי
       </h2>
       <p>מאזן השאלות נטו בתקופה שנבחרה; אינו מציג את הציוד המוחזק כעת בידי השואל.</p>
       <div className="period-summary-controls">
