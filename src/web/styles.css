@@ -594,6 +594,23 @@
   .dialog-form {
     @apply mt-5;
   }
+  .quantity-fields {
+    @apply grid gap-4;
+  }
+  .return-quantity-row {
+    @apply grid grid-cols-2 items-start gap-4;
+  }
+  .return-quantity-row > .checkbox-label {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .return-quantity-row > .return-damaged-field {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .return-quantity-row > .field-label {
+    min-width: 0;
+  }
   .dialog-form fieldset {
     min-width: 0;
     margin: 0;

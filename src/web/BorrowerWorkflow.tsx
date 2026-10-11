@@ -1828,86 +1828,94 @@ export const BorrowerWorkflow = forwardRef<
             noValidate
           >
             {quantity.direction !== 'return' && quantityLocationField}
-            <label className="field-label">
-              כמות
-              <input
-                ref={quantityErrorRef}
-                className="input-field"
-                type="number"
-                min="1"
-                max={
-                  quantity.direction === 'return'
-                    ? quantity.condition === 'found'
-                      ? projectItem(operation, quantity.itemId)?.lostNow
-                      : projectItem(operation, quantity.itemId)?.returnableNow
-                    : quantity.locationId
-                      ? projectedLocationAvailability(
-                          operation,
-                          quantity.itemId,
-                          Number(quantity.locationId),
-                        )
-                      : undefined
-                }
-                aria-invalid={Boolean(quantity.error) && quantity.errorTarget !== 'damaged'}
-                value={quantity.quantity}
-                onChange={(event) =>
-                  setQuantity({
-                    ...quantity,
-                    quantity: event.target.value,
-                    error: '',
-                    errorTarget: undefined,
-                  })
-                }
-              />
-            </label>
-            {quantity.direction === 'return' && quantity.condition !== 'mark-lost' && (
-              <label className="checkbox-label">
+            <div
+              className={
+                quantity.direction === 'return' && quantity.condition === 'usable'
+                  ? 'return-quantity-row'
+                  : 'quantity-fields'
+              }
+            >
+              <label className="field-label">
+                כמות
                 <input
-                  type="checkbox"
-                  checked={quantity.damaged}
+                  ref={quantityErrorRef}
+                  className="input-field"
+                  type="number"
+                  min="1"
+                  max={
+                    quantity.direction === 'return'
+                      ? quantity.condition === 'found'
+                        ? projectItem(operation, quantity.itemId)?.lostNow
+                        : projectItem(operation, quantity.itemId)?.returnableNow
+                      : quantity.locationId
+                        ? projectedLocationAvailability(
+                            operation,
+                            quantity.itemId,
+                            Number(quantity.locationId),
+                          )
+                        : undefined
+                  }
+                  aria-invalid={Boolean(quantity.error) && quantity.errorTarget !== 'damaged'}
+                  value={quantity.quantity}
                   onChange={(event) =>
                     setQuantity({
                       ...quantity,
-                      damaged: event.target.checked,
+                      quantity: event.target.value,
                       error: '',
                       errorTarget: undefined,
                     })
                   }
                 />
-                <TriangleAlert className="size-4" aria-hidden="true" />
-                פגומים
               </label>
-            )}
-            {quantity.direction === 'return' &&
-              quantity.condition === 'usable' &&
-              quantity.damaged && (
-                <label className="field-label">
-                  כמות פגומה
+              {quantity.direction === 'return' && quantity.condition !== 'mark-lost' && (
+                <label className="checkbox-label">
                   <input
-                    className="input-field"
-                    type="number"
-                    min="0"
-                    max={quantity.quantity}
-                    step="1"
-                    ref={damagedQuantityRef}
-                    aria-invalid={Boolean(quantity.error) && quantity.errorTarget === 'damaged'}
-                    aria-describedby={
-                      quantity.errorTarget === 'damaged' && quantity.error
-                        ? 'quantity-validation-error'
-                        : undefined
-                    }
-                    value={quantity.damagedQuantity}
+                    type="checkbox"
+                    checked={quantity.damaged}
                     onChange={(event) =>
                       setQuantity({
                         ...quantity,
-                        damagedQuantity: event.target.value,
+                        damaged: event.target.checked,
                         error: '',
                         errorTarget: undefined,
                       })
                     }
                   />
+                  <TriangleAlert className="size-4" aria-hidden="true" />
+                  פגומים
                 </label>
               )}
+              {quantity.direction === 'return' &&
+                quantity.condition === 'usable' &&
+                quantity.damaged && (
+                  <label className="field-label return-damaged-field">
+                    כמות פגומה
+                    <input
+                      className="input-field"
+                      type="number"
+                      min="0"
+                      max={quantity.quantity}
+                      step="1"
+                      ref={damagedQuantityRef}
+                      aria-invalid={Boolean(quantity.error) && quantity.errorTarget === 'damaged'}
+                      aria-describedby={
+                        quantity.errorTarget === 'damaged' && quantity.error
+                          ? 'quantity-validation-error'
+                          : undefined
+                      }
+                      value={quantity.damagedQuantity}
+                      onChange={(event) =>
+                        setQuantity({
+                          ...quantity,
+                          damagedQuantity: event.target.value,
+                          error: '',
+                          errorTarget: undefined,
+                        })
+                      }
+                    />
+                  </label>
+                )}
+            </div>
             <label className="field-label">
               הערה (רשות)
               <input

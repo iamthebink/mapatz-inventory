@@ -91,6 +91,46 @@ async function confirmSave(page: Page) {
   await expect(review).toBeVisible();
   await review.getByRole('button', { name: 'אישור ושמירה' }).click();
 }
+for (const width of [1280, 320]) {
+  test(`keeps return quantities side by side without moving the checkbox at ${width}px`, async ({
+    page,
+    seed,
+  }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await openSeededCard(page, seed.borrower.playaName);
+    await page.getByRole('button', { name: 'החזרת ציוד' }).click();
+    const dialog = page.getByRole('dialog', { name: 'החזרת ציוד' });
+    const total = dialog.getByRole('spinbutton', { name: 'כמות', exact: true });
+    const damaged = dialog.getByRole('spinbutton', { name: 'כמות פגומה', exact: true });
+    const checkbox = dialog.getByRole('checkbox', { name: 'פגומים' });
+    await expect(damaged).toHaveCount(0);
+    const before = {
+      checkbox: await checkbox.boundingBox(),
+      dialog: await dialog.boundingBox(),
+      total: await total.boundingBox(),
+    };
+    await checkbox.focus();
+    await checkbox.press('Space');
+    await page.keyboard.press('Tab');
+    await expect(damaged).toBeFocused();
+    await expect(damaged).toBeVisible();
+    expect(await checkbox.boundingBox()).toEqual(before.checkbox);
+    expect(await dialog.boundingBox()).toEqual(before.dialog);
+    expect(await total.boundingBox()).toEqual(before.total);
+    const damageBox = (await damaged.boundingBox())!;
+    expect(damageBox.y).toBe(before.total!.y);
+    expect(damageBox.x + damageBox.width).toBeLessThanOrEqual(before.total!.x);
+    expect(damageBox.x).toBeGreaterThanOrEqual(0);
+    await page.keyboard.press('Shift+Tab');
+    await expect(checkbox).toBeFocused();
+    await checkbox.press('Space');
+    await expect(damaged).toHaveCount(0);
+    expect(await checkbox.boundingBox()).toEqual(before.checkbox);
+    expect(await dialog.boundingBox()).toEqual(before.dialog);
+    expect(await total.boundingBox()).toEqual(before.total);
+  });
+}
+
 test('protects staged borrower-card work when switching to consumables', async ({ page, seed }) => {
   await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.stockItem.name);
