@@ -1875,7 +1875,7 @@ export const BorrowerWorkflow = forwardRef<
                   }
                 />
                 <TriangleAlert className="size-4" aria-hidden="true" />
-                הציוד הוחזר פגום
+                פגומים
               </label>
             )}
             {quantity.direction === 'return' &&

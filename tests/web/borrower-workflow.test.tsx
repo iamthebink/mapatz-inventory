@@ -594,7 +594,7 @@ describe('borrower desk workflow', () => {
         target: { value: String(total) },
       });
       if (damage !== null) {
-        const checkbox = within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+        const checkbox = within(dialog).getByRole('checkbox', { name: 'פגומים' });
         await userEvent.click(checkbox);
         fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
           target: { value: damage },
@@ -651,7 +651,7 @@ describe('borrower desk workflow', () => {
       await userEvent.click(within(dialog).getByRole('button', { name: 'אישור' }));
       expect(within(dialog).getByRole('alert').textContent).toContain('בין 1 ל־2');
       fireEvent.change(total, { target: { value: '2' } });
-      await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+      await userEvent.click(within(dialog).getByRole('checkbox', { name: 'פגומים' }));
       fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
         target: { value: damage },
       });
@@ -687,7 +687,7 @@ describe('borrower desk workflow', () => {
     expectDialogItem(dialog, item.name);
     let quantityInput = screen.getByRole('spinbutton', { name: /כמות/ }) as HTMLInputElement;
     expect(quantityInput.value).toBe('2');
-    const damaged = within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' });
+    const damaged = within(dialog).getByRole('checkbox', { name: 'פגומים' });
     expect((damaged as HTMLInputElement).checked).toBe(false);
     await userEvent.click(damaged);
     await userEvent.click(within(dialog).getByRole('button', { name: 'ביטול' }));
@@ -699,12 +699,12 @@ describe('borrower desk workflow', () => {
     quantityInput = screen.getByRole('spinbutton', { name: /כמות/ }) as HTMLInputElement;
     expect(quantityInput.value).toBe('2');
     expect(
-      (within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }) as HTMLInputElement)
+      (within(dialog).getByRole('checkbox', { name: 'פגומים' }) as HTMLInputElement)
         .checked,
     ).toBe(false);
     await userEvent.clear(quantityInput);
     await userEvent.type(quantityInput, '1');
-    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'פגומים' }));
     if (within(dialog).queryByRole('spinbutton', { name: 'כמות פגומה' })) {
       fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
         target: { value: '1' },
@@ -740,7 +740,7 @@ describe('borrower desk workflow', () => {
     dialog = screen.getByRole('dialog', { name: 'נמצא והוחזר' });
     expectDialogItem(dialog, item.name);
     const damaged = within(dialog).getByRole('checkbox', {
-      name: 'הציוד הוחזר פגום',
+      name: 'פגומים',
     }) as HTMLInputElement;
     expect(damaged.checked).toBe(false);
     await userEvent.click(damaged);
@@ -817,7 +817,7 @@ describe('borrower desk workflow', () => {
     const damagedQuantity = within(dialog).getByRole('spinbutton', { name: /כמות/ });
     await userEvent.clear(damagedQuantity);
     await userEvent.type(damagedQuantity, '1');
-    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'הציוד הוחזר פגום' }));
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'פגומים' }));
     if (within(dialog).queryByRole('spinbutton', { name: 'כמות פגומה' })) {
       fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'כמות פגומה' }), {
         target: { value: '1' },
