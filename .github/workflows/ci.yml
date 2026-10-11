@@ -51,3 +51,9 @@ jobs:
           artifact="$(find desktop-stage/out/make -name '*.zip' -type f | head -n 1)"
           ditto -x -k "$artifact" "$RUNNER_TEMP/mapatz-installed"
           MAPATZ_EXECUTABLE="$RUNNER_TEMP/mapatz-installed/Mapatz Inventory.app/Contents/MacOS/mapatz-inventory" pnpm test:desktop
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: diagnostics-${{ matrix.os }}
+          retention-days: 7
+          path: test-results-desktop

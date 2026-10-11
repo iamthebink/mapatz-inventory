@@ -2,10 +2,15 @@ import { test, _electron as electron, type ElectronApplication } from '@playwrig
 
 const diagnosticIds = new WeakMap<ElectronApplication, number>();
 let diagnosticSequence = 0;
-export async function launchElectron(options: Parameters<typeof electron.launch>[0]) {
+export async function launchElectron(
+  options: Parameters<typeof electron.launch>[0],
+  traceScreenshots = true,
+) {
   const application = await electron.launch(options);
   diagnosticIds.set(application, ++diagnosticSequence);
-  await application.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
+  await application
+    .context()
+    .tracing.start({ screenshots: traceScreenshots, snapshots: true, sources: true });
   return application;
 }
 export async function saveDiagnostics(application: ElectronApplication) {

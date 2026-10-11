@@ -88,15 +88,18 @@ process.parentPort.postMessage(restored.worksheets[0].getCell('A1').value); db.c
     await cleanupProfile(profile);
   }
 });
-async function freshApp() {
+async function freshApp(traceScreenshots = true) {
   const profile = await mkdtemp(join(tmpdir(), 'mapatz-matrix-'));
   const executablePath = await executable();
   const launch = () =>
-    launchElectron({
-      executablePath,
-      cwd: tmpdir(),
-      env: { ...process.env, MAPATZ_PROFILE: profile },
-    });
+    launchElectron(
+      {
+        executablePath,
+        cwd: tmpdir(),
+        env: { ...process.env, MAPATZ_PROFILE: profile },
+      },
+      traceScreenshots,
+    );
   const application = await launch();
   const page = await application.firstWindow();
   await page.locator('#password').fill('camp-password-123');
@@ -1612,7 +1615,9 @@ test('admin settings reset button requires admin and returns from local cancella
   }
 });
 test('confirmation renderer crash cancels and permits another confirmation and ordinary exit', async () => {
-  const context = await freshApp();
+  // Mitigate a suspected race between screencast replies and CDP teardown on the deliberate crash.
+  // Keep API/snapshot tracing and every recovery assertion enabled.
+  const context = await freshApp(false);
   try {
     await context.page.evaluate(async () => {
       await fetch('/api/session/role', {
