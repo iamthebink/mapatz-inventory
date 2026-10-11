@@ -1868,9 +1868,10 @@ export const BorrowerWorkflow = forwardRef<
                 />
               </label>
               {quantity.direction === 'return' && quantity.condition !== 'mark-lost' && (
-                <label className="checkbox-label">
+                <div className="checkbox-label return-damage-toggle">
                   <input
                     type="checkbox"
+                    aria-labelledby="return-damage-label"
                     checked={quantity.damaged}
                     onChange={(event) =>
                       setQuantity({
@@ -1882,8 +1883,8 @@ export const BorrowerWorkflow = forwardRef<
                     }
                   />
                   <TriangleAlert className="size-4" aria-hidden="true" />
-                  פגומים
-                </label>
+                  <span id="return-damage-label">פגומים</span>
+                </div>
               )}
               {quantity.direction === 'return' &&
                 quantity.condition === 'usable' &&

@@ -121,6 +121,16 @@ for (const width of [1280, 320]) {
     expect(damageBox.y).toBe(before.total!.y);
     expect(damageBox.x + damageBox.width).toBeLessThanOrEqual(before.total!.x);
     expect(damageBox.x).toBeGreaterThanOrEqual(0);
+    await damaged.fill('1');
+    const toggleRow = dialog.locator('.return-damage-toggle');
+    await toggleRow.getByText('פגומים', { exact: true }).click();
+    await expect(checkbox).toBeChecked();
+    await expect(damaged).toHaveValue('1');
+    await damaged.focus();
+    await toggleRow.click({ position: { x: 4, y: 4 } });
+    await expect(checkbox).toBeChecked();
+    await expect(damaged).toHaveValue('1');
+    await damaged.focus();
     await page.keyboard.press('Shift+Tab');
     await expect(checkbox).toBeFocused();
     await checkbox.press('Space');
@@ -128,6 +138,10 @@ for (const width of [1280, 320]) {
     expect(await checkbox.boundingBox()).toEqual(before.checkbox);
     expect(await dialog.boundingBox()).toEqual(before.dialog);
     expect(await total.boundingBox()).toEqual(before.total);
+    await checkbox.click();
+    await expect(damaged).toHaveValue('1');
+    await checkbox.click();
+    await expect(damaged).toHaveCount(0);
   });
 }
 
