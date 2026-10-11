@@ -11,7 +11,8 @@ async function cleanupProfile(profile: string) {
   const logPath = test.info().outputPath('desktop.log');
   await writeFile(logPath, log);
   await test.info().attach('desktop.log', { path: logPath, contentType: 'text/plain' });
-  await rm(profile, { recursive: true, force: true });
+  // Windows can briefly retain Chromium file handles after Electron exits.
+  await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 async function executable() {
   if (process.env.MAPATZ_EXECUTABLE) return process.env.MAPATZ_EXECUTABLE;
