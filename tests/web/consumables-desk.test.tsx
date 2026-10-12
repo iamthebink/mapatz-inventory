@@ -464,15 +464,24 @@ it('cancels browser unload while a draft is staged', async () => {
 
 it.each([
   ['eligible', 1, '1'],
-  ['ineligible', 2, ''],
-  ['absent', null, ''],
+  ['second eligible', 2, '2'],
+  ['ineligible', 2, '1'],
+  ['absent', null, '1'],
 ] as const)(
-  'uses only an eligible default for issue (%s) and requires explicit selection otherwise',
-  async (_scenario, defaultLocationId, expected) => {
+  'selects the default or an eligible source for issue (%s)',
+  async (scenario, defaultLocationId, expected) => {
     render(
       <DialogStackProvider>
         <ConsumablesDesk
-          items={[item(1, 'סרט')]}
+          items={[
+            {
+              ...item(1, 'סרט'),
+              balances: [
+                { locationId: 1, available: 5, damaged: 0 },
+                { locationId: 2, available: scenario === 'second eligible' ? 5 : 0, damaged: 0 },
+              ],
+            },
+          ]}
           locations={[
             { id: 1, name: 'A', code: 'a', archived: false, isDefault: defaultLocationId === 1 },
             { id: 2, name: 'B', code: 'b', archived: false, isDefault: defaultLocationId === 2 },
@@ -487,7 +496,7 @@ it.each([
     expect(screen.getByLabelText('מיקום מקור')).toHaveProperty('value', expected);
   },
 );
-it('staging all default stock removes default eligibility without selecting another stocked location', async () => {
+it('staging all default stock selects another stocked location', async () => {
   const split = {
     ...item(1, 'סרט'),
     available: 10,
@@ -516,5 +525,6 @@ it('staging all default stock removes default eligibility without selecting anot
   await user.type(screen.getByLabelText('כמות'), '5');
   await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
   await user.click(screen.getByRole('button', { name: 'ניפוק' }));
-  expect(screen.getByLabelText('מיקום מקור')).toHaveProperty('value', '');
+  expect(screen.getByLabelText('מיקום מקור')).toHaveProperty('value', '2');
+  expect(screen.queryByRole('option', { name: /A ·/ })).toBeNull();
 });

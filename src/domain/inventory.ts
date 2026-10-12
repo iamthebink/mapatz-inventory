@@ -1,3 +1,4 @@
+import { ensureDefaultLocation } from '../db/default-location.js';
 import { borrowerOperationConflicts } from '../contracts/borrower-operation-validation.js';
 import type {
   BorrowerImportMode,
@@ -267,6 +268,7 @@ export class InventoryService {
       this.db
         .prepare('INSERT INTO locations(id,code,name) VALUES (?,?,?)')
         .run(id, code.trim(), name.trim());
+      ensureDefaultLocation(this.db);
       return this.db
         .prepare(
           'SELECT id,code,name,archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) isDefault FROM locations WHERE id=?',
@@ -304,6 +306,7 @@ export class InventoryService {
         );
       if (result.changes === 0) throw new DomainError('not_found', 'Location not found', 404);
       this.setDefaultLocation(id, input.archived ? false : input.isDefault);
+      ensureDefaultLocation(this.db);
     });
   }
 
@@ -370,6 +373,7 @@ export class InventoryService {
       }
       if (input.archived) this.setDefaultLocation(locationId, false);
       else this.setDefaultLocation(locationId, input.isDefault);
+      ensureDefaultLocation(this.db);
       const result = this.db
         .prepare(
           'SELECT id,code,name,archived, (id=(SELECT default_location_id FROM inventory_settings WHERE singleton=1)) isDefault FROM locations WHERE id=?',
@@ -500,6 +504,7 @@ export class InventoryService {
       if (input.action === 'archive')
         this.db.prepare('UPDATE locations SET archived=1 WHERE id=?').run(input.locationId);
       else this.db.prepare('DELETE FROM locations WHERE id=?').run(input.locationId);
+      ensureDefaultLocation(this.db);
       this.scrubInventoryCommandReceipts(
         (value) =>
           this.isLocationReceiptFor(value, input.locationId) ||

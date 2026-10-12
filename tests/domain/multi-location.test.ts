@@ -245,7 +245,7 @@ describe('multi-location invariants', () => {
       ).toEqual({ count: 0 });
     },
   );
-  it('retirement merges local contents, invalidates changed confirmation, clears default and preserves deleted attribution', () => {
+  it('retirement merges local contents, invalidates changed confirmation, replaces default and preserves deleted attribution', () => {
     const { service, a, b, item } = fixture();
     service.saveInventoryLocation({
       key: 'default-a',
@@ -274,7 +274,9 @@ describe('multi-location invariants', () => {
     expect(service.listItems()[0]!.balances).toEqual([
       { locationId: b.id, available: 51, damaged: 0 },
     ]);
-    expect(service.defaultLocationId()).toBeNull();
+    expect(service.defaultLocationId()).toBe(
+      service.listLocations().find((location) => location.name === 'צוללת')!.id,
+    );
     expect(service.listLedger()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -393,7 +395,7 @@ describe('multi-location invariants', () => {
     databases.splice(databases.indexOf(reopened), 1);
     rmSync(directory, { recursive: true, force: true });
   });
-  it('default commands replace, unset and retire the nullable setting', () => {
+  it('default commands keep an active default after deselection and retirement', () => {
     const { db, service, a, b } = fixture();
     db.prepare('UPDATE inventory_settings SET default_location_id=NULL').run();
     const save = (key: string, location: typeof a, isDefault: boolean) =>
@@ -413,7 +415,9 @@ describe('multi-location invariants', () => {
     save('uncheck-a', a, false);
     expect(service.defaultLocationId()).toBe(b.id);
     save('uncheck-b', b, false);
-    expect(service.defaultLocationId()).toBeNull();
+    expect(service.defaultLocationId()).toBe(
+      service.listLocations().find((location) => location.name === 'צוללת')!.id,
+    );
     const empty = service.createLocation('empty', 'Empty');
     save('choose-empty', empty, true);
     service.retireLocationCommand({
@@ -426,7 +430,9 @@ describe('multi-location invariants', () => {
       expectedItemIds: [],
       expectedBalances: [],
     });
-    expect(service.defaultLocationId()).toBeNull();
+    expect(service.defaultLocationId()).toBe(
+      service.listLocations().find((location) => location.name === 'צוללת')!.id,
+    );
   });
   it('reset grouping uses normalized identity and alias order while composite placement keys remain unambiguous', () => {
     const { db } = fixture();
@@ -468,7 +474,7 @@ describe('multi-location invariants', () => {
 });
 
 it.each(['reset', 'recovery'] as const)(
-  '%s workbook round-trips a named default and explicit absence',
+  '%s workbook preserves a named default and fills explicit absence',
   async (mode) => {
     const { db, service, b } = fixture();
     const transfer = new InventoryTransferService(db);
@@ -481,9 +487,10 @@ it.each(['reset', 'recovery'] as const)(
         name: b.name,
         isDefault: selected,
       });
+      if (!selected) db.prepare('UPDATE inventory_settings SET default_location_id=NULL').run();
       const bytes = await exportWorkbook(transfer.snapshot());
       const target = fixture();
-      // Ensure an absent imported default clears an existing destination default.
+      // Ensure an absent imported default chooses from the imported locations.
       target.service.saveInventoryLocation({
         key: randomUUID(),
         ledgerEpoch: 1,
@@ -496,8 +503,8 @@ it.each(['reset', 'recovery'] as const)(
       if (mode === 'reset') destination.replaceWithReset(await parseResetWorkbook(bytes));
       else destination.replaceWithRecovery(await parseRecoveryWorkbook(bytes));
       const defaults = target.service.listLocations().filter((location) => location.isDefault);
-      expect(defaults.map((location) => location.name)).toEqual(selected ? ['B'] : []);
-      expect(target.service.defaultLocationId()).toBe(selected ? defaults[0]!.id : null);
+      expect(defaults.map((location) => location.name)).toEqual(selected ? ['B'] : ['צוללת']);
+      expect(target.service.defaultLocationId()).toBe(defaults[0]!.id);
       if (selected) expect(defaults[0]!.id).not.toBe(b.id);
     }
   },

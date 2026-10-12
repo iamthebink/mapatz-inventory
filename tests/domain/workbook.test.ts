@@ -366,7 +366,7 @@ describe('inventory XLSX workbook', () => {
       snapshot.locations.find((l) => !l.archived)?.name,
     );
     await expect(parseResetWorkbook(exported)).resolves.toEqual({
-      locations: [{ name: 'Main', archived: false, isDefault: false }],
+      locations: [{ name: 'Main', archived: false, isDefault: true }],
       items: [
         {
           name: 'Permanent table',

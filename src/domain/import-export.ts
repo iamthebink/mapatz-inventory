@@ -1,3 +1,4 @@
+import { ensureDefaultLocation } from '../db/default-location.js';
 import type { InventoryDatabase } from '../db/database.js';
 import { readTransaction, transaction } from '../db/database.js';
 import {
@@ -744,6 +745,8 @@ export class InventoryTransferService {
             .run(locationId);
       });
 
+      ensureDefaultLocation(this.db);
+
       const identities = new Map<string, ResetItem[]>();
       for (const item of payload.items) {
         const key = normalizeItemName(item.name);
@@ -860,6 +863,8 @@ export class InventoryTransferService {
             .prepare('UPDATE inventory_settings SET default_location_id=? WHERE singleton=1')
             .run(locationId);
       });
+
+      ensureDefaultLocation(this.db);
 
       const itemIds = new Map<number, number>();
       for (const item of payload.items) {

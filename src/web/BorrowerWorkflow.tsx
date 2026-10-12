@@ -1646,18 +1646,19 @@ export const BorrowerWorkflow = forwardRef<
                   onChange={setItemSearch}
                   options={itemOptions}
                   onSelect={(item) => {
+                    const eligibleLocations = operation.snapshot.locations.filter(
+                      (location) =>
+                        !location.archived &&
+                        projectedLocationAvailability(operation, item.id, location.id) > 0,
+                    );
+                    const source =
+                      eligibleLocations.find(
+                        (location) => location.id === operation.snapshot.defaultLocationId,
+                      ) ?? eligibleLocations[0];
                     setQuantity({
                       direction: item.kind === 'consumable' ? 'issue' : 'borrow',
                       itemId: item.id,
-                      locationId:
-                        operation.snapshot.defaultLocationId !== null &&
-                        projectedLocationAvailability(
-                          operation,
-                          item.id,
-                          operation.snapshot.defaultLocationId,
-                        ) > 0
-                          ? String(operation.snapshot.defaultLocationId)
-                          : '',
+                      locationId: source?.id.toString() ?? '',
                       quantity: '1',
                       note: '',
                       error: '',

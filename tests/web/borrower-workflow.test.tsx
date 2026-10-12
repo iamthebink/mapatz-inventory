@@ -2132,20 +2132,22 @@ it.each(['match', 'failure', 'stalled'])(
 
 it.each([
   ['eligible', 1, '1'],
-  ['ineligible', 2, ''],
-  ['absent', null, ''],
+  ['second eligible', 2, '2'],
+  ['ineligible', 2, '1'],
+  ['absent', null, '1'],
 ] as const)(
-  'preselects only an eligible configured source (%s) without fallback',
-  async (_scenario, defaultLocationId, expected) => {
+  'preselects the default or an eligible fallback source (%s)',
+  async (scenario, defaultLocationId, expected) => {
     const truth = {
       ...desk(),
       defaultLocationId,
       inventory: [
         {
           ...item,
+          available: scenario === 'second eligible' ? 8 : 4,
           balances: [
             { locationId: 1, available: 4, damaged: 0 },
-            { locationId: 2, available: 0, damaged: 0 },
+            { locationId: 2, available: scenario === 'second eligible' ? 4 : 0, damaged: 0 },
           ],
         },
       ],
@@ -2292,3 +2294,65 @@ it('leaves a return destination unselected when no shared default exists', async
     within(screen.getByRole('dialog', { name: 'החזרת ציוד' })).getByLabelText('מיקום קבלה'),
   ).toHaveProperty('value', '');
 });
+
+it.each(['borrow', 'return'] as const)(
+  'source selection accounts for a staged %s',
+  async (direction) => {
+    const truth = {
+      ...desk(),
+      inventory: [
+        {
+          ...item,
+          available: direction === 'borrow' ? 8 : 4,
+          balances: [
+            { locationId: 1, available: direction === 'borrow' ? 4 : 0, damaged: 0 },
+            { locationId: 2, available: 4, damaged: 0 },
+          ],
+        },
+      ],
+      locations: [
+        { id: 1, name: 'Default', code: 'a', archived: false, isDefault: true },
+        { id: 2, name: 'Other', code: 'b', archived: false, isDefault: false },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) =>
+        String(input).includes('desk-snapshot')
+          ? json(truth)
+          : json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] }),
+      ),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    const openBorrow = async () => {
+      const search = screen.getByRole('combobox', { name: 'חיפוש פריט' });
+      await userEvent.type(search, item.name);
+      fireEvent.keyDown(search, { key: 'ArrowDown' });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      return screen.findByRole('dialog', { name: 'הוספת השאלה' });
+    };
+    const staged =
+      direction === 'borrow'
+        ? await openBorrow()
+        : await (async () => {
+            await userEvent.click(screen.getByRole('button', { name: 'החזרת ציוד' }));
+            return screen.findByRole('dialog', { name: 'החזרת ציוד' });
+          })();
+    fireEvent.change(within(staged).getByLabelText('כמות'), {
+      target: { value: direction === 'borrow' ? '4' : '1' },
+    });
+    await userEvent.click(within(staged).getByRole('button', { name: 'אישור' }));
+    const next = await openBorrow();
+    expect(within(next).getByLabelText('מיקום מקור')).toHaveProperty(
+      'value',
+      direction === 'borrow' ? '2' : '1',
+    );
+    expect(truth.defaultLocationId).toBe(1);
+  },
+);

@@ -296,7 +296,10 @@ describe('inventory API permission and edge-case matrix', () => {
         .set('x-mapatz-desktop-token', token)
         .expect(200)
         .expect(({ body }) => expect(body.password).toBe('still-here'));
-    transfers.replaceWithReset({ locations: [], items: [] });
+    transfers.replaceWithReset({
+      locations: [{ name: 'צוללת', archived: false, isDefault: false }],
+      items: [],
+    });
     await recover();
     transfers.replaceWithRecovery(before);
     await recover();

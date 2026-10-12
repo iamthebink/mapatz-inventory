@@ -160,20 +160,19 @@ export function ConsumablesDesk({
     setQuantityError('');
     showToast('ניפוק ציוד מתכלה', 'הפריט שנבחר אינו זמין עוד. יש לבחור פריט אחר.', 'warning');
   }, [items, selectedId, showToast]);
+  const locationAvailability = (item: Item, locationId: number) =>
+    (item.balances.find((placement) => placement.locationId === locationId)?.available ?? 0) -
+    entries
+      .filter((entry) => entry.itemId === item.id && entry.locationId === locationId)
+      .reduce((sum, entry) => sum + entry.quantity, 0);
   const openQuantity = (item: Item, trigger: HTMLButtonElement) => {
     rowTrigger.current = trigger;
     setSelectedId(item.id);
-    const defaultLocation = locations.find(
-      (l) =>
-        l.isDefault &&
-        !l.archived &&
-        (item.balances.find((p) => p.locationId === l.id)?.available ?? 0) -
-          entries
-            .filter((entry) => entry.itemId === item.id && entry.locationId === l.id)
-            .reduce((sum, entry) => sum + entry.quantity, 0) >
-          0,
+    const eligibleLocations = locations.filter(
+      (location) => !location.archived && locationAvailability(item, location.id) > 0,
     );
-    setLocationId(defaultLocation?.id.toString() ?? '');
+    const source = eligibleLocations.find((location) => location.isDefault) ?? eligibleLocations[0];
+    setLocationId(source?.id.toString() ?? '');
     setQuantity('1');
     setNote('');
     setQuantityError('');
@@ -511,15 +510,10 @@ export function ConsumablesDesk({
               >
                 <option value="">בחרו מיקום</option>
                 {locations
-                  .filter(
-                    (l) =>
-                      !l.archived &&
-                      (selected.balances.find((p) => p.locationId === l.id)?.available ?? 0) > 0,
-                  )
+                  .filter((l) => !l.archived && locationAvailability(selected, l.id) > 0)
                   .map((l) => (
                     <option key={l.id} value={l.id}>
-                      {l.name} · זמין{' '}
-                      {selected.balances.find((p) => p.locationId === l.id)?.available ?? 0}
+                      {l.name} · זמין {locationAvailability(selected, l.id)}
                     </option>
                   ))}
               </select>

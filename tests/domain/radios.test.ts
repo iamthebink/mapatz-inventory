@@ -120,7 +120,10 @@ describe('radio fleet', () => {
       expect(() => transfers.replaceWithRecovery(invalid)).toThrow();
       expect(transfers.snapshot()).toEqual(current);
     }
-    transfers.replaceWithReset({ locations: [], items: [] });
+    transfers.replaceWithReset({
+      locations: [{ name: 'צוללת', archived: false, isDefault: false }],
+      items: [],
+    });
     expect(radios.fleet().radios).toEqual(saved.radios);
     db.close();
   });

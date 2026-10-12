@@ -110,7 +110,9 @@ describe('field-scale sample workbook', () => {
     const transferService = new InventoryTransferService(db);
     transferService.replaceWithRecovery(payload);
     const snapshot = transferService.snapshot();
-    expect(snapshot.locations).toEqual(payload.locations);
+    expect(snapshot.locations).toEqual(
+      payload.locations.map((location) => ({ ...location, isDefault: location.name === 'צוללת' })),
+    );
     expect(snapshot.radioCount).toBe(40);
     expect(snapshot.radios).toEqual(payload.radios);
     expect(transferBusinessState(snapshot).borrowers).toEqual(
@@ -163,7 +165,9 @@ describe('field-scale sample workbook', () => {
     const transfers = new InventoryTransferService(db);
     transfers.replaceWithReset(payload);
     const snapshot = transfers.snapshot();
-    expect(snapshot.locations).toEqual(payload.locations);
+    expect(snapshot.locations).toEqual(
+      payload.locations.map((location) => ({ ...location, isDefault: location.name === 'צוללת' })),
+    );
     expect(snapshot.borrowers).toEqual([]);
     expect(snapshot.items).toHaveLength(payload.items.length);
     expect(snapshot.events).toHaveLength(payload.items.filter((item) => item.total > 0).length);
