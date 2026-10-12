@@ -1,3 +1,5 @@
+import { LostItemRecoveryDialog } from './LostItemRecoveryDialog';
+import { useLostItemRecovery } from './useLostItemRecovery';
 import { ItemNote } from './ItemNote';
 import { StickyTable } from './StickyTable';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -20,6 +22,7 @@ import {
 type Editor =
   | { kind: 'item'; item: Item | null }
   | { kind: 'damage'; item: Item }
+  | { kind: 'lost'; item: Item }
   | { kind: 'transfer'; item: Item }
   | { kind: 'locations' };
 type Draft = {
@@ -70,7 +73,9 @@ export function InventoryManagement({
   onRefresh,
   showToast,
   registerLeaveGuard,
+  onRecoveryLockChange,
 }: {
+  onRecoveryLockChange?: (locked: boolean) => void;
   items: Item[];
   locations: Location[];
   ledgerEpoch: number | null;
@@ -103,7 +108,7 @@ export function InventoryManagement({
     items: Item[];
   } | null>(null);
   const [replacementLocationId, setReplacementLocationId] = useState('');
-  const [pending, setPending] = useState(false);
+  const [managementPending, setPending] = useState(false);
   const [unresolved, setUnresolved] = useState<Attempt | null>(() =>
     readFrozenManagementAttempt(safeWindowStorage()),
   );
@@ -123,16 +128,40 @@ export function InventoryManagement({
   const pendingNavigationRef = useRef<(() => void) | null>(null);
   const pendingEditorChangeRef = useRef<(() => void) | null>(null);
 
+  const [lostRevision, setLostRevision] = useState(0);
+  const lostRecovery = useLostItemRecovery({
+    onRefresh,
+    onCommitted: () => {
+      setEditor(null);
+      setDirty(false);
+    },
+    onRejected: () => {
+      setLostRevision((value) => value + 1);
+    },
+    showToast,
+  });
+  const pending = managementPending || lostRecovery.locked;
+  useEffect(() => {
+    onRecoveryLockChange?.(lostRecovery.locked);
+  }, [lostRecovery.locked, onRecoveryLockChange]);
+
   useEffect(() => {
     registerLeaveGuard((continueNavigation) => {
-      if (pendingRef.current || unresolved || refreshRecovery) return false;
+      if (
+        pendingRef.current ||
+        lostRecovery.locked ||
+        lostRecovery.isBusy() ||
+        unresolved ||
+        refreshRecovery
+      )
+        return false;
       if (!editor || !dirty) return true;
       pendingNavigationRef.current = continueNavigation;
       setDiscardOpen(true);
       return false;
     });
     return () => registerLeaveGuard(null);
-  }, [dirty, editor, refreshRecovery, registerLeaveGuard, unresolved]);
+  }, [dirty, editor, refreshRecovery, registerLeaveGuard, unresolved, lostRecovery]);
 
   useEffect(() => {
     if (!deleteConfirm) return;
@@ -141,7 +170,14 @@ export function InventoryManagement({
   }, [deleteConfirm, items]);
 
   function open(next: Editor) {
-    if (pendingRef.current || unresolved || refreshRecovery) return;
+    if (
+      pendingRef.current ||
+      lostRecovery.locked ||
+      lostRecovery.isBusy() ||
+      unresolved ||
+      refreshRecovery
+    )
+      return;
     if (editor && dirty) {
       pendingEditorChangeRef.current = () => openEditor(next);
       setDiscardOpen(true);
@@ -192,7 +228,14 @@ export function InventoryManagement({
     }
   }
   function close() {
-    if (pendingRef.current || unresolved || refreshRecovery) return;
+    if (
+      pendingRef.current ||
+      lostRecovery.locked ||
+      lostRecovery.isBusy() ||
+      unresolved ||
+      refreshRecovery
+    )
+      return;
     if (dirty) {
       setDiscardOpen(true);
       return;
@@ -248,7 +291,14 @@ export function InventoryManagement({
     }
   }
   async function send(attempt: Attempt) {
-    if (pendingRef.current || refreshRecovery || (unresolved && unresolved !== attempt)) return;
+    if (
+      pendingRef.current ||
+      lostRecovery.locked ||
+      lostRecovery.isBusy() ||
+      refreshRecovery ||
+      (unresolved && unresolved !== attempt)
+    )
+      return;
     const storage = safeWindowStorage();
     if (!storage) {
       showToast('לא ניתן לשמור את הפעולה', 'אחסון הדפדפן אינו זמין כרגע', 'error');
@@ -728,6 +778,16 @@ export function InventoryManagement({
           <button
             type="button"
             className="small-button"
+            disabled={
+              item.lost === 0 || item.archived || pending || !!unresolved || refreshRecovery
+            }
+            onClick={() => open({ kind: 'lost', item })}
+          >
+            השב אבדה
+          </button>
+          <button
+            type="button"
+            className="small-button"
             data-tone="destructive"
             disabled={!admin || pending || !!unresolved || refreshRecovery}
             onClick={() => setDeleteConfirm(item)}
@@ -815,6 +875,20 @@ export function InventoryManagement({
           </button>
         )}
       </div>
+      {!editor && lostRecovery.locked && (
+        <div className="dialog-actions">
+          <button
+            className="primary-button"
+            type="button"
+            disabled={lostRecovery.pending}
+            onClick={() => void lostRecovery.retry()}
+          >
+            {lostRecovery.refreshOnly && !lostRecovery.startup
+              ? 'רענון נתונים'
+              : 'בדוק שוב את אותה פעולה'}
+          </button>
+        </div>
+      )}
       {!editor && unresolved && (
         <div className="inventory-location-recovery" role="status">
           <span>{unresolved.description ?? 'פעולה בניהול מלאי'}: תוצאת הפעולה אינה ידועה</span>
@@ -1002,9 +1076,11 @@ export function InventoryManagement({
                 ? 'העברת מלאי'
                 : editor.kind === 'damage'
                   ? 'טיפול בפגומים'
-                  : locationEdit === 'new'
-                    ? 'מיקום חדש'
-                    : 'עריכת מיקום'
+                  : editor.kind === 'lost'
+                    ? 'השב אבדה'
+                    : locationEdit === 'new'
+                      ? 'מיקום חדש'
+                      : 'עריכת מיקום'
           }
           level="root"
           role="dialog"
@@ -1016,6 +1092,32 @@ export function InventoryManagement({
           returnFocusRef={triggerRef}
           returnFocusFallbackRef={fallbackRef}
         >
+          {editor.kind === 'lost' && (
+            <LostItemRecoveryDialog
+              item={editor.item}
+              ledgerEpoch={editorEpoch}
+              revision={lostRevision}
+              locked={lockedDraft}
+              onDirty={() => setDirty(true)}
+              onSave={lostRecovery.send}
+              onClose={close}
+              showToast={showToast}
+            />
+          )}
+          {lostRecovery.locked && (
+            <div className="dialog-actions">
+              <button
+                className="primary-button"
+                type="button"
+                disabled={lostRecovery.pending}
+                onClick={() => void lostRecovery.retry()}
+              >
+                {lostRecovery.refreshOnly && !lostRecovery.startup
+                  ? 'רענון נתונים'
+                  : 'בדוק שוב את אותה פעולה'}
+              </button>
+            </div>
+          )}
           {editor.kind === 'item' && (
             <form className="dialog-form item-editor-form" onSubmit={saveItem}>
               <section className="item-editor-section" aria-labelledby="item-details-heading">

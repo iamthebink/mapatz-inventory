@@ -677,6 +677,11 @@ export function apiRouter(
     }),
   );
   api.get(
+    '/inventory/items/:id/lost-borrowers',
+    requireRole('operator', 'admin'),
+    route((req, res) => res.json(service.getItemLostBorrowers(parse(id, req.params.id)))),
+  );
+  api.get(
     '/borrowers/:id/desk-snapshot',
     route((req, res) => {
       const snapshot: BorrowerDeskSnapshot = service.getBorrowerDeskSnapshot(

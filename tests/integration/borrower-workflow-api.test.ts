@@ -1492,3 +1492,107 @@ describe('borrower workflow snapshot API', () => {
     expect(getSession).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('inventory lost recovery read to existing write', () => {
+  it('allows operators to read and recover to a stockless default with attributed allocation and replay', async () => {
+    const { db, inventory, agent } = fixture();
+    const source = Number(inventory.listLocations()[0]!.id);
+    const target = inventory.createLocation('found', 'Found equipment');
+    inventory.updateLocation(Number(target.id), {
+      code: 'found',
+      name: 'Found equipment',
+      isDefault: true,
+    });
+    const item = inventory.createItem({
+      name: 'Lost tool',
+      kind: 'non_consumable',
+      locationId: source,
+    });
+    inventory.addStock(item.id, 8, '', source);
+    const borrower = inventory.createBorrower({ fullName: 'Recoverer' });
+    const other = inventory.createBorrower({ fullName: 'Other borrower' });
+    const first = inventory.checkout(item.id, borrower.id, 2, '', source);
+    const second = inventory.checkout(item.id, borrower.id, 3, '', source);
+    const third = inventory.checkout(item.id, other.id, 1, '', source);
+    for (const [checkout, count] of [
+      [first, 2],
+      [second, 3],
+      [third, 1],
+    ])
+      inventory.markLost(checkout!, count!, true);
+    const read = await agent.get(`/api/inventory/items/${item.id}/lost-borrowers`).expect(200);
+    expect(read.body.borrowers).toEqual(
+      expect.arrayContaining([
+        { borrower, lost: 5 },
+        { borrower: other, lost: 1 },
+      ]),
+    );
+    await agent.get('/api/inventory/items/99999/lost-borrowers').expect(404);
+    const snapshot = await agent.get(`/api/borrowers/${borrower.id}/desk-snapshot`).expect(200);
+    expect(snapshot.body.defaultLocationId).toBe(target.id);
+    const body = {
+      contractVersion: 1,
+      ledgerEpoch: read.body.ledgerEpoch,
+      items: [
+        {
+          itemId: item.id,
+          lostCredit: [{ quantity: 4, locationId: target.id, condition: 'usable', note: 'found' }],
+        },
+      ],
+    };
+    const key = '00000000-0000-4000-8000-000000000998';
+    const path = `/api/borrowers/${borrower.id}/operations`;
+    await agent.post(path).set('Idempotency-Key', key).send(body).expect(201);
+    await agent
+      .post(path)
+      .set('Idempotency-Key', key)
+      .send(body)
+      .expect(201)
+      .expect(({ body: result }) => expect(result.replayed).toBe(true));
+    expect(inventory.getBorrowerDeskSnapshot(borrower.id).holdings).toEqual([
+      { itemId: item.id, returnable: 0, lost: 1 },
+    ]);
+    expect(inventory.getBorrowerDeskSnapshot(other.id).holdings).toEqual([
+      { itemId: item.id, returnable: 0, lost: 1 },
+    ]);
+    expect(inventory.listItems().find((entry) => entry.id === item.id)?.balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ locationId: source, available: 2 }),
+        expect.objectContaining({ locationId: target.id, available: 4 }),
+      ]),
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT borrower_id borrowerId,related_event_id checkoutId,quantity FROM inventory_events WHERE kind='found_returned' ORDER BY id",
+        )
+        .all(),
+    ).toEqual([
+      { borrowerId: borrower.id, checkoutId: first, quantity: 2 },
+      { borrowerId: borrower.id, checkoutId: second, quantity: 2 },
+    ]);
+    await agent
+      .post(path)
+      .set('Idempotency-Key', '00000000-0000-4000-8000-000000000999')
+      .send(body)
+      .expect(409);
+    expect(inventory.getItemLostBorrowers(item.id).borrowers.map((entry) => entry.lost)).toEqual([
+      1, 1,
+    ]);
+  });
+  it('rejects an unauthenticated role before reading lost obligations', async () => {
+    const { db, inventory } = fixture();
+    const read = vi.spyOn(inventory, 'getItemLostBorrowers');
+    const app = express();
+    app.use((_req, res, next) => {
+      res.locals.session = { role: 'unauthorized' };
+      next();
+    });
+    app.use(
+      '/api',
+      apiRouter(inventory, new InventoryTransferService(db), new SessionStore(db, 'admin-pass')),
+    );
+    await request(app).get('/api/inventory/items/1/lost-borrowers').expect(403);
+    expect(read).not.toHaveBeenCalled();
+  });
+});

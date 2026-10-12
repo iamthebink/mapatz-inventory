@@ -11,6 +11,7 @@ import {
   classifyBorrowerCreateResponse,
   classifyBorrowerOperationResponse,
   fetchBorrowerDeskSnapshot,
+  fetchItemLostBorrowers,
   fetchBorrowerSearch,
   sendBorrowerOperationCommand,
   sendConsumableBatchCommand,
@@ -669,3 +670,34 @@ it.each([false, true])(
     });
   },
 );
+
+describe('item lost borrowers decoder', () => {
+  const valid = {
+    itemId: 11,
+    ledgerEpoch: 3,
+    borrowers: [{ borrower: snapshot().borrower, lost: 2 }],
+  };
+  it('decodes the focused positive lost obligation read', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json(200, valid)),
+    );
+    await expect(fetchItemLostBorrowers(11)).resolves.toEqual(valid);
+  });
+  it.each([
+    ['wrong item', { ...valid, itemId: 12 }],
+    ['duplicate borrower', { ...valid, borrowers: [...valid.borrowers, ...valid.borrowers] }],
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '2', null].map((lost) => [
+      `invalid lost balance ${String(lost)}`,
+      { ...valid, borrowers: [{ borrower: snapshot().borrower, lost }] },
+    ]),
+  ])('rejects %s', async (_name, body) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json(200, body)),
+    );
+    await expect(fetchItemLostBorrowers(11)).rejects.toMatchObject({
+      code: 'invalid_server_truth',
+    });
+  });
+});

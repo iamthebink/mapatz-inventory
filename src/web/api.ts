@@ -13,6 +13,7 @@ import type {
   BorrowerCreateRequest,
   BorrowerCreateResult,
   BorrowerDeskSnapshot,
+  ItemLostBorrowersSnapshot,
   BorrowerOperationRequest,
   BorrowerOperationResult,
   BorrowerSearchSnapshot,
@@ -404,6 +405,32 @@ export async function fetchBorrowerSearch(query: string): Promise<BorrowerSearch
   if (!validBorrowerSearchSnapshot(value))
     throw new ApiError(200, 'invalid_server_truth', 'השרת החזיר תוצאות חיפוש לא תקינות');
   return value;
+}
+
+export async function fetchItemLostBorrowers(itemId: number): Promise<ItemLostBorrowersSnapshot> {
+  const value = await workflowRead(`/inventory/items/${itemId}/lost-borrowers`);
+  const ids = new Set<number>();
+  if (
+    !isObject(value) ||
+    !exactKeys(value, ['itemId', 'ledgerEpoch', 'borrowers']) ||
+    value.itemId !== itemId ||
+    !isSafePositive(value.ledgerEpoch) ||
+    !Array.isArray(value.borrowers) ||
+    !value.borrowers.every((entry) => {
+      if (
+        !isObject(entry) ||
+        !exactKeys(entry, ['borrower', 'lost']) ||
+        !validBorrower(entry.borrower) ||
+        !isSafePositive(entry.lost) ||
+        ids.has(entry.borrower.id)
+      )
+        return false;
+      ids.add(entry.borrower.id);
+      return true;
+    })
+  )
+    throw new ApiError(200, 'invalid_server_truth', 'השרת החזיר רשימת אבדות לא תקינה');
+  return value as ItemLostBorrowersSnapshot;
 }
 
 export async function fetchBorrowerDeskSnapshot(borrowerId: number): Promise<BorrowerDeskSnapshot> {

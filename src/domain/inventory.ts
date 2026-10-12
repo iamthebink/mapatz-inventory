@@ -28,6 +28,7 @@ import { periodBounds } from './period-summary.js';
 import type { PeriodSummary } from '../contracts/period-summary.js';
 import type {
   BorrowerDeskSnapshot,
+  ItemLostBorrowersSnapshot,
   BorrowerCreateRequest,
   BorrowerCreateResult,
   BorrowerCreateValidation,
@@ -1412,6 +1413,31 @@ export class InventoryService {
           left.borrower.id - right.borrower.id,
       );
       return { ledgerEpoch, active, archivedMatches };
+    });
+  }
+
+  getItemLostBorrowers(itemId: number): ItemLostBorrowersSnapshot {
+    return readTransaction(this.db, () => {
+      this.getItem(itemId);
+      const ledgerEpoch = this.ledgerEpochInTransaction();
+      const rows = this.db
+        .prepare(
+          `
+        SELECT b.*, SUM(l.lost) lost FROM loan_state l
+        JOIN borrowers b ON b.id=l.borrower_id
+        WHERE l.item_id=? GROUP BY b.id HAVING SUM(l.lost)>0
+        ORDER BY b.full_name,b.id
+      `,
+        )
+        .all(itemId) as Row[];
+      return {
+        itemId,
+        ledgerEpoch,
+        borrowers: rows.map((row) => ({
+          borrower: this.borrowerFromRow(row),
+          lost: Number(row.lost),
+        })),
+      };
     });
   }
 

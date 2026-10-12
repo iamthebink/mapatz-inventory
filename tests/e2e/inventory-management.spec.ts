@@ -332,3 +332,56 @@ test('item notes persist independently and disclose by keyboard across edits and
   await expect(dialog).toBeHidden();
   await expect(page.getByLabel(`הערות לפריט ${name}`)).toHaveCount(0);
 });
+
+test('operator recovers lost equipment from inventory with checkout attribution', async ({
+  page,
+  seed,
+  openLedger,
+}) => {
+  const snapshotResponse = await page.request.get(
+    `/api/borrowers/${seed.borrower.id}/desk-snapshot`,
+  );
+  const snapshot = await snapshotResponse.json();
+  const mark = await page.request.post(`/api/borrowers/${seed.borrower.id}/operations`, {
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    data: {
+      contractVersion: 1,
+      ledgerEpoch: snapshot.ledgerEpoch,
+      items: [{ itemId: seed.item.id, lost: [{ quantity: 2, note: 'missing' }] }],
+    },
+  });
+  expect(mark.ok()).toBeTruthy();
+  await page.goto('/management');
+  const row = page
+    .getByRole('row')
+    .filter({ has: page.getByRole('button', { name: seed.item.name, exact: true }) });
+  await row.getByRole('button', { name: 'השב אבדה' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'השב אבדה' })).toBeVisible();
+  await dialog.getByRole('combobox', { name: 'שואל' }).selectOption(String(seed.borrower.id));
+  await expect(dialog.getByLabel('מיקום יעד')).toHaveValue(String(snapshot.defaultLocationId));
+  await expect(dialog.getByLabel('כמות')).toHaveValue('1');
+  await dialog.getByLabel('הערה (רשות)').fill('found by operator');
+  await dialog.getByRole('button', { name: 'השב אבדה' }).click();
+  await expect(dialog).toBeHidden();
+  const db = openLedger();
+  expect(
+    db
+      .prepare(
+        "SELECT borrower_id borrowerId,related_event_id checkoutId,quantity,location_name locationName FROM inventory_events WHERE item_id=? AND kind='found_returned'",
+      )
+      .all(seed.item.id),
+  ).toEqual([
+    {
+      borrowerId: seed.borrower.id,
+      checkoutId: seed.checkoutId,
+      quantity: 1,
+      locationName: snapshot.locations.find(
+        (location: { id: number }) => location.id === snapshot.defaultLocationId,
+      ).name,
+    },
+  ]);
+  expect(
+    db.prepare('SELECT lost FROM loan_state WHERE checkout_id=?').get(seed.checkoutId),
+  ).toEqual({ lost: 1 });
+});

@@ -481,3 +481,51 @@ describe('borrower workflow persistence foundation', () => {
     db.close();
   });
 });
+
+describe('item lost borrower lookup', () => {
+  it('groups positive lost obligations by borrower, retains archived identity, and rejects missing items', () => {
+    const db = openDatabase(':memory:');
+    try {
+      const service = new InventoryService(db);
+      const locationId = Number(service.listLocations()[0]!.id);
+      const item = service.createItem({ name: 'Lost tent', kind: 'non_consumable', locationId });
+      const other = service.createItem({ name: 'Other tent', kind: 'non_consumable', locationId });
+      service.addStock(item.id, 10, '', locationId);
+      service.addStock(other.id, 2, '', locationId);
+      const borrower = service.createBorrower({
+        fullName: 'Same',
+        playaName: 'One',
+        phoneNumber: '123',
+        campDepartment: 'North',
+      });
+      const archived = service.createBorrower({
+        fullName: 'Same',
+        playaName: 'Two',
+        phoneNumber: '456',
+        campDepartment: 'South',
+      });
+      const unrelated = service.createBorrower({ fullName: 'Other' });
+      for (const count of [2, 3])
+        service.markLost(
+          service.checkout(item.id, borrower.id, count, '', locationId),
+          count,
+          true,
+        );
+      service.markLost(service.checkout(item.id, archived.id, 1, '', locationId), 1, true);
+      service.checkout(item.id, unrelated.id, 1, '', locationId);
+      service.markLost(service.checkout(other.id, unrelated.id, 1, '', locationId), 1, true);
+      db.prepare('UPDATE borrowers SET archived=1 WHERE id=?').run(archived.id);
+      expect(service.getItemLostBorrowers(item.id)).toEqual({
+        itemId: item.id,
+        ledgerEpoch: 1,
+        borrowers: [
+          { borrower, lost: 5 },
+          { borrower: { ...archived, archived: true }, lost: 1 },
+        ],
+      });
+      expect(() => service.getItemLostBorrowers(999999)).toThrow('Item not found');
+    } finally {
+      db.close();
+    }
+  });
+});

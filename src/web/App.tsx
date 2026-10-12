@@ -177,6 +177,7 @@ export function App() {
   const [workflowStartup, setWorkflowStartup] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [summaryReturnRevision, setSummaryReturnRevision] = useState(0);
   const [managementTab, setManagementTab] = useState<ManagementTab>('inventory');
+  const [managementRecoveryLocked, setManagementRecoveryLocked] = useState(true);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [pending, setPending] = useState(false);
   const [resetAllocationOpen, setResetAllocationOpen] = useState(false);
@@ -1141,7 +1142,6 @@ export function App() {
                   className={managementTab === key ? 'active' : ''}
                   onClick={() => {
                     if (
-                      managementTab === 'inventory' &&
                       key !== 'inventory' &&
                       inventoryLeaveGuardRef.current &&
                       !inventoryLeaveGuardRef.current(() => setManagementTab(key))
@@ -1159,7 +1159,7 @@ export function App() {
               ))}
             </div>
             <div className="mt-6">
-              {managementTab === 'inventory' && (
+              <div hidden={managementTab !== 'inventory' && !managementRecoveryLocked}>
                 <InventoryManagement
                   items={catalogItems}
                   locations={locations}
@@ -1168,9 +1168,10 @@ export function App() {
                   onRefresh={refresh}
                   showToast={showToast}
                   registerLeaveGuard={registerInventoryLeaveGuard}
+                  onRecoveryLockChange={setManagementRecoveryLocked}
                 />
-              )}
-              {managementTab === 'borrowers' && (
+              </div>
+              {!managementRecoveryLocked && managementTab === 'borrowers' && (
                 <div className="space-y-7">
                   <div className="flex justify-end">
                     <button
@@ -1223,7 +1224,7 @@ export function App() {
                   </CatalogBlock>
                 </div>
               )}
-              {managementTab === 'access' && (
+              {!managementRecoveryLocked && managementTab === 'access' && (
                 <div className="max-w-2xl space-y-4">
                   <ActionCard
                     title="החלפת סיסמה"
@@ -1272,7 +1273,7 @@ export function App() {
                   {!isAdmin && <PermissionNote />}
                 </div>
               )}
-              {managementTab === 'data' && (
+              {!managementRecoveryLocked && managementTab === 'data' && (
                 <div className="grid gap-4 lg:grid-cols-2">
                   <ActionCard
                     title="ייצוא מלאי"

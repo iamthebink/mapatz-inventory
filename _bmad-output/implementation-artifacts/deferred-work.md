@@ -98,3 +98,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-multi-location-stock.md`
   summary: Preserve configured location codes across workbook recovery.
   evidence: Recovery Locations exports names and regenerates recovered-location-N codes, so active codes change while event snapshots retain original codes; the baseline already behaved this way.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-inventory-lost-item-recovery.md`
+  summary: Reconcile a frozen borrower attempt resolved by another browser tab without requiring reload.
+  evidence: Existing resolveFrozenAttempt requires identical persisted bytes; a different tab clearing the envelope leaves the live owner retrying a missing record. Reload safely reinitializes, but both borrower and inventory owners lack live cross-tab reconciliation.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-inventory-lost-item-recovery.md`
+  summary: Provide diagnostic and safe operator repair for malformed frozen borrower records.
+  evidence: Existing initializeFrozenAttemptRecovery fails closed on invalidKeys; both startup owners only offer retry, which cannot repair corrupt storage. A shared recovery facility must preserve evidence and avoid blindly dropping possibly committed intent.

@@ -363,15 +363,9 @@ describe('inventory management in App', () => {
     const { user, requests } = setup('admin', '/management', [hammer], [borrower], true);
     await user.click(await screen.findByRole('link', { name: 'ניהול' }));
     await user.click(await screen.findByRole('tab', { name: /אידיוטים/ }));
-    await user.click(
-      within(screen.getByRole('row', { name: /Storage User/ })).getByRole('button', {
-        name: 'מחיקה',
-      }),
-    );
-    await screen.findByRole('alertdialog', { name: 'למחוק לצמיתות את Storage User?' });
-    await user.click(screen.getByRole('button', { name: 'מחק את השואל וההיסטוריה לצמיתות' }));
+    expect(screen.queryByRole('row', { name: /Storage User/ })).toBeNull();
     expect(requests.some((request) => request.path === '/api/borrowers/43/delete')).toBe(false);
-    expect(await screen.findByText(/אחסון השחזור בדפדפן אינו זמין/)).toBeTruthy();
+    expect(await screen.findByText(/בדוק את אחסון הדפדפן ונסה שוב/)).toBeTruthy();
   });
   it('guards a dirty desk batch across navigation and popstate until explicit discard', async () => {
     const tape: Item = {

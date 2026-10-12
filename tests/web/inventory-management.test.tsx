@@ -9,6 +9,10 @@ import type { Item, Location } from '../../src/web/InventoryDialogs';
 import { openDatabase } from '../../src/db/database';
 import { InventoryService } from '../../src/domain/inventory';
 import { installWindowStorage } from '../helpers/window-storage.js';
+import {
+  persistFrozenAttempt,
+  type FrozenOperationAttempt,
+} from '../../src/web/borrower-workflow-recovery';
 const item: Item = {
   id: 1,
   name: 'Hammer',
@@ -37,8 +41,9 @@ const view = (
   ],
   storageUnavailable = false,
   ledgerEpoch: number | null = 1,
+  preserveStorage = false,
 ) => {
-  installWindowStorage(true);
+  installWindowStorage(!preserveStorage);
   if (storageUnavailable)
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
@@ -296,12 +301,11 @@ describe('inventory management UI', () => {
         name: 'מחיקה',
       }),
     );
-    await screen.findByRole('alertdialog', { name: 'למחוק את Hammer לצמיתות?' });
-    await user.click(screen.getByRole('button', { name: 'מחק את הפריט וההיסטוריה לצמיתות' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith(
-      'לא ניתן לשמור את הפעולה',
-      'אחסון הדפדפן אינו זמין כרגע',
+      'לא ניתן לבדוק פעולות שמורות',
+      'בדוק את אחסון הדפדפן ונסה שוב',
       'error',
     );
   });
@@ -1201,4 +1205,600 @@ it('supports keyboard default selection and blocks another change while saving',
   expect(fetch).toHaveBeenCalledOnce();
   finish(respond({}));
   await waitFor(() => expect(onRefresh).toHaveBeenCalledOnce());
+});
+
+function lostFixture() {
+  const db = openDatabase(':memory:');
+  const service = new InventoryService(db);
+  const source = Number(service.listLocations()[0]!.id);
+  const target = Number(service.createLocation('found', 'Found destination').id);
+  service.updateLocation(target, { code: 'found', name: 'Found destination', isDefault: true });
+  const equipment = service.createItem({
+    name: 'Recovery hammer',
+    kind: 'non_consumable',
+    locationId: source,
+  });
+  service.addStock(equipment.id, 8, '', source);
+  const borrower = service.createBorrower({ fullName: 'First borrower', playaName: 'Alpha' });
+  const other = service.createBorrower({ fullName: 'Second borrower', playaName: 'Beta' });
+  for (const person of [borrower, other])
+    service.markLost(service.checkout(equipment.id, person.id, 3, '', source), 3, true);
+  const serve = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const path = String(input);
+    if (path.endsWith('/lost-borrowers'))
+      return respond(service.getItemLostBorrowers(equipment.id));
+    if (path.endsWith('/desk-snapshot'))
+      return respond(service.getBorrowerDeskSnapshot(Number(path.split('/')[3])));
+    if (path.endsWith('/operations')) {
+      const result = service.commitBorrowerOperations(
+        Number(path.split('/')[3]),
+        new Headers(init?.headers).get('Idempotency-Key')!,
+        JSON.parse(String(init?.body)),
+      );
+      return respond(result, 'outcome' in result && result.outcome === 'committed' ? 201 : 409);
+    }
+    throw new Error(`Unexpected read ${path}`);
+  };
+  return { db, service, source, target, equipment, borrower, other, serve };
+}
+async function openLost(borrowerId: number) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'השב אבדה' }));
+  const dialog = screen.getByRole('dialog', { name: 'השב אבדה' });
+  await waitFor(() =>
+    expect((within(dialog).getByLabelText('שואל') as HTMLSelectElement).disabled).toBe(false),
+  );
+  await user.selectOptions(within(dialog).getByLabelText('שואל'), String(borrowerId));
+  await waitFor(() =>
+    expect(
+      (within(dialog).getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  return { user, dialog };
+}
+describe('inventory lost recovery', () => {
+  it('disables zero lost rows and defaults to stockless shared destination with damaged return support', async () => {
+    const fixture = lostFixture();
+    try {
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(fixture.serve);
+      view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+      const { user, dialog } = await openLost(fixture.borrower.id);
+      expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).value).toBe('1');
+      expect((within(dialog).getByLabelText('מיקום יעד') as HTMLSelectElement).value).toBe(
+        String(fixture.target),
+      );
+      await user.click(within(dialog).getByLabelText('הוחזר פגום'));
+      await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      const write = fetch.mock.calls.find(([url]) => String(url).endsWith('/operations'))!;
+      expect(JSON.parse(String(write[1]?.body)).items[0].lostCredit[0]).toMatchObject({
+        quantity: 1,
+        condition: 'damaged',
+        locationId: fixture.target,
+      });
+      expect(fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id).holdings[0]!.lost).toBe(
+        2,
+      );
+      expect(fixture.service.getBorrowerDeskSnapshot(fixture.other.id).holdings[0]!.lost).toBe(3);
+      cleanup();
+      view(false);
+      await waitFor(() =>
+        expect(
+          (screen.getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+        ).toBe(true),
+      );
+    } finally {
+      fixture.db.close();
+    }
+  });
+  it.each(['network', 'server', 'malformed'] as const)(
+    'freezes intent after %s and retries byte-for-byte through authorization loss',
+    async (failure) => {
+      const fixture = lostFixture();
+      try {
+        let writes = 0;
+        const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+          if (!String(input).endsWith('/operations')) return fixture.serve(input, init);
+          writes += 1;
+          if (writes === 1) {
+            await fixture.serve(input, init);
+            if (failure === 'network') throw new Error('lost response');
+            return respond({}, failure === 'server' ? 500 : 201);
+          }
+          if (writes === 2) return respond({ error: 'forbidden' }, 403);
+          return fixture.serve(input, init);
+        });
+        view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+        const { user, dialog } = await openLost(fixture.borrower.id);
+        await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+        await waitFor(() =>
+          expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).disabled).toBe(true),
+        );
+        expect(registerLeaveGuard.mock.calls.at(-1)![0](() => undefined)).toBe(false);
+        await user.click(within(dialog).getByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
+        await waitFor(() => expect(writes).toBe(2));
+        expect(window.localStorage.length).toBe(1);
+        await user.click(within(dialog).getByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        const attempts = fetch.mock.calls
+          .filter(([url]) => String(url).endsWith('/operations'))
+          .map(([, init]) => init);
+        expect(attempts[1]).toEqual(attempts[0]);
+        expect(attempts[2]).toEqual(attempts[0]);
+        expect(fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id).holdings[0]!.lost).toBe(
+          2,
+        );
+        expect(window.localStorage.length).toBe(0);
+      } finally {
+        fixture.db.close();
+      }
+    },
+  );
+  it('resolves an uncertain committed return after remount without creating another recovery', async () => {
+    const fixture = lostFixture();
+    try {
+      let lose = true;
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const result = await fixture.serve(input, init);
+        if (lose && String(input).endsWith('/operations')) {
+          lose = false;
+          throw new Error('lost response');
+        }
+        return result;
+      });
+      view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+      const { user, dialog } = await openLost(fixture.borrower.id);
+      await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+      await waitFor(() => expect(window.localStorage.length).toBe(1));
+      cleanup();
+      view(
+        false,
+        fixture.service.listItems(),
+        fixture.service.listLocations() as Location[],
+        false,
+        1,
+        true,
+      );
+      await waitFor(() => expect(window.localStorage.length).toBe(0));
+      expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/operations'))).toHaveLength(
+        2,
+      );
+      expect(fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id).holdings[0]!.lost).toBe(
+        2,
+      );
+    } finally {
+      fixture.db.close();
+    }
+  });
+  it('uses refresh-only recovery after commit and never resends the command', async () => {
+    const fixture = lostFixture();
+    try {
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(fixture.serve);
+      onRefresh.mockRejectedValueOnce(new Error('offline'));
+      view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+      const { user, dialog } = await openLost(fixture.borrower.id);
+      await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+      const retry = await within(dialog).findByRole('button', { name: 'רענון נתונים' });
+      await user.click(retry);
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/operations'))).toHaveLength(
+        1,
+      );
+    } finally {
+      fixture.db.close();
+    }
+  });
+  it('preserves destination, quantity and note across conflict refresh and requires deliberate resubmission', async () => {
+    const fixture = lostFixture();
+    try {
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(fixture.serve);
+      view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+      const { user, dialog } = await openLost(fixture.borrower.id);
+      await user.selectOptions(within(dialog).getByLabelText('מיקום יעד'), String(fixture.source));
+      await user.clear(within(dialog).getByLabelText('כמות'));
+      await user.type(within(dialog).getByLabelText('כמות'), '3');
+      await user.type(within(dialog).getByLabelText('הערה (רשות)'), 'keep me');
+      fixture.service.commitBorrowerOperations(fixture.borrower.id, crypto.randomUUID(), {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [
+          {
+            itemId: fixture.equipment.id,
+            lostCredit: [
+              { quantity: 1, condition: 'usable', locationId: fixture.target, note: '' },
+            ],
+          },
+        ],
+      });
+      await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+      await waitFor(() =>
+        expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).max).toBe('2'),
+      );
+      expect(within(dialog).getByText('Recovery hammer · אבוד: 5')).toBeTruthy();
+      expect((within(dialog).getByLabelText('מיקום יעד') as HTMLSelectElement).value).toBe(
+        String(fixture.source),
+      );
+      expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).value).toBe('3');
+      expect((within(dialog).getByLabelText('הערה (רשות)') as HTMLInputElement).value).toBe(
+        'keep me',
+      );
+      expect(
+        (within(dialog).getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/operations'))).toHaveLength(
+        1,
+      );
+    } finally {
+      fixture.db.close();
+    }
+  });
+  it('retains the draft on a failed read and rejects mismatched epochs', async () => {
+    const fixture = lostFixture();
+    try {
+      let fail = true;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        if (String(input).endsWith('/desk-snapshot')) {
+          if (fail) {
+            fail = false;
+            throw new Error('offline');
+          }
+          return respond({
+            ...fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id),
+            ledgerEpoch: 2,
+          });
+        }
+        return fixture.serve(input, init);
+      });
+      view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'השב אבדה' }));
+      const dialog = screen.getByRole('dialog');
+      await waitFor(() =>
+        expect((within(dialog).getByLabelText('שואל') as HTMLSelectElement).disabled).toBe(false),
+      );
+      await user.type(within(dialog).getByLabelText('הערה (רשות)'), 'preserved');
+      await user.selectOptions(within(dialog).getByLabelText('שואל'), String(fixture.borrower.id));
+      await user.click(await within(dialog).findByRole('button', { name: 'ניסיון טעינה מחדש' }));
+      await waitFor(() =>
+        expect(showToast).toHaveBeenCalledWith(
+          'טעינת האבדות נכשלה',
+          expect.stringContaining('הוחלף'),
+          'error',
+        ),
+      );
+      expect((within(dialog).getByLabelText('הערה (רשות)') as HTMLInputElement).value).toBe(
+        'preserved',
+      );
+      expect(
+        (within(dialog).getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    } finally {
+      fixture.db.close();
+    }
+  });
+});
+
+it.each(['setItem', 'removeItem'] as const)(
+  'locks lost recovery after %s failure and retries without duplicate credit',
+  async (method) => {
+    const fixture = lostFixture();
+    try {
+      const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(fixture.serve);
+      view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+      const { user, dialog } = await openLost(fixture.borrower.id);
+      const failure = vi.spyOn(window.localStorage, method).mockImplementationOnce(() => {
+        throw new Error('storage failure');
+      });
+      await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+      await waitFor(() =>
+        expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).disabled).toBe(true),
+      );
+      expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/operations'))).toHaveLength(
+        method === 'setItem' ? 0 : 1,
+      );
+      if (method === 'setItem') {
+        expect(showToast).toHaveBeenCalledWith(
+          'הפעולה לא נשלחה',
+          'לא ניתן לשמור את הפעולה באחסון הדפדפן. יש לנסות שוב את אותה פעולה לפני שינוי נוסף.',
+          'error',
+        );
+        expect(showToast).not.toHaveBeenCalledWith(
+          'תוצאת הפעולה אינה ידועה',
+          expect.anything(),
+          expect.anything(),
+        );
+      }
+      failure.mockRestore();
+      await user.click(within(dialog).getByRole('button', { name: 'בדוק שוב את אותה פעולה' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id).holdings[0]!.lost).toBe(
+        2,
+      );
+    } finally {
+      fixture.db.close();
+    }
+  },
+);
+
+it('ignores stale borrower reads after selection changes and after the dirty dialog closes', async () => {
+  const fixture = lostFixture();
+  try {
+    let resolveFirst!: (response: Response) => void;
+    let hold = true;
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (hold && String(input) === `/api/borrowers/${fixture.borrower.id}/desk-snapshot`)
+        return new Promise<Response>((resolve) => {
+          resolveFirst = resolve;
+        });
+      return fixture.serve(input, init);
+    });
+    view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'השב אבדה' }));
+    const dialog = screen.getByRole('dialog');
+    await waitFor(() =>
+      expect((within(dialog).getByLabelText('שואל') as HTMLSelectElement).disabled).toBe(false),
+    );
+    await user.selectOptions(within(dialog).getByLabelText('שואל'), String(fixture.borrower.id));
+    await waitFor(() => expect(resolveFirst).toBeDefined());
+    await user.selectOptions(within(dialog).getByLabelText('שואל'), String(fixture.other.id));
+    await waitFor(() =>
+      expect(
+        (within(dialog).getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    resolveFirst(respond(fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id)));
+    hold = false;
+    await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(fetch.mock.calls.find(([url]) => String(url).endsWith('/operations'))?.[0]).toBe(
+      `/api/borrowers/${fixture.other.id}/operations`,
+    );
+    hold = true;
+    await user.click(screen.getByRole('button', { name: 'השב אבדה' }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('שואל') as HTMLSelectElement).disabled).toBe(false),
+    );
+    await user.selectOptions(screen.getByLabelText('שואל'), String(fixture.borrower.id));
+    await user.click(screen.getByRole('button', { name: 'ביטול' }));
+    await user.click(screen.getByRole('button', { name: 'ביטול השינויים' }));
+    resolveFirst(respond(fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id)));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  } finally {
+    fixture.db.close();
+  }
+});
+
+it('keeps an untouched destination after conflict refresh and borrower changes update the shared default', async () => {
+  const fixture = lostFixture();
+  try {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fixture.serve);
+    view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+    const { user, dialog } = await openLost(fixture.borrower.id);
+    expect((within(dialog).getByLabelText('מיקום יעד') as HTMLSelectElement).value).toBe(
+      String(fixture.target),
+    );
+    await user.clear(within(dialog).getByLabelText('כמות'));
+    await user.type(within(dialog).getByLabelText('כמות'), '3');
+    const source = fixture.service
+      .listLocations()
+      .find((location) => location.id === fixture.source)!;
+    fixture.service.updateLocation(fixture.source, {
+      code: source.code,
+      name: source.name,
+      isDefault: true,
+    });
+    fixture.service.commitBorrowerOperations(fixture.borrower.id, crypto.randomUUID(), {
+      contractVersion: 1,
+      ledgerEpoch: 1,
+      items: [
+        {
+          itemId: fixture.equipment.id,
+          lostCredit: [{ quantity: 1, condition: 'usable', locationId: fixture.source, note: '' }],
+        },
+      ],
+    });
+    await user.click(within(dialog).getByRole('button', { name: 'השב אבדה' }));
+    await waitFor(() =>
+      expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).max).toBe('2'),
+    );
+    expect((within(dialog).getByLabelText('מיקום יעד') as HTMLSelectElement).value).toBe(
+      String(fixture.target),
+    );
+    expect(within(dialog).getByText('Recovery hammer · אבוד: 5')).toBeTruthy();
+    await user.selectOptions(within(dialog).getByLabelText('שואל'), String(fixture.other.id));
+    await waitFor(() =>
+      expect((within(dialog).getByLabelText('כמות') as HTMLInputElement).max).toBe('3'),
+    );
+    expect((within(dialog).getByLabelText('מיקום יעד') as HTMLSelectElement).value).toBe(
+      String(fixture.target),
+    );
+  } finally {
+    fixture.db.close();
+  }
+});
+
+it('retains the captured editor epoch when replacement and a parent refresh reuse item and borrower IDs', async () => {
+  const fixture = lostFixture();
+  try {
+    let replaced = false;
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (replaced && String(input).endsWith('/lost-borrowers'))
+        return respond({
+          ...fixture.service.getItemLostBorrowers(fixture.equipment.id),
+          ledgerEpoch: 2,
+        });
+      if (replaced && String(input).endsWith('/desk-snapshot'))
+        return respond({
+          ...fixture.service.getBorrowerDeskSnapshot(Number(String(input).split('/')[3])),
+          ledgerEpoch: 2,
+        });
+      return fixture.serve(input, init);
+    });
+    const rendered = view(
+      false,
+      fixture.service.listItems(),
+      fixture.service.listLocations() as Location[],
+    );
+    const { user, dialog } = await openLost(fixture.borrower.id);
+    await user.type(within(dialog).getByLabelText('הערה (רשות)'), 'original ledger draft');
+    replaced = true;
+    rendered.rerender(
+      <DialogStackProvider>
+        <InventoryManagement
+          items={fixture.service
+            .listItems()
+            .map((entry) => ({ ...entry, name: 'Replacement item' }))}
+          locations={fixture.service.listLocations() as Location[]}
+          ledgerEpoch={2}
+          admin={false}
+          onRefresh={onRefresh}
+          showToast={showToast}
+          registerLeaveGuard={registerLeaveGuard}
+        />
+      </DialogStackProvider>,
+    );
+    // Selecting another borrower forces a read after the parent has refreshed to the new epoch.
+    await user.selectOptions(within(dialog).getByLabelText('שואל'), String(fixture.other.id));
+    await within(dialog).findByRole('button', { name: 'ניסיון טעינה מחדש' });
+    expect(showToast).toHaveBeenCalledWith(
+      'טעינת האבדות נכשלה',
+      expect.stringContaining('הוחלף'),
+      'error',
+    );
+    expect(
+      (within(dialog).getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((within(dialog).getByLabelText('הערה (רשות)') as HTMLTextAreaElement).value).toBe(
+      'original ledger draft',
+    );
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/operations'))).toBe(false);
+  } finally {
+    fixture.db.close();
+  }
+});
+
+it.each(['rejected', 'protocol'] as const)(
+  'reports a definitive %s startup recovery and asks for deliberate review',
+  async (outcome) => {
+    const fixture = lostFixture();
+    try {
+      const attempt: FrozenOperationAttempt = {
+        version: 1,
+        kind: 'operation',
+        subjectId: fixture.borrower.id,
+        endpoint: `/borrowers/${fixture.borrower.id}/operations`,
+        idempotencyKey: crypto.randomUUID(),
+        ledgerEpoch: 1,
+        stateRevision: fixture.service.getBorrowerDeskSnapshot(fixture.borrower.id).stateRevision,
+        intent: 'save',
+        body: {
+          contractVersion: 1,
+          ledgerEpoch: 1,
+          items: [
+            {
+              itemId: fixture.equipment.id,
+              lostCredit: [
+                { quantity: 4, condition: 'usable', locationId: fixture.target, note: '' },
+              ],
+            },
+          ],
+        },
+      };
+      const storage = installWindowStorage(true);
+      expect(persistFrozenAttempt(storage, attempt).ok).toBe(true);
+      if (outcome === 'rejected')
+        fixture.service.commitBorrowerOperations(
+          fixture.borrower.id,
+          attempt.idempotencyKey,
+          attempt.body,
+        );
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        if (outcome === 'protocol' && String(input).endsWith('/operations'))
+          return respond(
+            {
+              error: 'ledger_epoch_changed',
+              outcome: 'protocol_error',
+              idempotencyKey: attempt.idempotencyKey,
+              message: 'Ledger replaced',
+            },
+            409,
+          );
+        return fixture.serve(input, init);
+      });
+      view(
+        false,
+        fixture.service.listItems(),
+        fixture.service.listLocations() as Location[],
+        false,
+        1,
+        true,
+      );
+      await waitFor(() =>
+        expect(showToast).toHaveBeenCalledWith(
+          'הפעולה הקודמת נדחתה',
+          'יש לפתוח מחדש את הפעולה ולבדוק את הנתונים לפני שליחה נוספת.',
+          'warning',
+        ),
+      );
+      expect(storage.length).toBe(0);
+      expect((screen.getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+      expect(onRefresh).not.toHaveBeenCalled();
+    } finally {
+      fixture.db.close();
+    }
+  },
+);
+
+it('shows archived lost obligations as disabled choices that require borrower reactivation', async () => {
+  const fixture = lostFixture();
+  try {
+    fixture.db.prepare('UPDATE borrowers SET archived=1 WHERE id=?').run(fixture.other.id);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(fixture.serve);
+    view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'השב אבדה' }));
+    const option = await screen.findByRole('option', {
+      name: /Second borrower.*אבוד: 3.*יש להפעיל מחדש את השואל/,
+    });
+    expect((option as HTMLOptionElement).disabled).toBe(true);
+    await user.selectOptions(screen.getByLabelText('שואל'), String(fixture.other.id));
+    expect((screen.getByLabelText('שואל') as HTMLSelectElement).value).toBe('');
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/desk-snapshot'))).toBe(false);
+  } finally {
+    fixture.db.close();
+  }
+});
+
+it('blocks save and offers read retry when the lost lookup responds for another item', async () => {
+  const fixture = lostFixture();
+  try {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) =>
+      String(input).endsWith('/lost-borrowers')
+        ? respond({
+            ...fixture.service.getItemLostBorrowers(fixture.equipment.id),
+            itemId: fixture.equipment.id + 1,
+          })
+        : fixture.serve(input, init),
+    );
+    view(false, fixture.service.listItems(), fixture.service.listLocations() as Location[]);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'השב אבדה' }));
+    const dialog = screen.getByRole('dialog');
+    await within(dialog).findByRole('button', { name: 'ניסיון טעינה מחדש' });
+    expect(
+      (within(dialog).getByRole('button', { name: 'השב אבדה' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((within(dialog).getByLabelText('שואל') as HTMLSelectElement).disabled).toBe(true);
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/operations'))).toBe(false);
+    expect(showToast).toHaveBeenCalledWith(
+      'טעינת האבדות נכשלה',
+      'השרת החזיר רשימת אבדות לא תקינה',
+      'error',
+    );
+  } finally {
+    fixture.db.close();
+  }
 });

@@ -207,3 +207,10 @@ export type BorrowerCreateConflict =
 export type BorrowerCreateResult =
   | { outcome: 'committed'; idempotencyKey: string; replayed: boolean; borrower: Borrower }
   | BorrowerCreateConflict;
+
+/** Positive lost obligations for one item, including archived borrowers. */
+export type ItemLostBorrowersSnapshot = {
+  itemId: number;
+  ledgerEpoch: number;
+  borrowers: Array<{ borrower: Borrower; lost: number }>;
+};

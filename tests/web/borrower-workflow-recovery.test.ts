@@ -918,3 +918,28 @@ it.each([' x ', 'x'.repeat(101)])(
     expect(storage().getItem(key)).toBe(record);
   },
 );
+
+it('persists explicit lost-return intent through startup and resolves the exact damaged destination', async () => {
+  const storage = new MemoryStorage();
+  const attempt = operation();
+  attempt.body.items = [
+    {
+      itemId: 11,
+      lostCredit: [{ quantity: 2, condition: 'damaged', locationId: 9, note: 'found' }],
+    },
+  ];
+  const first = vi.fn(async () => ({ kind: 'ambiguous' as const, reason: 'network' as const }));
+  expect((await dispatchFrozenAttempt(storage, attempt, first)).cleared).toBe(false);
+  const retry = vi.fn(async () => ({
+    kind: 'definitive' as const,
+    status: 201,
+    result: {
+      outcome: 'committed' as const,
+      idempotencyKey: attempt.idempotencyKey,
+      replayed: true,
+    },
+  }));
+  expect((await initializeFrozenAttemptRecovery(storage, retry)).ready).toBe(true);
+  expect(retry).toHaveBeenCalledWith(attempt);
+  expect(storage.length).toBe(0);
+});
