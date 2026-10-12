@@ -1767,3 +1767,101 @@ test('backend death while confirmation is open surfaces failure after cancellati
     await cleanupProfile(context.profile);
   }
 });
+
+test('committed verification survives non-desk reload and blocks quit without replaying the write', async () => {
+  const { application, page, profile } = await freshApp();
+  try {
+    const borrowerId = await page.evaluate(async () => {
+      const post = async (path: string, body: unknown, key?: string) => {
+        const response = await fetch(`/api${path}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(key ? { 'Idempotency-Key': key } : {}),
+          },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(`Setup failed: ${path} ${response.status}`);
+        return response.json();
+      };
+      await post('/session/role', { role: 'admin', password: 'camp-password-123' });
+      const item = await post('/items', {
+        name: 'Recovery tent',
+        kind: 'non_consumable',
+        locationId: 1,
+      });
+      await post('/stock/add', { itemId: item.id, quantity: 2, locationId: 1 });
+      const { borrower } = await post(
+        '/borrowers',
+        {
+          contractVersion: 1,
+          ledgerEpoch: 1,
+          playaName: 'verification',
+          fullName: 'Verification borrower',
+          phoneNumber: '',
+          campDepartment: '',
+        },
+        crypto.randomUUID(),
+      );
+      const before = await (await fetch(`/api/borrowers/${borrower.id}/desk-snapshot`)).json();
+      const key = crypto.randomUUID();
+      const body = {
+        contractVersion: 1,
+        ledgerEpoch: 1,
+        items: [{ itemId: item.id, borrow: [{ quantity: 1, locationId: 1, note: '' }] }],
+      };
+      await post(`/borrowers/${borrower.id}/operations`, body, key);
+      localStorage.setItem(
+        `mapatz:frozen-attempt:v1:${key}`,
+        JSON.stringify({
+          version: 1,
+          kind: 'operation',
+          verification: 'committed',
+          endpoint: `/borrowers/${borrower.id}/operations`,
+          subjectId: borrower.id,
+          idempotencyKey: key,
+          ledgerEpoch: 1,
+          stateRevision: before.stateRevision,
+          intent: 'save-and-close',
+          body,
+        }),
+      );
+      return borrower.id as number;
+    });
+    let posts = 0;
+    await page.route('**/api/borrowers/*/operations', async (route) => {
+      posts += 1;
+      await route.continue();
+    });
+    const endpoint = `**/api/borrowers/${borrowerId}/desk-snapshot`;
+    await page.route(endpoint, (route) => route.abort());
+    await page.goto(`${new URL(page.url()).origin}/management`);
+    await expect(page.getByRole('heading', { name: 'שחזור פעולות ממתינות' })).toBeVisible();
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
+    await expect(page.getByText('יש להשלים שחזור לפני היציאה.')).toBeVisible();
+    expect(application.windows()).toHaveLength(1);
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'נסה שוב', exact: true })).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          Object.keys(localStorage).filter((key) => key.startsWith('mapatz:frozen-attempt:'))
+            .length,
+      ),
+    ).toBe(1);
+    await page.unroute(endpoint);
+    await page.getByRole('button', { name: 'נסה שוב', exact: true }).click();
+    await expect(page.getByRole('link', { name: 'ניהול', exact: true })).toBeVisible();
+    expect(posts).toBe(0);
+    expect(
+      await page.evaluate(
+        () =>
+          Object.keys(localStorage).filter((key) => key.startsWith('mapatz:frozen-attempt:'))
+            .length,
+      ),
+    ).toBe(0);
+  } finally {
+    await finishApplication(application);
+    await cleanupProfile(profile);
+  }
+});

@@ -1498,8 +1498,8 @@ it.each(['setItem', 'removeItem'] as const)(
       );
       if (method === 'setItem') {
         expect(showToast).toHaveBeenCalledWith(
-          'הפעולה לא נשלחה',
-          'לא ניתן לשמור את הפעולה באחסון הדפדפן. יש לנסות שוב את אותה פעולה לפני שינוי נוסף.',
+          'שמירת נתוני השחזור נכשלה',
+          'לא ניתן לאמת את שמירת הפעולה לשחזור. יש לבדוק שוב את אותה פעולה לפני שינוי נוסף.',
           'error',
         );
         expect(showToast).not.toHaveBeenCalledWith(

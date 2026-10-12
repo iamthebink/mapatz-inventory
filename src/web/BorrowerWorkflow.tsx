@@ -25,6 +25,7 @@ import type { BorrowerDeskSnapshot } from '../contracts/borrower-workflow';
 import {
   api,
   fetchBorrowerDeskSnapshot,
+  fetchBorrowerVerification,
   fetchBorrowerSearch,
   sendFrozenBorrowerAttempt,
 } from './api';
@@ -53,6 +54,7 @@ import {
   initializeFrozenAttemptRecovery,
   persistFrozenAttempt,
   resolveFrozenAttempt,
+  verifyCommittedAttempt,
   type FrozenAttempt,
   type FrozenCreateAttempt,
   type FrozenDispatchResult,
@@ -90,6 +92,7 @@ const translatedFeedback: Record<string, string> = {
   borrower_created: 'השואל נוצר בהצלחה.',
   outcome_unknown: 'תוצאת הפעולה אינה ידועה. יש לבדוק את אותה פעולה שמורה.',
   authorization_required: 'נדרש אימות הרשאה מחדש.',
+  context_retired: 'נתוני המלאי או השואל השתנו. יש לבחור שואל מחדש.',
   refresh_required: 'הפעולה אושרה, אך התצוגה טרם אומתה.',
   reload_required: 'נדרשת טעינה מחדש של נתוני האמת.',
   ledger_epoch_changed: 'נתוני המלאי הוחלפו. יש לטעון את נתוני האמת מחדש.',
@@ -201,7 +204,18 @@ export const BorrowerWorkflow = forwardRef<
   const [resolvedSearch, setResolvedSearch] = useState<string | null>(null);
   const [selectedBorrower, setSelectedBorrower] = useState<Borrower | null>(null);
   const [cardLoadFailed, setCardLoadFailed] = useState(false);
-  const [operation, setOperation] = useState<OperationState | null>(null);
+  const [operation, setOperationState] = useState<OperationState | null>(null);
+  const operationRef = useRef<OperationState | null>(null);
+  const setOperation = useCallback((next: OperationState | null) => {
+    operationRef.current = next;
+    setOperationState(next);
+  }, []);
+  useEffect(
+    () => () => {
+      operationRef.current = null;
+    },
+    [],
+  );
   const [itemSearch, setItemSearch] = useState('');
   const [quantity, setQuantity] = useState<QuantityDialog | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -271,18 +285,45 @@ export const BorrowerWorkflow = forwardRef<
     [showToast],
   );
 
+  const initializingRef = useRef(false);
   const initialize = useCallback(async () => {
-    setStartup('loading');
-    const recovery = await initializeFrozenAttemptRecovery(localStorage, sendFrozenBorrowerAttempt);
-    if (!recovery.ready) {
+    if (initializingRef.current) return;
+    initializingRef.current = true;
+    try {
+      setStartup('loading');
+      const recovery = await initializeFrozenAttemptRecovery(
+        localStorage,
+        sendFrozenBorrowerAttempt,
+        fetchBorrowerVerification,
+      );
+      if (!recovery.ready) {
+        setStartup('failed');
+        showToast('שחזור פעולה', 'לא ניתן לקבוע בוודאות את מצב הפעולה. נסו שוב.', 'error');
+        if (deskVisibleRef.current) queueMicrotask(() => startupRetryRef.current?.focus());
+        return;
+      }
+      if (recovery.results.length > 0)
+        showToast(
+          'שחזור פעולה',
+          recovery.results.some(
+            (result) => result.kind === 'definitive' && result.verification === 'retired',
+          )
+            ? translatedFeedback.context_retired!
+            : 'הפעולה הממתינה נבדקה מול השרת.',
+          'warning',
+        );
+      await loadSearch('', deskVisibleRef.current);
+    } catch {
       setStartup('failed');
-      showToast('שחזור פעולה', 'לא ניתן לקבוע בוודאות את מצב הפעולה. נסו שוב.', 'error');
+      showToast(
+        'שחזור פעולה',
+        'לא ניתן לבדוק פעולות שמורות. בדקו את אחסון הדפדפן ונסו שוב.',
+        'error',
+      );
       if (deskVisibleRef.current) queueMicrotask(() => startupRetryRef.current?.focus());
-      return;
+    } finally {
+      initializingRef.current = false;
     }
-    if (recovery.results.length > 0)
-      showToast('שחזור פעולה', 'הפעולה הממתינה נבדקה מול השרת.', 'warning');
-    await loadSearch('', deskVisibleRef.current);
   }, [loadSearch, showToast]);
 
   const refreshDirectoryAfterCreation = async (query: string) => {
@@ -419,7 +460,7 @@ export const BorrowerWorkflow = forwardRef<
     setQuantity(null);
     setReviewOpen(false);
     setCreation(null);
-  }, []);
+  }, [setOperation]);
 
   const closeCard = useCallback(
     (after?: () => void) => {
@@ -518,7 +559,7 @@ export const BorrowerWorkflow = forwardRef<
     () =>
       desktop?.onResume(() => {
         // Existing frozen-envelope initialization reconciles the exact original keys.
-        if (!selectedBorrower && !createOpen) void initialize();
+        if (!operationRef.current && !selectedBorrower && !createOpen) void initialize();
         else showToast('חזרה לעבודה', 'בדקו שמירה ממתינה לפני המשך העבודה.', 'warning');
       }),
     [createOpen, initialize, selectedBorrower, showToast],
@@ -526,7 +567,7 @@ export const BorrowerWorkflow = forwardRef<
 
   useImperativeHandle(ref, () => ({
     requestNavigation: (complete) => {
-      if (desktop && startup !== 'ready') {
+      if (startup !== 'ready') {
         showToast('הפעולה מוגנת', 'יש להשלים שחזור לפני היציאה.', 'warning');
         return;
       }
@@ -554,6 +595,7 @@ export const BorrowerWorkflow = forwardRef<
       (creationLocks(creation).dismissal || creationHasUnsavedInput(creation)),
     );
     const protectedState =
+      (!desktop && startup !== 'ready') ||
       protectedCreation ||
       Boolean(operation?.staged.length) ||
       Boolean(operation && operationLocks(operation).exit) ||
@@ -569,7 +611,7 @@ export const BorrowerWorkflow = forwardRef<
     };
     window.addEventListener('beforeunload', unload);
     return () => window.removeEventListener('beforeunload', unload);
-  }, [createOpen, creation, operation]);
+  }, [createOpen, creation, operation, startup]);
 
   const popHandlerRef = useRef<() => void>(() => {});
   useLayoutEffect(() => {
@@ -890,42 +932,15 @@ export const BorrowerWorkflow = forwardRef<
       );
       return;
     }
-    let next = operationReducer(source, { type: 'result', attemptKey: key, result: result.result });
+    frozenAttemptRef.current = result.attempt;
+    const next = operationReducer(source, {
+      type: 'result',
+      attemptKey: key,
+      result: result.result,
+    });
     setOperation(next);
-    if ('outcome' in result.result && result.result.outcome === 'committed') {
-      const refreshId = uuid();
-      next = operationReducer(next, { type: 'refresh-started', refreshId });
-      setOperation(next);
-      try {
-        const snapshot = await fetchBorrowerDeskSnapshot(source.borrowerId);
-        const refreshed = operationReducer(next, {
-          type: 'refresh-succeeded',
-          refreshId,
-          snapshot,
-        });
-        setOperation(refreshed);
-        if (refreshed.phase.kind === 'closed') {
-          feedbackRef.current = refreshed.feedback;
-          showToast('הפעולה הושלמה', translatedFeedback.operation_saved!, 'success');
-          setSearch('');
-          closeCard();
-        } else if (!operationPresentation(refreshed).cardOpen) {
-          setSearch('');
-          setSelectedBorrower(null);
-          removeSentinel(() => window.setTimeout(() => directoryRecoveryRef.current?.focus(), 0));
-        } else queueMicrotask(() => itemSearchRef.current?.focus());
-      } catch {
-        const failed = operationReducer(next, { type: 'refresh-failed', refreshId });
-        setOperation(failed);
-        if (summaryReturnRef.current) {
-          queueMicrotask(() => retryRefreshRef.current?.focus());
-        } else if (!operationPresentation(failed).cardOpen) {
-          setSearch('');
-          setSelectedBorrower(null);
-          removeSentinel(() => window.setTimeout(() => directoryRecoveryRef.current?.focus(), 0));
-        } else queueMicrotask(() => retryRefreshRef.current?.focus());
-      }
-    }
+    if ('outcome' in result.result && result.result.outcome === 'committed')
+      await refreshOperation();
   };
 
   const save = async (intent: SaveIntent) => {
@@ -1031,65 +1046,90 @@ export const BorrowerWorkflow = forwardRef<
     else await applyCreateResult(result as FrozenDispatchResult<FrozenCreateAttempt>);
   };
 
-  const refreshOperation = async () => {
-    if (!operation || operation.phase.kind !== 'refresh-required') return;
-    const refreshId = uuid();
-    const started = operationReducer(operation, { type: 'refresh-started', refreshId });
+  const recoverOperation = async (kind: 'refresh' | 'reload') => {
+    const current = operationRef.current;
+    if (!current || current.phase.kind !== `${kind}-required`) return;
+    const requestId = uuid();
+    const started = operationReducer(
+      current,
+      kind === 'refresh'
+        ? { type: 'refresh-started', refreshId: requestId }
+        : { type: 'reload-started', reloadId: requestId },
+    );
+    // Claim synchronously, before any await: a second click cannot start another read.
+    if (started === current) return;
     setOperation(started);
-    try {
-      const snapshot = await fetchBorrowerDeskSnapshot(operation.borrowerId);
-      const refreshed = operationReducer(started, {
-        type: 'refresh-succeeded',
-        refreshId,
-        snapshot,
-      });
-      setOperation(refreshed);
-      if (refreshed.phase.kind === 'closed') {
-        showToast('הפעולה הושלמה', translatedFeedback.operation_saved!, 'success');
-        setSearch('');
-        closeCard();
-      } else if (!operationPresentation(refreshed).cardOpen)
-        queueMicrotask(() => directoryRecoveryRef.current?.focus());
-      else queueMicrotask(() => itemSearchRef.current?.focus());
-    } catch {
-      setOperation(operationReducer(started, { type: 'refresh-failed', refreshId }));
-      queueMicrotask(() =>
-        (selectedBorrower ? retryRefreshRef : directoryRecoveryRef).current?.focus(),
+    const ownsRequest = () => {
+      const live = operationRef.current;
+      return (
+        live?.borrowerId === started.borrowerId &&
+        ((live.phase.kind === 'refresh-required' && live.phase.refreshId === requestId) ||
+          (live.phase.kind === 'reload-required' && live.phase.reloadId === requestId))
       );
-    }
-  };
-
-  const reloadOperation = async () => {
-    if (!operation || operation.phase.kind !== 'reload-required') return;
-    const reloadId = uuid();
-    const started = operationReducer(operation, { type: 'reload-started', reloadId });
-    setOperation(started);
+    };
     try {
-      const snapshot = await fetchBorrowerDeskSnapshot(operation.borrowerId);
-      const reloaded = operationReducer(started, { type: 'reload-succeeded', reloadId, snapshot });
-      if (reloaded.phase.kind === 'reload-required' && reloaded.phase.reloadId) {
-        setOperation(operationReducer(started, { type: 'reload-failed', reloadId }));
-        queueMicrotask(() =>
-          (selectedBorrower ? retryRefreshRef : directoryRecoveryRef).current?.focus(),
-        );
-        return;
+      const attempt = frozenAttemptRef.current;
+      if (!attempt || attempt.kind !== 'operation') throw new Error('Missing recovery owner');
+      let verified;
+      if (attempt.verification === 'committed') {
+        verified = await verifyCommittedAttempt(localStorage, attempt, fetchBorrowerVerification);
+      } else {
+        const truth = await fetchBorrowerVerification(attempt);
+        verified =
+          truth.ledgerEpoch > attempt.ledgerEpoch
+            ? { kind: 'retired' as const }
+            : { kind: 'pending' as const };
       }
-      setOperation(reloaded);
-      if (reloaded.phase.kind === 'closed') {
-        feedbackRef.current = reloaded.feedback;
-        showToast('הפעולה הושלמה', translatedFeedback.operation_saved!, 'success');
+      if (!ownsRequest()) return;
+      if (verified.kind === 'pending') throw new Error('Unverified truth');
+      const live = operationRef.current!;
+      const next =
+        verified.kind === 'retired'
+          ? operationReducer(live, { type: 'context-retired', requestId })
+          : operationReducer(live, {
+              type: 'refresh-succeeded',
+              refreshId: requestId,
+              snapshot: verified.snapshot,
+            });
+      setOperation(next);
+      frozenAttemptRef.current = null;
+      if (next.phase.kind === 'closed') {
+        feedbackRef.current = next.feedback;
+        showToast(
+          verified.kind === 'retired' ? 'נתוני השואל השתנו' : 'הפעולה הושלמה',
+          verified.kind === 'retired'
+            ? translatedFeedback.context_retired!
+            : translatedFeedback.operation_saved!,
+          verified.kind === 'retired' ? 'warning' : 'success',
+        );
         setSearch('');
         closeCard();
-      } else if (!operationPresentation(reloaded).cardOpen)
-        queueMicrotask(() => directoryRecoveryRef.current?.focus());
-      else queueMicrotask(() => itemSearchRef.current?.focus());
+        if (verified.kind === 'retired') await loadSearch('', true);
+      } else queueMicrotask(() => itemSearchRef.current?.focus());
     } catch {
-      setOperation(operationReducer(started, { type: 'reload-failed', reloadId }));
+      if (!ownsRequest()) return;
+      const failed = operationReducer(
+        operationRef.current!,
+        kind === 'refresh'
+          ? { type: 'refresh-failed', refreshId: requestId }
+          : { type: 'reload-failed', reloadId: requestId },
+      );
+      setOperation(failed);
+      if (!summaryReturnRef.current && !operationPresentation(failed).cardOpen) {
+        setSearch('');
+        setSelectedBorrower(null);
+        // Keep the history sentinel until durable verification ownership is released.
+      }
       queueMicrotask(() =>
-        (selectedBorrower ? retryRefreshRef : directoryRecoveryRef).current?.focus(),
+        (operationPresentation(failed).cardOpen
+          ? retryRefreshRef
+          : directoryRecoveryRef
+        ).current?.focus(),
       );
     }
   };
+  const refreshOperation = () => recoverOperation('refresh');
+  const reloadOperation = () => recoverOperation('reload');
 
   useEffect(() => {
     if (!createOpen) return;
@@ -1546,9 +1586,11 @@ export const BorrowerWorkflow = forwardRef<
             ref={directoryRecoveryRef}
             type="button"
             className="primary-button"
+            disabled={Boolean(operation.phase.refreshId)}
+            aria-busy={Boolean(operation.phase.refreshId)}
             onClick={() => void refreshOperation()}
           >
-            אימות נתוני האמת לפני המשך
+            {operation.phase.refreshId ? 'מאמת נתוני אמת…' : 'אימות נתוני האמת לפני המשך'}
           </button>
         </div>
       )}
@@ -1558,9 +1600,11 @@ export const BorrowerWorkflow = forwardRef<
             ref={directoryRecoveryRef}
             type="button"
             className="primary-button"
+            disabled={Boolean(operation.phase.reloadId)}
+            aria-busy={Boolean(operation.phase.reloadId)}
             onClick={() => void reloadOperation()}
           >
-            טעינת אמת עדכנית
+            {operation.phase.reloadId ? 'טוען נתוני אמת…' : 'טעינת אמת עדכנית'}
           </button>
         </div>
       )}
@@ -1679,9 +1723,11 @@ export const BorrowerWorkflow = forwardRef<
                     ref={retryRefreshRef}
                     type="button"
                     className="secondary-button"
+                    disabled={Boolean(operation.phase.refreshId)}
+                    aria-busy={Boolean(operation.phase.refreshId)}
                     onClick={() => void refreshOperation()}
                   >
-                    אימות נתוני האמת מחדש
+                    {operation.phase.refreshId ? 'מאמת נתוני אמת…' : 'אימות נתוני האמת מחדש'}
                   </button>
                 </div>
               )}
@@ -1711,9 +1757,11 @@ export const BorrowerWorkflow = forwardRef<
                     ref={retryRefreshRef}
                     type="button"
                     className="secondary-button"
+                    disabled={Boolean(operation.phase.reloadId)}
+                    aria-busy={Boolean(operation.phase.reloadId)}
                     onClick={() => void reloadOperation()}
                   >
-                    טעינת אמת עדכנית
+                    {operation.phase.reloadId ? 'טוען נתוני אמת…' : 'טעינת אמת עדכנית'}
                   </button>
                 )}
               </div>
@@ -2064,7 +2112,7 @@ export const BorrowerWorkflow = forwardRef<
                   disabled={Boolean(creation.phase.reloadId)}
                   onClick={() => void reloadCreation()}
                 >
-                  טעינת אמת עדכנית
+                  {creation.phase.reloadId ? 'טוען נתוני אמת…' : 'טעינת אמת עדכנית'}
                 </button>
               ) : (
                 <button

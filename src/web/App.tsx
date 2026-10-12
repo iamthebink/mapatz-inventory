@@ -251,23 +251,23 @@ export function App() {
   }, []);
 
   const navigateToTab = useCallback(
-    (nextTab: Tab) => {
+    (nextTab: Tab, complete = () => performNavigation(nextTab)) => {
       if (borrowerCreateOpen && pendingRef.current) return;
       if (
         tabRef.current === 'desk' &&
         nextTab !== 'desk' &&
         batchLeaveGuardRef.current &&
-        !batchLeaveGuardRef.current(() => performNavigation(nextTab))
+        !batchLeaveGuardRef.current(complete)
       )
         return;
       if (
         tabRef.current === 'catalogs' &&
         nextTab !== 'catalogs' &&
         inventoryLeaveGuardRef.current &&
-        !inventoryLeaveGuardRef.current(() => performNavigation(nextTab))
+        !inventoryLeaveGuardRef.current(complete)
       )
         return;
-      performNavigation(nextTab);
+      complete();
     },
     [borrowerCreateOpen, performNavigation],
   );
@@ -350,8 +350,33 @@ export function App() {
     refresh().catch((error) => showError('טעינת נתוני המלאי', error));
   }, [refresh, showError]);
   useEffect(() => {
-    const syncTabToLocation = () => {
+    const syncTabToLocation = (event?: PopStateEvent) => {
       const nextTab = tabFromPath(window.location.pathname);
+      if (event && nextTab && nextTab !== tabRef.current && borrowerWorkflowRef.current) {
+        const previousTab = tabRef.current;
+        const destination = { url: location.href, state: history.state };
+        let completed = false;
+        let restored = false;
+        borrowerWorkflowRef.current.requestNavigation(() =>
+          navigateToTab(nextTab, () => {
+            completed = true;
+            if (restored) history.replaceState(destination.state, '', destination.url);
+            if (nextTab !== 'desk' && nextTab !== 'summary') setWorkflowStartup('loading');
+            setBorrowerCreateOpen(false);
+            setTab(nextTab);
+          }),
+        );
+        // An allowed native traversal needs no history write: retain Forward.
+        if (!completed) {
+          restored = true;
+          history.replaceState(
+            { ...history.state, mapatzTab: previousTab },
+            '',
+            tabRoutes[previousTab].path,
+          );
+        }
+        return;
+      }
       if (borrowerCreateOpen && nextTab !== 'catalogs') {
         if (pendingRef.current) {
           window.history.replaceState(
@@ -406,7 +431,7 @@ export function App() {
     syncTabToLocation();
     window.addEventListener('popstate', syncTabToLocation);
     return () => window.removeEventListener('popstate', syncTabToLocation);
-  }, [borrowerCreateOpen, performNavigation]);
+  }, [borrowerCreateOpen, navigateToTab, performNavigation]);
   useEffect(() => {
     const auth = () => refresh().catch((error) => showError('רענון הרשאות', error));
     window.addEventListener('mapatz-auth-stale', auth);

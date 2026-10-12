@@ -1448,6 +1448,25 @@ export class InventoryService {
     });
   }
 
+  /** Transactional evidence for recovery when a normal card cannot be opened. */
+  getBorrowerRecoverySnapshot(borrowerId: number) {
+    return readTransaction(this.db, () => {
+      const row = this.db.prepare('SELECT * FROM borrowers WHERE id=?').get(borrowerId) as
+        Row | undefined;
+      if (row && !this.borrowerFromRow(row).archived)
+        return this.borrowerDeskSnapshotInTransaction(borrowerId);
+      const clock = this.db
+        .prepare('SELECT revision FROM state_clock WHERE singleton=1')
+        .get() as Row;
+      return {
+        borrowerId,
+        ledgerEpoch: this.ledgerEpochInTransaction(),
+        stateRevision: Number(clock.revision),
+        unavailable: true as const,
+      };
+    });
+  }
+
   addStock(itemId: number, quantity: number, note = '', locationId?: number): number {
     return transaction(this.db, () => {
       this.requireItem(itemId);

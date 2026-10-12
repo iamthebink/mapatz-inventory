@@ -3,34 +3,22 @@
 Audited on 2026-10-12 against `239dc679c3d1711c773c2d459a6b30a4c02d7527`.
 This is an evidence-based backlog, not a list of confirmed defects in every entry. `reproduced` means a fault-injection probe demonstrated the behavior; `source-verified` means current code was inspected; `planned` and `unverified` are explicitly different.
 
-## Before tagging: borrower recovery
+## Borrower recovery pre-tag fixes
 
-Recommendation: resolve the following three functional issues before tagging. The write has already committed in these scenarios; the demonstrated defects concern verification, stale UI state, and recovery ownership, not proven ledger corruption. Unknown-write replay and desktop quit protection passed their separate tests.
+The three functional blockers from the October 12 audit are resolved by `spec-borrower-post-commit-recovery.md`:
 
-- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
-  summary: Keep borrower save-and-close recovery guarded against card dismissal and browser Back until committed truth is verified.
-  evidence: Fault-injection probe held the desk-snapshot response after a committed save-and-close, then called requestNavigation. The borrower card disappeared while verification was pending. BorrowerWorkflow.requestExit consults operationLocks.exit, which is false in refresh-required; closeCard resets the operation. The hidden recovery path also removes its history sentinel, and App popstate does not consult the borrower navigation handle. Card dismissal was reproduced; the browser-Back branch was source-traced, not separately browser-tested.
-  status: open — reproduced dismissal; source-verified Back path
-  priority: pre-tag
+- **Premature dismissal/navigation:** committed refresh and reload now lock exit; hidden-card recovery retains its history sentinel. App Back navigation consults borrower recovery and preserves the existing consumable discard guard. Component and browser navigation regressions pass.
+- **Overlapping recovery reads:** automatic refresh and explicit retries claim a request synchronously; rejected starts issue no read, late completions check live ownership, and retry controls show disabled progress. The failed-initial-read/duplicate-click regression issues exactly one retry.
+- **Lost verification on reload:** committed writes atomically replace their stored command with a verification marker. Marker recovery only reads, including after cleanup failure or failed marker read-back. Remount and freshly packaged non-desk reload tests retain the gate until verification succeeds, without another operation POST. Authoritative absence or ledger replacement retires the old context without reusing its identity.
 
-- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
-  summary: Make borrower directory recovery requests single-flight with visible progress.
-  evidence: Fault-injection probe failed the first post-commit snapshot, held the retry response, and clicked the directory recovery button twice. Three snapshot requests ran (initial failure plus two overlapping retries), rather than two. refreshOperation/reloadOperation do not stop when their reducer rejects a repeated start; handlers apply results against captured state. Directory buttons remain enabled and lack in-flight progress.
-  status: open — reproduced refresh overlap; source-verified reload counterpart
-  priority: pre-tag
-
-- source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
-  summary: Persist the borrower post-commit truth-verification obligation across page reloads.
-  evidence: Fault-injection probe committed, failed the truth refresh, then remounted BorrowerWorkflow with the same storage. Frozen storage was already empty and borrower search became enabled without completing the prior verification. settle clears the confirmed command before snapshot verification; the remaining obligation exists only in component state. This is a post-commit verification gap, not a failure to persist an unknown write.
-  status: open — reproduced
-  priority: pre-tag
+Validation: 694 tests across 45 Vitest files passed; both TypeScript checks, ESLint, formatting, production build and fresh macOS arm64 packaging passed. Five packaged recovery/quit scenarios passed, including the new committed-verification case and the four earlier audit scenarios. All 34 borrower/inventory browser tests passed; independent review findings were fixed and verified, with pre-existing read timeouts deferred below. Windows and Intel macOS remain untested in this run. No tag or push was made.
 
 ## Other current reliability and verification work
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-operator-damage-restoration-in-management.md`
   summary: Focus the directory recovery control for hidden-card reload as well as refresh.
   evidence: Fault-injection probe returned a newer ledger epoch after save-and-close, producing hidden-card reload-required, then toggled desk visibility. Focus remained on body instead of the reload button. The focus effect explicitly handles refresh-required only. Recovery remains clickable.
-  status: open — reproduced
+  status: superseded — committed ledger replacement now retires the old context and returns to the directory, verified by the replacement-ledger browser regression. The formerly hidden committed reload control is no longer reached.
   priority: low
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-inventory-lost-item-recovery.md`
@@ -168,3 +156,9 @@ Recommendation: resolve the following three functional issues before tagging. Th
 - Four temporary borrower fault-injection probes deliberately asserted the desired safe behavior and failed at those assertions: card remained open (actual null), single-flight reads (actual 3 versus 2), remount search locked (actual enabled), and reload-control focus (actual body). They were removed from the working test tree after the audit; production code and committed test expectations were not changed to conceal the failures. The reproduction steps are in the entries above.
 - Machine-local diagnostics: `/tmp/mapatz-desktop-recovery-audit.log`, `/tmp/mapatz-desktop-durability-audit.log`, `/tmp/mapatz-existing-recovery-verification.log`, `/tmp/mapatz-borrower-recovery-audit-final.log`, and `/tmp/mapatz-release-audit-package-retry.log`. These temporary logs are supporting evidence, not durable release artifacts.
 - This was a targeted readiness audit, not a full release certification. No production fixes, release tag, push, or publication occurred. Remaining non-recovery entries were checked against source or explicitly left as planned/unverified.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-borrower-post-commit-recovery.md`
+  summary: Bound borrower recovery read duration so an indefinitely pending transport can be retried without reloading.
+  evidence: workflowRead uses fetch without timeout or abort, as it did before the recovery fixes. A never-settling read holds the single-flight owner; durable state survives reload, but an explicit transport timeout would improve live recovery. This requires a deliberate shared read-timeout policy and timeout tests.
+  status: open — source-verified
+  priority: medium

@@ -691,6 +691,10 @@ export function apiRouter(
     }),
   );
   api.get(
+    '/borrowers/:id/recovery-snapshot',
+    route((req, res) => res.json(service.getBorrowerRecoverySnapshot(parse(id, req.params.id)))),
+  );
+  api.get(
     '/borrowers/:id/deletion-status',
     requireRole('admin'),
     route((req, res) => res.json(service.borrowerDeletionStatus(parse(id, req.params.id)))),

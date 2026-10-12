@@ -1596,3 +1596,26 @@ describe('inventory lost recovery read to existing write', () => {
     expect(read).not.toHaveBeenCalled();
   });
 });
+
+it('returns transactional absence evidence for archived and missing borrowers during recovery', async () => {
+  const { inventory, agent } = fixture();
+  const borrower = inventory.createBorrower({ fullName: 'Recovery subject' });
+  const item = inventory.createItem({
+    name: 'Recovery stock',
+    kind: 'non_consumable',
+    locationId: 1,
+  });
+  const before = inventory.getBorrowerDeskSnapshot(borrower.id);
+  // Inventory events advance the clock; borrower metadata changes do not.
+  inventory.addStock(item.id, 1, '', 1);
+  inventory.archiveBorrower(borrower.id, true);
+  const archived = await agent.get(`/api/borrowers/${borrower.id}/recovery-snapshot`).expect(200);
+  expect(archived.body).toMatchObject({
+    borrowerId: borrower.id,
+    unavailable: true,
+    ledgerEpoch: before.ledgerEpoch,
+  });
+  expect(archived.body.stateRevision).toBeGreaterThan(before.stateRevision);
+  const missing = await agent.get('/api/borrowers/999999/recovery-snapshot').expect(200);
+  expect(missing.body).toEqual({ ...archived.body, borrowerId: 999999 });
+});

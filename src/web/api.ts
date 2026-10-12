@@ -29,6 +29,8 @@ import {
   isNormalizedBorrowerOperationRequest,
   type FrozenAttempt,
   type FrozenTransport,
+  type VerificationRead,
+  type VerificationTruth,
 } from './borrower-workflow-recovery.js';
 import { isBorrowerDeskSnapshot } from './borrower-workflow-state.js';
 
@@ -441,6 +443,28 @@ export async function fetchBorrowerDeskSnapshot(borrowerId: number): Promise<Bor
     throw new ApiError(200, 'invalid_server_truth', 'השרת החזיר כרטיס שואל לא תקין');
   return value;
 }
+
+export const fetchBorrowerVerification: VerificationRead = async (attempt) => {
+  try {
+    return await fetchBorrowerDeskSnapshot(attempt.subjectId);
+  } catch (error) {
+    // A failed card read alone is not proof that this borrower context was retired.
+    if (!(error instanceof ApiError) || !['not_found', 'inactive_borrower'].includes(error.code))
+      throw error;
+    const value = await workflowRead(`/borrowers/${attempt.subjectId}/recovery-snapshot`);
+    if (isBorrowerDeskSnapshot(value, attempt.subjectId)) return value;
+    if (
+      !isObject(value) ||
+      !exactKeys(value, ['borrowerId', 'ledgerEpoch', 'stateRevision', 'unavailable']) ||
+      value.borrowerId !== attempt.subjectId ||
+      value.unavailable !== true ||
+      !isSafePositive(value.ledgerEpoch) ||
+      !isSafeNonNegative(value.stateRevision)
+    )
+      throw new ApiError(200, 'invalid_server_truth', 'השרת החזיר נתוני שחזור לא תקינים');
+    return value as VerificationTruth;
+  }
+};
 
 export function sendBorrowerOperationCommand(context: {
   idempotencyKey: string;

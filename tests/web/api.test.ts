@@ -11,6 +11,7 @@ import {
   classifyBorrowerCreateResponse,
   classifyBorrowerOperationResponse,
   fetchBorrowerDeskSnapshot,
+  fetchBorrowerVerification,
   fetchItemLostBorrowers,
   fetchBorrowerSearch,
   sendBorrowerOperationCommand,
@@ -699,5 +700,59 @@ describe('item lost borrowers decoder', () => {
     await expect(fetchItemLostBorrowers(11)).rejects.toMatchObject({
       code: 'invalid_server_truth',
     });
+  });
+});
+
+describe('committed verification absence adapter', () => {
+  const attempt = {
+    version: 1 as const,
+    kind: 'operation' as const,
+    verification: 'committed' as const,
+    endpoint: '/borrowers/7/operations',
+    subjectId: 7,
+    stateRevision: 3,
+    idempotencyKey: key,
+    ledgerEpoch: 3,
+    intent: 'save' as const,
+    body: operationRequest,
+  };
+  it.each(['not_found', 'inactive_borrower'])(
+    'requires authoritative fallback after %s',
+    async (error) => {
+      const absent = { borrowerId: 7, ledgerEpoch: 3, stateRevision: 4, unavailable: true };
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(json(404, { error }))
+        .mockResolvedValueOnce(json(200, absent));
+      vi.stubGlobal('fetch', fetch);
+      expect(await fetchBorrowerVerification(attempt)).toEqual(absent);
+      expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+        '/api/borrowers/7/desk-snapshot',
+        '/api/borrowers/7/recovery-snapshot',
+      ]);
+    },
+  );
+  it('rejects malformed absence', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(json(404, { error: 'not_found' }))
+        .mockResolvedValueOnce(
+          json(200, { borrowerId: 8, ledgerEpoch: 3, stateRevision: 4, unavailable: true }),
+        ),
+    );
+    await expect(fetchBorrowerVerification(attempt)).rejects.toMatchObject({
+      code: 'invalid_server_truth',
+    });
+  });
+  it.each([401, 403, 'network'] as const)('does not convert %s into absence', async (failure) => {
+    vi.stubGlobal('window', new EventTarget());
+    const fetch = vi.fn();
+    if (failure === 'network') fetch.mockRejectedValue(new Error('offline'));
+    else fetch.mockResolvedValue(json(failure, { error: 'forbidden' }));
+    vi.stubGlobal('fetch', fetch);
+    await expect(fetchBorrowerVerification(attempt)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

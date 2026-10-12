@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { sendFrozenBorrowerAttempt } from './api';
+import { sendFrozenBorrowerAttempt, fetchBorrowerVerification } from './api';
 import {
   dispatchFrozenAttempt,
   initializeFrozenAttemptRecovery,
   resolveFrozenAttempt,
+  verifyCommittedAttempt,
   safeWindowStorage,
   type FrozenOperationAttempt,
 } from './borrower-workflow-recovery';
@@ -31,14 +32,23 @@ export function useLostItemRecovery({
   const startupPromise = useRef<Promise<void> | null>(null);
   // Persistence failure before transport can safely repeat the same dispatch envelope.
   const retryDispatch = useRef(false);
+  const retiredRefresh = useRef(false);
 
-  async function refresh() {
+  async function refresh(retired = false) {
+    retiredRefresh.current ||= retired;
     setRefreshOnly(true);
     try {
       await callbacks.current.onRefresh();
       callbacks.current.onCommitted();
       setRefreshOnly(false);
-      callbacks.current.showToast('המלאי עודכן', 'השינוי נשמר בהצלחה', 'success');
+      if (retiredRefresh.current)
+        callbacks.current.showToast(
+          'נתוני השואל השתנו',
+          'נתוני המלאי או השואל השתנו. יש לפתוח מחדש את הפעולה.',
+          'warning',
+        );
+      else callbacks.current.showToast('המלאי עודכן', 'השינוי נשמר בהצלחה', 'success');
+      retiredRefresh.current = false;
     } catch {
       callbacks.current.showToast('השינוי נשמר', 'רענון הנתונים נכשל. יש לרענן שוב.', 'warning');
     }
@@ -51,9 +61,14 @@ export function useLostItemRecovery({
     try {
       const storage = safeWindowStorage();
       if (!storage) throw new Error('storage');
-      const recovery = await initializeFrozenAttemptRecovery(storage, sendFrozenBorrowerAttempt);
+      const recovery = await initializeFrozenAttemptRecovery(
+        storage,
+        sendFrozenBorrowerAttempt,
+        fetchBorrowerVerification,
+      );
       setStartup(!recovery.ready);
       if (
+        recovery.ready &&
         recovery.results.some(
           (result) =>
             result.kind === 'definitive' &&
@@ -61,7 +76,11 @@ export function useLostItemRecovery({
             result.result.outcome === 'committed',
         )
       )
-        await refresh();
+        await refresh(
+          recovery.results.some(
+            (result) => result.kind === 'definitive' && result.verification === 'retired',
+          ),
+        );
       if (
         recovery.results.some(
           (result) =>
@@ -123,11 +142,35 @@ export function useLostItemRecovery({
       );
       retryDispatch.current =
         firstDispatch && result.kind === 'storage-failure' && result.failure.operation === 'write';
+      if (
+        result.kind === 'definitive' &&
+        result.attempt.kind === 'operation' &&
+        result.attempt.verification === 'committed'
+      ) {
+        setAttempt(result.attempt);
+        retryDispatch.current = false;
+        const verification = await verifyCommittedAttempt(
+          storage,
+          result.attempt,
+          fetchBorrowerVerification,
+        );
+        if (verification.kind === 'pending') {
+          callbacks.current.showToast(
+            'השינוי נשמר',
+            'יש לאמת את נתוני האמת לפני המשך העבודה.',
+            'warning',
+          );
+          return;
+        }
+        setAttempt(null);
+        await refresh(verification.kind === 'retired');
+        return;
+      }
       if (!result.cleared) {
         if (retryDispatch.current) {
           callbacks.current.showToast(
-            'הפעולה לא נשלחה',
-            'לא ניתן לשמור את הפעולה באחסון הדפדפן. יש לנסות שוב את אותה פעולה לפני שינוי נוסף.',
+            'שמירת נתוני השחזור נכשלה',
+            'לא ניתן לאמת את שמירת הפעולה לשחזור. יש לבדוק שוב את אותה פעולה לפני שינוי נוסף.',
             'error',
           );
           return;

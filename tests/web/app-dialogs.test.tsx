@@ -749,3 +749,21 @@ it('ledger shows and searches retained location attribution and names all transf
   await user.type(search, 'Deleted source');
   expect(screen.getAllByText('Deleted source · historic-code')).toHaveLength(4);
 });
+
+it('preserves native idle Back and Forward between desk and summary', async () => {
+  const { user } = setup('operator', '/');
+  await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+  await user.click(screen.getByRole('link', { name: 'מסדר בושה יומי' }));
+  await waitFor(() => expect(window.location.pathname).toBe('/summary'));
+  const length = history.length;
+  const push = vi.spyOn(history, 'pushState');
+  const replace = vi.spyOn(history, 'replaceState');
+  history.back();
+  await waitFor(() => expect(window.location.pathname).toBe('/'));
+  await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+  history.forward();
+  await waitFor(() => expect(window.location.pathname).toBe('/summary'));
+  expect(history.length).toBe(length);
+  expect(push).not.toHaveBeenCalled();
+  expect(replace).not.toHaveBeenCalled();
+});

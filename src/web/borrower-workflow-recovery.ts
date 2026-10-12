@@ -29,6 +29,7 @@ type FrozenBase = {
 
 export type FrozenOperationAttempt = FrozenBase & {
   kind: 'operation';
+  verification?: 'committed';
   endpoint: string;
   subjectId: number;
   stateRevision: number;
@@ -67,7 +68,8 @@ export type FrozenDispatchResult<A extends FrozenAttempt = FrozenAttempt> =
       kind: 'definitive';
       attempt: A;
       result: FrozenResult<A> | CommandProtocolError;
-      cleared: true;
+      cleared: boolean;
+      verification?: 'verified' | 'retired';
     }
   | {
       kind: 'authorization';
@@ -415,6 +417,7 @@ export function parseFrozenAttempt(value: unknown): FrozenAttempt | null {
       'stateRevision',
       'intent',
       'body',
+      'verification',
     ]) ||
     value.version !== 1 ||
     !isCommandUuid(value.idempotencyKey) ||
@@ -423,6 +426,7 @@ export function parseFrozenAttempt(value: unknown): FrozenAttempt | null {
     return null;
   if (value.kind === 'operation') {
     if (
+      (value.verification !== undefined && value.verification !== 'committed') ||
       !positive(value.subjectId) ||
       !nonNegative(value.stateRevision) ||
       value.endpoint !== `/borrowers/${value.subjectId}/operations` ||
@@ -433,6 +437,7 @@ export function parseFrozenAttempt(value: unknown): FrozenAttempt | null {
     return ownedAttempt(value as unknown as FrozenOperationAttempt);
   }
   if (
+    Object.hasOwn(value, 'verification') ||
     value.kind !== 'create' ||
     value.endpoint !== '/borrowers' ||
     value.subjectId !== null ||
@@ -476,6 +481,11 @@ export function persistFrozenAttempt(
   const expected = serialized(validated);
   try {
     const existing = storage.getItem(key);
+    if (
+      validated.kind === 'operation' &&
+      existing === serialized({ ...validated, verification: 'committed' })
+    )
+      return { ok: true };
     if (existing !== null && existing !== expected)
       return { ok: false, failure: { kind: 'storage-failure', operation: 'write', key } };
     storage.setItem(key, expected);
@@ -508,6 +518,66 @@ export function clearFrozenAttempt(
     return { ok: true };
   } catch {
     return { ok: false, failure: { kind: 'storage-failure', operation: 'remove', key } };
+  }
+}
+
+/** Replace the command in place; a failed write leaves exact-key replay ownership intact. */
+function commitVerification(storage: StorageLike, attempt: FrozenOperationAttempt) {
+  const marker: FrozenOperationAttempt = { ...attempt, verification: 'committed' };
+  const key = frozenAttemptStorageKey(attempt);
+  try {
+    const current = storage.getItem(key);
+    if (current !== serialized(attempt) && current !== serialized(marker))
+      throw new Error('changed');
+    storage.setItem(key, serialized(marker));
+    if (storage.getItem(key) !== serialized(marker)) throw new Error('not durable');
+    return marker;
+  } catch {
+    return null;
+  }
+}
+
+export type VerificationTruth =
+  | BorrowerDeskSnapshot
+  | { borrowerId: number; ledgerEpoch: number; stateRevision: number; unavailable: true };
+export type VerificationRead = (attempt: FrozenOperationAttempt) => Promise<VerificationTruth>;
+export type VerificationResult =
+  { kind: 'verified'; snapshot: BorrowerDeskSnapshot } | { kind: 'retired' } | { kind: 'pending' };
+
+/** Only authoritative newer truth can release a durable committed owner. */
+export async function verifyCommittedAttempt(
+  storage: StorageLike,
+  attempt: FrozenOperationAttempt,
+  read: VerificationRead,
+): Promise<VerificationResult> {
+  if (attempt.verification !== 'committed') return { kind: 'pending' };
+  try {
+    const current = storage.getItem(frozenAttemptStorageKey(attempt));
+    // Removal may have succeeded before its read-back threw. The same committed
+    // owner can verify again; a different record still fences this owner out.
+    if (current !== null && current !== serialized(attempt)) return { kind: 'pending' };
+    const truth = await read(attempt);
+    const snapshot = isBorrowerDeskSnapshot(truth, attempt.subjectId) ? truth : null;
+    const absent =
+      isObject(truth) &&
+      'unavailable' in truth &&
+      truth.unavailable === true &&
+      exactKeys(truth, ['borrowerId', 'ledgerEpoch', 'stateRevision', 'unavailable']) &&
+      truth.borrowerId === attempt.subjectId &&
+      positive(truth.ledgerEpoch) &&
+      nonNegative(truth.stateRevision);
+    if (!snapshot && !absent) return { kind: 'pending' };
+    if (
+      truth.ledgerEpoch < attempt.ledgerEpoch ||
+      (truth.ledgerEpoch === attempt.ledgerEpoch && truth.stateRevision <= attempt.stateRevision)
+    )
+      return { kind: 'pending' };
+    const retired =
+      truth.ledgerEpoch > attempt.ledgerEpoch || absent || snapshot?.borrower.archived;
+    if (!clearFrozenAttempt(storage, attempt).ok) return { kind: 'pending' };
+    return retired ? { kind: 'retired' } : { kind: 'verified', snapshot: snapshot! };
+  } catch {
+    return { kind: 'pending' };
   }
 }
 
@@ -578,6 +648,26 @@ async function settle<A extends FrozenAttempt>(
     if (outcome.status !== expectedStatus || !resultBelongsToAttempt(attempt, outcome.result))
       return { kind: 'ambiguous', attempt, cleared: false, reason: 'invalid-body' };
   }
+  if (
+    outcome.kind === 'definitive' &&
+    attempt.kind === 'operation' &&
+    'outcome' in outcome.result &&
+    outcome.result.outcome === 'committed'
+  ) {
+    const marker = commitVerification(storage, attempt);
+    if (!marker)
+      return {
+        kind: 'storage-failure',
+        attempt,
+        cleared: false,
+        failure: {
+          kind: 'storage-failure',
+          operation: 'write',
+          key: frozenAttemptStorageKey(attempt),
+        },
+      };
+    return { kind: 'definitive', attempt: marker as A, result: outcome.result, cleared: false };
+  }
   const cleared = clearFrozenAttempt(storage, attempt);
   if (!cleared.ok) {
     if (outcome.kind === 'authorization')
@@ -609,6 +699,8 @@ export async function dispatchFrozenAttempt<A extends FrozenAttempt>(
       cleared: false,
       failure: { kind: 'storage-failure', operation: 'write' },
     };
+  if (validated.kind === 'operation' && validated.verification === 'committed')
+    return committedDispatchResult(validated);
   const persisted = persistFrozenAttempt(storage, validated);
   if (!persisted.ok)
     return {
@@ -618,6 +710,12 @@ export async function dispatchFrozenAttempt<A extends FrozenAttempt>(
       failure: persisted.failure,
     };
   try {
+    if (
+      validated.kind === 'operation' &&
+      storage.getItem(frozenAttemptStorageKey(validated)) ===
+        serialized({ ...validated, verification: 'committed' })
+    )
+      return committedDispatchResult({ ...validated, verification: 'committed' } as A);
     return await settle(storage, validated, await transport(validated), false);
   } catch {
     return { kind: 'ambiguous', attempt: validated, cleared: false, reason: 'network' };
@@ -640,7 +738,15 @@ export async function resolveFrozenAttempt<A extends FrozenAttempt>(
     };
   const key = frozenAttemptStorageKey(validated);
   try {
-    if (storage.getItem(key) !== serialized(validated))
+    const stored = storage.getItem(key);
+    if (
+      validated.kind === 'operation' &&
+      stored === serialized({ ...validated, verification: 'committed' })
+    )
+      return committedDispatchResult({ ...validated, verification: 'committed' } as A);
+    if (stored === null && validated.kind === 'operation' && validated.verification === 'committed')
+      return committedDispatchResult(validated);
+    if (stored !== serialized(validated))
       return {
         kind: 'storage-failure',
         attempt,
@@ -655,11 +761,26 @@ export async function resolveFrozenAttempt<A extends FrozenAttempt>(
       failure: { kind: 'storage-failure', operation: 'read', key },
     };
   }
+  if (validated.kind === 'operation' && validated.verification === 'committed')
+    return committedDispatchResult(validated);
   try {
     return await settle(storage, validated, await transport(validated), true);
   } catch {
     return { kind: 'ambiguous', attempt: validated, cleared: false, reason: 'network' };
   }
+}
+
+function committedDispatchResult<A extends FrozenAttempt>(attempt: A): FrozenDispatchResult<A> {
+  return {
+    kind: 'definitive',
+    attempt,
+    cleared: false,
+    result: {
+      outcome: 'committed',
+      idempotencyKey: attempt.idempotencyKey,
+      replayed: true,
+    } as FrozenResult<A>,
+  };
 }
 
 function resultBelongsToAttempt(
@@ -871,6 +992,7 @@ export type RecoveryInitialization = {
 export async function initializeFrozenAttemptRecovery(
   storage: StorageLike,
   transport: FrozenTransport,
+  read?: VerificationRead,
 ): Promise<RecoveryInitialization> {
   const results: FrozenDispatchResult[] = [];
   const invalidKeys = new Set<string>();
@@ -883,8 +1005,22 @@ export async function initializeFrozenAttemptRecovery(
     failures.push(...enumeration.failures);
     if (enumeration.valid.length === 0) break;
     const passResults: FrozenDispatchResult[] = [];
-    for (const attempt of enumeration.valid)
-      passResults.push(await resolveFrozenAttempt(storage, attempt, transport));
+    for (const attempt of enumeration.valid) {
+      const result = await resolveFrozenAttempt(storage, attempt, transport);
+      if (
+        result.kind === 'definitive' &&
+        result.attempt.kind === 'operation' &&
+        result.attempt.verification === 'committed' &&
+        read
+      ) {
+        const verified = await verifyCommittedAttempt(storage, result.attempt, read);
+        passResults.push({
+          ...result,
+          cleared: verified.kind !== 'pending',
+          verification: verified.kind === 'pending' ? undefined : verified.kind,
+        });
+      } else passResults.push(result);
+    }
     results.push(...passResults);
     if (passResults.some((result) => !result.cleared)) break;
     enumeration = enumerateFrozenAttempts(storage);

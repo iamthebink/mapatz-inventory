@@ -20,6 +20,7 @@ import {
   readFrozenManagementAttempts,
   persistFrozenAttempt,
   resolveFrozenAttempt,
+  verifyCommittedAttempt,
 } from '../../src/web/borrower-workflow-recovery.js';
 const key1 = '00000000-0000-4000-8000-000000000001';
 const key2 = '00000000-0000-4000-8000-000000000002';
@@ -40,6 +41,12 @@ function operation(key = key1): FrozenOperationAttempt {
     },
   };
 }
+const retiredTruth = async () => ({
+  borrowerId: 7,
+  ledgerEpoch: 3,
+  stateRevision: 4,
+  unavailable: true as const,
+});
 function creation(key = key2): FrozenCreateAttempt {
   return {
     version: 1,
@@ -446,7 +453,7 @@ describe('frozen attempt validation and storage', () => {
   });
 });
 describe('frozen dispatch and recovery', () => {
-  it('persists before fetch, sends the exact envelope, and clears a definitive result', async () => {
+  it('persists before fetch and atomically retains committed verification ownership', async () => {
     const seen: FrozenAttempt[] = [];
     const result = await dispatchFrozenAttempt(storage(), operation(), async (attempt) => {
       expect(storage().getItem(frozenAttemptStorageKey(attempt))).toBe(JSON.stringify(attempt));
@@ -458,8 +465,14 @@ describe('frozen dispatch and recovery', () => {
       };
     });
     expect(seen).toEqual([operation()]);
-    expect(result).toMatchObject({ kind: 'definitive', cleared: true });
-    expect(storage().length).toBe(0);
+    expect(result).toMatchObject({
+      kind: 'definitive',
+      cleared: false,
+      attempt: { verification: 'committed' },
+    });
+    expect(enumerateFrozenAttempts(storage()).valid[0]).toMatchObject({
+      verification: 'committed',
+    });
   });
   it('owns and freezes the exact bytes handed to transport', async () => {
     const callerAttempt = operation();
@@ -475,7 +488,11 @@ describe('frozen dispatch and recovery', () => {
         result: { outcome: 'committed', idempotencyKey: key1, replayed: false },
       };
     });
-    expect(result).toMatchObject({ kind: 'definitive', cleared: true });
+    expect(result).toMatchObject({
+      kind: 'definitive',
+      cleared: false,
+      attempt: { verification: 'committed' },
+    });
   });
   it('does not dispatch after silent persistence failure', async () => {
     const transport = vi.fn();
@@ -528,47 +545,54 @@ describe('frozen dispatch and recovery', () => {
       status: 201,
       result: { outcome: 'committed', idempotencyKey: key1, replayed: true },
     }));
-    expect(blocked).toMatchObject({
-      kind: 'storage-failure',
-      cleared: false,
-      failure: { operation: 'remove' },
-    });
+    expect(blocked).toMatchObject({ kind: 'definitive', cleared: false });
+    expect(
+      await verifyCommittedAttempt(
+        silentRemove,
+        { ...operation(), verification: 'committed' },
+        retiredTruth,
+      ),
+    ).toEqual({ kind: 'pending' });
   });
   it('resolves all readable valid startup records and remains fail closed for invalid records', async () => {
     persistFrozenAttempt(storage(), operation());
     persistFrozenAttempt(storage(), creation());
     storage().setItem('mapatz:frozen-attempt:v1:unsupported', JSON.stringify({ version: 2 }));
     const resolved: string[] = [];
-    const initialized = await initializeFrozenAttemptRecovery(storage(), async (attempt) => {
-      resolved.push(attempt.idempotencyKey);
-      return attempt.kind === 'operation'
-        ? {
-            kind: 'definitive',
-            status: 201,
-            result: {
-              outcome: 'committed',
-              idempotencyKey: attempt.idempotencyKey,
-              replayed: true,
-            },
-          }
-        : {
-            kind: 'definitive',
-            status: 201,
-            result: {
-              outcome: 'committed',
-              idempotencyKey: attempt.idempotencyKey,
-              replayed: true,
-              borrower: {
-                id: 2,
-                playaName: 'new',
-                fullName: 'New',
-                phoneNumber: '',
-                campDepartment: '',
-                archived: false,
+    const initialized = await initializeFrozenAttemptRecovery(
+      storage(),
+      async (attempt) => {
+        resolved.push(attempt.idempotencyKey);
+        return attempt.kind === 'operation'
+          ? {
+              kind: 'definitive',
+              status: 201,
+              result: {
+                outcome: 'committed',
+                idempotencyKey: attempt.idempotencyKey,
+                replayed: true,
               },
-            },
-          };
-    });
+            }
+          : {
+              kind: 'definitive',
+              status: 201,
+              result: {
+                outcome: 'committed',
+                idempotencyKey: attempt.idempotencyKey,
+                replayed: true,
+                borrower: {
+                  id: 2,
+                  playaName: 'new',
+                  fullName: 'New',
+                  phoneNumber: '',
+                  campDepartment: '',
+                  archived: false,
+                },
+              },
+            };
+      },
+      retiredTruth,
+    );
     expect(resolved).toEqual([key1, key2]);
     expect(initialized.ready).toBe(false);
     expect(initialized.invalidKeys).toEqual(['mapatz:frozen-attempt:v1:unsupported']);
@@ -596,37 +620,41 @@ describe('frozen dispatch and recovery', () => {
   it('re-enumerates after awaited recovery and resolves records added during transport', async () => {
     persistFrozenAttempt(storage(), operation());
     const seen: string[] = [];
-    const initialized = await initializeFrozenAttemptRecovery(storage(), async (attempt) => {
-      seen.push(attempt.idempotencyKey);
-      if (attempt.kind === 'operation') persistFrozenAttempt(storage(), creation());
-      return attempt.kind === 'operation'
-        ? {
-            kind: 'definitive',
-            status: 201,
-            result: {
-              outcome: 'committed',
-              idempotencyKey: attempt.idempotencyKey,
-              replayed: true,
-            },
-          }
-        : {
-            kind: 'definitive',
-            status: 201,
-            result: {
-              outcome: 'committed',
-              idempotencyKey: attempt.idempotencyKey,
-              replayed: true,
-              borrower: {
-                id: 2,
-                playaName: 'new',
-                fullName: 'New',
-                phoneNumber: '',
-                campDepartment: '',
-                archived: false,
+    const initialized = await initializeFrozenAttemptRecovery(
+      storage(),
+      async (attempt) => {
+        seen.push(attempt.idempotencyKey);
+        if (attempt.kind === 'operation') persistFrozenAttempt(storage(), creation());
+        return attempt.kind === 'operation'
+          ? {
+              kind: 'definitive',
+              status: 201,
+              result: {
+                outcome: 'committed',
+                idempotencyKey: attempt.idempotencyKey,
+                replayed: true,
               },
-            },
-          };
-    });
+            }
+          : {
+              kind: 'definitive',
+              status: 201,
+              result: {
+                outcome: 'committed',
+                idempotencyKey: attempt.idempotencyKey,
+                replayed: true,
+                borrower: {
+                  id: 2,
+                  playaName: 'new',
+                  fullName: 'New',
+                  phoneNumber: '',
+                  campDepartment: '',
+                  archived: false,
+                },
+              },
+            };
+      },
+      retiredTruth,
+    );
     expect(seen).toEqual([key1, key2]);
     expect(initialized.ready).toBe(true);
   });
@@ -939,7 +967,134 @@ it('persists explicit lost-return intent through startup and resolves the exact 
       replayed: true,
     },
   }));
-  expect((await initializeFrozenAttemptRecovery(storage, retry)).ready).toBe(true);
+  expect((await initializeFrozenAttemptRecovery(storage, retry, retiredTruth)).ready).toBe(true);
   expect(retry).toHaveBeenCalledWith(attempt);
   expect(storage.length).toBe(0);
+});
+
+describe('committed verification durability', () => {
+  it('never POSTs a durable marker through either dispatch or resolution, even with an old command reference', async () => {
+    const store = storage();
+    const original = operation();
+    const marker = { ...original, verification: 'committed' as const };
+    persistFrozenAttempt(store, marker);
+    const transport = vi.fn();
+    expect(await dispatchFrozenAttempt(store, original, transport)).toMatchObject({
+      kind: 'definitive',
+      cleared: false,
+      attempt: marker,
+    });
+    expect(await resolveFrozenAttempt(store, original, transport)).toMatchObject({
+      kind: 'definitive',
+      cleared: false,
+      attempt: marker,
+    });
+    expect(transport).not.toHaveBeenCalled();
+    const recovery = await initializeFrozenAttemptRecovery(store, transport, retiredTruth);
+    expect(recovery).toMatchObject({
+      ready: true,
+      results: [{ verification: 'retired', cleared: true }],
+    });
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('keeps read-only recovery after storage removal fails and rejects stale or malformed evidence', async () => {
+    const store = storage();
+    const marker = { ...operation(), verification: 'committed' as const };
+    persistFrozenAttempt(store, marker);
+    for (const read of [
+      async () => ({ borrowerId: 7, ledgerEpoch: 3, stateRevision: 3, unavailable: true as const }),
+      async () => ({ borrowerId: 8, ledgerEpoch: 4, stateRevision: 0, unavailable: true as const }),
+      async () => {
+        throw new Error('403');
+      },
+    ])
+      expect(await verifyCommittedAttempt(store, marker, read)).toEqual({ kind: 'pending' });
+    const blocked = { ...store, getItem: store.getItem.bind(store), removeItem: () => {} };
+    expect(await verifyCommittedAttempt(blocked, marker, retiredTruth)).toEqual({
+      kind: 'pending',
+    });
+    expect(enumerateFrozenAttempts(store).valid[0]).toEqual(marker);
+    expect(await verifyCommittedAttempt(store, marker, retiredTruth)).toEqual({ kind: 'retired' });
+    expect(store.length).toBe(0);
+  });
+});
+
+it('recovers a marker write whose read-back failed without replaying the committed operation', async () => {
+  const base = storage();
+  let failRead = false;
+  const uncertain = {
+    get length() {
+      return base.length;
+    },
+    key: base.key.bind(base),
+    getItem(key: string) {
+      if (failRead) {
+        failRead = false;
+        throw new Error('read-back unavailable');
+      }
+      return base.getItem(key);
+    },
+    setItem(key: string, value: string) {
+      base.setItem(key, value);
+      if (JSON.parse(value).verification === 'committed') failRead = true;
+    },
+    removeItem: base.removeItem.bind(base),
+  };
+  const transport = vi.fn(async () => ({
+    kind: 'definitive' as const,
+    status: 201,
+    result: { outcome: 'committed' as const, idempotencyKey: key1, replayed: false },
+  }));
+  expect(await dispatchFrozenAttempt(uncertain, operation(), transport)).toMatchObject({
+    kind: 'storage-failure',
+    failure: { operation: 'write' },
+  });
+  expect(await dispatchFrozenAttempt(uncertain, operation(), transport)).toMatchObject({
+    kind: 'definitive',
+    attempt: { verification: 'committed' },
+  });
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect((await initializeFrozenAttemptRecovery(uncertain, transport, retiredTruth)).ready).toBe(
+    true,
+  );
+  expect(transport).toHaveBeenCalledTimes(1);
+});
+
+it('re-verifies the same committed owner after removal succeeds but cleanup read-back fails', async () => {
+  const base = storage();
+  const marker = { ...operation(), verification: 'committed' as const };
+  persistFrozenAttempt(base, marker);
+  let failRead = false;
+  const uncertain = {
+    get length() {
+      return base.length;
+    },
+    key: base.key.bind(base),
+    setItem: base.setItem.bind(base),
+    getItem(key: string) {
+      if (failRead) {
+        failRead = false;
+        throw new Error('cleanup read-back');
+      }
+      return base.getItem(key);
+    },
+    removeItem(key: string) {
+      base.removeItem(key);
+      failRead = true;
+    },
+  };
+  const read = vi.fn(retiredTruth);
+  expect(await verifyCommittedAttempt(uncertain, marker, read)).toEqual({ kind: 'pending' });
+  expect(base.length).toBe(0);
+  const transport = vi.fn();
+  expect(await resolveFrozenAttempt(uncertain, marker, transport)).toMatchObject({
+    kind: 'definitive',
+    cleared: false,
+  });
+  expect(await verifyCommittedAttempt(uncertain, marker, read)).toEqual({ kind: 'retired' });
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(transport).not.toHaveBeenCalled();
+  base.setItem(frozenAttemptStorageKey(marker), JSON.stringify({ ...marker, stateRevision: 99 }));
+  expect(await verifyCommittedAttempt(uncertain, marker, read)).toEqual({ kind: 'pending' });
+  expect(read).toHaveBeenCalledTimes(2);
 });

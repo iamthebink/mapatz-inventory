@@ -118,6 +118,7 @@ export type OperationAction =
   | { type: 'refresh-started'; refreshId: string }
   | { type: 'refresh-succeeded'; refreshId: string; snapshot: BorrowerDeskSnapshot }
   | { type: 'refresh-failed'; refreshId: string }
+  | { type: 'context-retired'; requestId: string }
   | { type: 'reload-started'; reloadId: string }
   | { type: 'reload-succeeded'; reloadId: string; snapshot: BorrowerDeskSnapshot }
   | { type: 'reload-failed'; reloadId: string }
@@ -763,12 +764,11 @@ export function canSave(state: OperationState): boolean {
 
 export function operationLocks(state: OperationState): { mutation: boolean; exit: boolean } {
   const frozen = ['saving', 'unknown', 'storage-recovery'].includes(state.phase.kind);
-  if (state.phase.kind === 'refresh-required' && state.phase.intent === 'save-and-close')
-    return { mutation: true, exit: false };
   return {
     mutation:
       frozen || ['refresh-required', 'reload-required', 'closed'].includes(state.phase.kind),
-    exit: frozen,
+    exit:
+      frozen || state.phase.kind === 'refresh-required' || state.phase.kind === 'reload-required',
   };
 }
 
@@ -1135,6 +1135,22 @@ export function operationReducer(state: OperationState, action: OperationAction)
     }
     return state;
   }
+  if (action.type === 'context-retired') {
+    if (!(
+      (state.phase.kind === 'refresh-required' && state.phase.refreshId === action.requestId) ||
+      (state.phase.kind === 'reload-required' && state.phase.reloadId === action.requestId)
+    ))
+      return state;
+    return {
+      ...state,
+      staged: [],
+      conflicts: [],
+      phase: { kind: 'closed' },
+      unverifiedProjection: null,
+      feedback: { kind: 'warning', code: 'context_retired', message: 'Borrower context retired' },
+      focus: 'borrower-search',
+    };
+  }
   if (action.type === 'refresh-started') {
     if (
       state.phase.kind !== 'refresh-required' ||
@@ -1221,20 +1237,7 @@ export function operationReducer(state: OperationState, action: OperationAction)
       action.snapshot.ledgerEpoch <= state.snapshot.ledgerEpoch
     )
       return state;
-    return {
-      ...state,
-      snapshot: cloneSnapshot(action.snapshot),
-      staged: [],
-      conflicts: [],
-      phase:
-        state.phase.confirmedIntent === 'save-and-close' ? { kind: 'closed' } : { kind: 'ready' },
-      announcement: null,
-      feedback: state.phase.confirmedIntent
-        ? { kind: 'success', code: 'operation_saved', message: 'Operation saved' }
-        : null,
-      focus: state.phase.confirmedIntent === 'save-and-close' ? 'borrower-search' : 'item-search',
-      unverifiedProjection: null,
-    };
+    return operationReducer(state, { type: 'context-retired', requestId: action.reloadId });
   }
   if (action.type === 'reload-failed') {
     if (state.phase.kind !== 'reload-required' || state.phase.reloadId !== action.reloadId)

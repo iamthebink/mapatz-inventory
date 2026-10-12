@@ -666,12 +666,19 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
   const operationEndpoint = `**/api/borrowers/${seed.borrower.id}/operations`;
   let snapshotRequests = 0;
   let operationPosts = 0;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   await page.route(snapshotEndpoint, async (route) => {
     snapshotRequests += 1;
     if (snapshotRequests === 2) {
       const response = await route.fetch();
       await route.fulfill({ response, json: { ...(await response.json()), stateRevision: 0 } });
-    } else await route.continue();
+    } else {
+      if (snapshotRequests === 3) await held;
+      await route.continue();
+    }
   });
   await page.route(operationEndpoint, async (route) => {
     if (route.request().method() === 'POST') operationPosts += 1;
@@ -685,7 +692,16 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
   await expect(retry).toBeFocused();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
   expect(operationPosts).toBe(1);
+  await page.getByRole('link', { name: 'ניהול', exact: true }).click();
+  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
+  await page.goBack();
+  await expect(retry).toBeVisible();
   await retry.click();
+  const busy = page.getByRole('button', { name: 'מאמת נתוני אמת…' });
+  await expect(busy).toBeDisabled();
+  await busy.dispatchEvent('click');
+  expect(snapshotRequests).toBe(3);
+  release();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeFocused();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveValue('');
   expect(operationPosts).toBe(1);
@@ -703,7 +719,7 @@ test('keeps search blocked after a stale committed-save snapshot until truth ref
     )[0]?.count,
   ).toBe(1);
 });
-test('keeps a confirmed close in recovery until a newer ledger epoch is loaded', async ({
+test('retires the old card when committed verification observes a replacement ledger', async ({
   page,
   seed,
 }) => {
@@ -714,26 +730,16 @@ test('keeps a confirmed close in recovery until a newer ledger epoch is loaded',
     const snapshot = await response.json();
     await route.fulfill({
       response,
-      json:
-        snapshots === 2 || snapshots === 4
-          ? { ...snapshot, ledgerEpoch: snapshot.ledgerEpoch + 1 }
-          : snapshot,
+      json: snapshots > 1 ? { ...snapshot, ledgerEpoch: snapshot.ledgerEpoch + 1 } : snapshot,
     });
   });
   await openSeededCard(page, seed.borrower.playaName);
   await stageBorrow(page, seed.item.name);
   await confirmSave(page);
-  const retry = page.getByRole('button', { name: 'טעינת אמת עדכנית' });
   await expect(page.getByRole('dialog', { name: /כרטיס שואל/ })).toBeHidden();
-  await expect(retry).toBeFocused();
-  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
-  await retry.click();
-  await expect(retry).toBeFocused();
-  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeDisabled();
-  await retry.click();
-  await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeFocused();
   await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
-  expect(snapshots).toBe(4);
+  await expect(page.getByText('נתוני המלאי או השואל השתנו. יש לבחור שואל מחדש.')).toBeVisible();
+  expect(snapshots).toBe(2);
 });
 test('resolves an ambiguous committed response after reload without duplicating the command', async ({
   page,

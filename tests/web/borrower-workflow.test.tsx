@@ -1261,6 +1261,12 @@ describe('borrower desk workflow', () => {
   });
   it('closes the card but blocks borrower search until committed truth can be refreshed', async () => {
     let posted = false;
+    let reads = 0;
+    let release!: (response: Response) => void;
+    const pendingRead = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const handle = createRef<BorrowerWorkflowHandle>();
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -1268,7 +1274,8 @@ describe('borrower desk workflow', () => {
         if (path.startsWith('/api/borrowers/search'))
           return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
         if (path === '/api/borrowers/7/desk-snapshot') {
-          if (posted) throw new Error('refresh offline');
+          if (posted && ++reads === 1) throw new Error('refresh offline');
+          if (posted) return pendingRead;
           return json(desk());
         }
         if (path === '/api/borrowers/7/operations') {
@@ -1282,7 +1289,7 @@ describe('borrower desk workflow', () => {
     const toast = vi.fn();
     render(
       <DialogStackProvider>
-        <BorrowerWorkflow showToast={toast} />
+        <BorrowerWorkflow ref={handle} showToast={toast} />
       </DialogStackProvider>,
     );
     const borrowerSearch = await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
@@ -1304,6 +1311,23 @@ describe('borrower desk workflow', () => {
       'הפעולה אושרה, אך התצוגה טרם אומתה.',
       'warning',
     );
+    const leave = vi.fn();
+    act(() => handle.current!.requestNavigation(leave));
+    expect(leave).not.toHaveBeenCalled();
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    expect(history.state.mapatzBorrowerWorkflow).toBe(true);
+    expect(JSON.parse(localStorage.getItem(localStorage.key(0)!)!).verification).toBe('committed');
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(reads).toBe(2);
+    expect(
+      (screen.getByRole('button', { name: 'מאמת נתוני אמת…' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await act(async () => release(json(desk(2))));
+    await waitFor(() => expect(localStorage.length).toBe(0));
+    await waitFor(() => expect((borrowerSearch as HTMLInputElement).disabled).toBe(false));
   });
   it('replaces truth after a conflict, retains staging, annotates it, and focuses the first conflict', async () => {
     vi.stubGlobal(
@@ -1802,7 +1826,7 @@ describe('borrower desk workflow', () => {
     await waitFor(() => expect(posts).toBe(1));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'ביטול פעולה' })).toBeNull());
   });
-  it('resolves the exact frozen operation after a failed clear before closing the card', async () => {
+  it('retries only the read after committed marker cleanup fails', async () => {
     vi.stubGlobal('localStorage', failFirstRemoveStorage());
     const posts: string[] = [];
     vi.stubGlobal(
@@ -1838,11 +1862,11 @@ describe('borrower desk workflow', () => {
     await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
     await confirmSave();
     await userEvent.click(
-      await screen.findByRole('button', { name: 'בדיקה חוזרת של הפעולה השמורה' }),
+      await screen.findByRole('button', { name: 'אימות נתוני האמת לפני המשך' }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
-    expect(posts).toHaveLength(2);
-    expect(posts[1]).toBe(posts[0]);
+    expect(posts).toHaveLength(1);
+    expect(localStorage.length).toBe(0);
   });
   it('reloads the creation epoch without losing entered values', async () => {
     let epochChanged = false;
@@ -2354,5 +2378,245 @@ it.each(['borrow', 'return'] as const)(
       direction === 'borrow' ? '2' : '1',
     );
     expect(truth.defaultLocationId).toBe(1);
+  },
+);
+
+it('gates a remount on retained committed verification without another operation POST', async () => {
+  const key = '00000000-0000-4000-8000-000000000099';
+  localStorage.setItem(
+    `mapatz:frozen-attempt:v1:${key}`,
+    JSON.stringify({
+      version: 1,
+      kind: 'operation',
+      verification: 'committed',
+      endpoint: '/borrowers/7/operations',
+      subjectId: 7,
+      idempotencyKey: key,
+      ledgerEpoch: 3,
+      stateRevision: 1,
+      intent: 'save-and-close',
+      body: {
+        contractVersion: 1,
+        ledgerEpoch: 3,
+        items: [{ itemId: 11, borrow: [{ quantity: 1, locationId: 1, note: '' }] }],
+      },
+    }),
+  );
+  let online = false;
+  let posts = 0;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+      if (init.method === 'POST') {
+        posts += 1;
+        throw new Error('Unexpected POST');
+      }
+      if (String(input).includes('/desk-snapshot')) {
+        if (!online) throw new Error('Offline');
+        return json(desk(2));
+      }
+      if (String(input).includes('/search'))
+        return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+      throw new Error('Unexpected read');
+    }),
+  );
+  const mount = () =>
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+  const first = mount();
+  await screen.findByRole('button', { name: 'ניסיון טעינה מחדש' });
+  expect(screen.queryByRole('searchbox', { name: 'חיפוש שואל' })).toBeNull();
+  first.unmount();
+  mount();
+  const retry = await screen.findByRole('button', { name: 'ניסיון טעינה מחדש' });
+  online = true;
+  await userEvent.click(retry);
+  await waitFor(() => expect(localStorage.length).toBe(0));
+  expect((screen.getByRole('searchbox', { name: 'חיפוש שואל' }) as HTMLInputElement).disabled).toBe(
+    false,
+  );
+  expect(posts).toBe(0);
+});
+
+function installCommittedMarker() {
+  const key = '00000000-0000-4000-8000-000000000088';
+  localStorage.setItem(
+    `mapatz:frozen-attempt:v1:${key}`,
+    JSON.stringify({
+      version: 1,
+      kind: 'operation',
+      verification: 'committed',
+      endpoint: '/borrowers/7/operations',
+      subjectId: 7,
+      idempotencyKey: key,
+      ledgerEpoch: 3,
+      stateRevision: 1,
+      intent: 'save-and-close',
+      body: {
+        contractVersion: 1,
+        ledgerEpoch: 3,
+        items: [{ itemId: 11, borrow: [{ quantity: 1, locationId: 1, note: '' }] }],
+      },
+    }),
+  );
+}
+it.each(['not_found', 'inactive_borrower'])(
+  'retires retained committed recovery through authoritative %s evidence',
+  async (error) => {
+    installCommittedMarker();
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input);
+      if (path.endsWith('/desk-snapshot')) return json({ error }, 404);
+      if (path.endsWith('/recovery-snapshot'))
+        return json({ borrowerId: 7, ledgerEpoch: 3, stateRevision: 2, unavailable: true });
+      if (path.includes('/search'))
+        return json({ ledgerEpoch: 3, active: [], archivedMatches: [] });
+      throw new Error(`Unexpected ${path}`);
+    });
+    vi.stubGlobal('fetch', fetch);
+    const toast = vi.fn();
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={toast} />
+      </DialogStackProvider>,
+    );
+    expect(await screen.findByRole('searchbox', { name: 'חיפוש שואל' })).toHaveProperty(
+      'disabled',
+      false,
+    );
+    expect(localStorage.length).toBe(0);
+    expect(fetch.mock.calls.map((call) => String(call[0]))).toEqual([
+      '/api/borrowers/7/desk-snapshot',
+      '/api/borrowers/7/recovery-snapshot',
+      '/api/borrowers/search?q=',
+    ]);
+    expect(toast).toHaveBeenCalledWith(
+      'שחזור פעולה',
+      'נתוני המלאי או השואל השתנו. יש לבחור שואל מחדש.',
+      'warning',
+    );
+  },
+);
+it('retains the committed marker and startup gate after malformed absence evidence', async () => {
+  installCommittedMarker();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input) =>
+      String(input).endsWith('/desk-snapshot')
+        ? json({ error: 'not_found' }, 404)
+        : json({ borrowerId: 8, ledgerEpoch: 4, stateRevision: 0, unavailable: true }),
+    ),
+  );
+  render(
+    <DialogStackProvider>
+      <BorrowerWorkflow showToast={vi.fn()} />
+    </DialogStackProvider>,
+  );
+  await screen.findByRole('button', { name: 'ניסיון טעינה מחדש' });
+  expect(screen.queryByRole('searchbox', { name: 'חיפוש שואל' })).toBeNull();
+  expect(localStorage.length).toBe(1);
+});
+it('shows startup retry when the localStorage getter throws', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')!;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() {
+      throw new DOMException('blocked', 'SecurityError');
+    },
+  });
+  try {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({ ledgerEpoch: 3, active: [], archivedMatches: [] })),
+    );
+    render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={vi.fn()} />
+      </DialogStackProvider>,
+    );
+    const retry = await screen.findByRole('button', { name: 'ניסיון טעינה מחדש' });
+    expect(screen.queryByRole('searchbox', { name: 'חיפוש שואל' })).toBeNull();
+    Object.defineProperty(globalThis, 'localStorage', descriptor);
+    await userEvent.click(retry);
+    await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', descriptor);
+  }
+});
+it.each([false, true])(
+  'serializes reload retries and ignores completion after owner unmount=%s',
+  async (unmount) => {
+    let reads = 0;
+    let rejectRead!: (error: Error) => void;
+    let finishRead!: (response: Response) => void;
+    const firstRead = new Promise<Response>((_resolve, reject) => {
+      rejectRead = reject;
+    });
+    const secondRead = new Promise<Response>((resolve) => {
+      finishRead = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
+        const path = String(input);
+        if (path.includes('/search'))
+          return json({ ledgerEpoch: 3, active: [borrower], archivedMatches: [] });
+        if (path.endsWith('/desk-snapshot')) {
+          reads += 1;
+          return reads === 1 ? json(desk()) : reads === 2 ? firstRead : secondRead;
+        }
+        if (path.endsWith('/operations'))
+          return json(
+            {
+              error: 'ledger_epoch_changed',
+              message: 'Changed',
+              outcome: 'protocol_error',
+              idempotencyKey: new Headers(init.headers).get('Idempotency-Key'),
+            },
+            409,
+          );
+        throw new Error(`Unexpected ${path}`);
+      }),
+    );
+    const toast = vi.fn();
+    const owner = render(
+      <DialogStackProvider>
+        <BorrowerWorkflow showToast={toast} />
+      </DialogStackProvider>,
+    );
+    await userEvent.type(await screen.findByRole('searchbox', { name: 'חיפוש שואל' }), 'א');
+    await activateBorrowerAction();
+    const search = await screen.findByRole('combobox', { name: 'חיפוש פריט' });
+    await userEvent.type(search, 'אוהל');
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await userEvent.click(screen.getByRole('button', { name: 'אישור' }));
+    await confirmSave();
+    const retry = await screen.findByRole('button', { name: 'טעינת אמת עדכנית' });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(reads).toBe(2);
+    expect(screen.getByRole('button', { name: 'טוען נתוני אמת…' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    await act(async () => rejectRead(new Error('offline')));
+    fireEvent.click(await screen.findByRole('button', { name: 'טעינת אמת עדכנית' }));
+    expect(reads).toBe(3);
+    if (unmount) owner.unmount();
+    const notifications = toast.mock.calls.length;
+    await act(async () => finishRead(json({ ...desk(2), ledgerEpoch: 4 })));
+    if (unmount) expect(toast).toHaveBeenCalledTimes(notifications);
+    else {
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /כרטיס שואל/ })).toBeNull());
+      expect(screen.getByRole('searchbox', { name: 'חיפוש שואל' })).toHaveProperty(
+        'disabled',
+        false,
+      );
+      expect(toast).toHaveBeenCalledWith('נתוני השואל השתנו', expect.any(String), 'warning');
+    }
   },
 );

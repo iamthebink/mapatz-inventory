@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { RefreshCw } from './icons';
 import { desktop } from './desktop';
 import { initializeFrozenAttemptRecovery } from './borrower-workflow-recovery';
-import { sendFrozenBorrowerAttempt } from './api';
+import { sendFrozenBorrowerAttempt, fetchBorrowerVerification } from './api';
 import { Toast, type ToastMessage } from './Toast';
 
 /** Gate every desktop entry URL, including reload on a non-desk route. */
@@ -20,8 +20,18 @@ export function DesktopStartup({ children }: { children: ReactNode }) {
     running.current = true;
     setState('loading');
     try {
-      const result = await initializeFrozenAttemptRecovery(localStorage, sendFrozenBorrowerAttempt);
+      const result = await initializeFrozenAttemptRecovery(
+        localStorage,
+        sendFrozenBorrowerAttempt,
+        fetchBorrowerVerification,
+      );
       setState(result.ready ? 'ready' : 'failed');
+      if (
+        result.results.some(
+          (entry) => entry.kind === 'definitive' && entry.verification === 'retired',
+        )
+      )
+        notify('נתוני המלאי או השואל השתנו. יש לבחור שואל מחדש.');
       if (!result.ready) notify('לא ניתן לקבוע בוודאות את מצב הפעולה. נסו שוב.');
     } catch {
       setState('failed');
@@ -37,7 +47,13 @@ export function DesktopStartup({ children }: { children: ReactNode }) {
     if (state === 'ready') return;
     return desktop?.onCloseRequest(() => notify('יש להשלים שחזור לפני היציאה.'));
   }, [notify, state]);
-  if (state === 'ready') return children;
+  if (state === 'ready')
+    return (
+      <>
+        {children}
+        {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
+      </>
+    );
   return (
     <main className="mx-auto max-w-lg p-8" dir="rtl">
       <h1 className="text-2xl font-semibold">שחזור פעולות ממתינות</h1>

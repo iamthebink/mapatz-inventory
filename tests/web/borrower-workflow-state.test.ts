@@ -582,7 +582,7 @@ describe('borrower operation state', () => {
       result: { outcome: 'committed', idempotencyKey: key2, replayed: false },
     });
     expect(operationPresentation(closed)).toEqual({ cardOpen: false, searchEnabled: false });
-    expect(operationLocks(closed).exit).toBe(false);
+    expect(operationLocks(closed).exit).toBe(true);
     closed = operationReducer(closed, {
       type: 'refresh-started',
       refreshId: '00000000-0000-4000-8000-000000000103',
@@ -631,7 +631,7 @@ describe('borrower operation state', () => {
     expect(epochClosed).toMatchObject({
       phase: { kind: 'closed' },
       focus: 'borrower-search',
-      feedback: { code: 'operation_saved' },
+      feedback: { code: 'context_retired' },
     });
     expect(operationPresentation(epochClosed)).toEqual({ cardOpen: false, searchEnabled: true });
   });
@@ -676,10 +676,10 @@ describe('borrower operation state', () => {
       snapshot: snapshot({ ledgerEpoch: 4 }),
     });
     expect(state).toMatchObject({
-      phase: { kind: 'ready' },
+      phase: { kind: 'closed' },
       conflicts: [],
       staged: [],
-      snapshot: { ledgerEpoch: 4 },
+      snapshot: { ledgerEpoch: 3 },
     });
     expect(state.usedReloadIds).toContain(reloadId);
   });
