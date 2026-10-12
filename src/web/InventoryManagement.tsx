@@ -3,7 +3,7 @@ import { useLostItemRecovery } from './useLostItemRecovery';
 import { ItemNote } from './ItemNote';
 import { StickyTable } from './StickyTable';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Archive, Pencil, RotateCcw, Trash2, TriangleAlert } from './icons';
+import { Archive, Pencil, RotateCcw, SearchCheck, Trash2, TriangleAlert } from './icons';
 import { ApiError, api } from './api';
 import { DataTable, type TableColumn } from './DataTable';
 import { Dialog } from './Dialog';
@@ -783,6 +783,7 @@ export function InventoryManagement({
             }
             onClick={() => open({ kind: 'lost', item })}
           >
+            <SearchCheck className="size-3.5" aria-hidden="true" />
             השב אבדה
           </button>
           <button

@@ -201,9 +201,10 @@ export function LostItemRecoveryDialog({
             ))}
         </select>
       </label>
-      <label className="checkbox-label">
+      <div className="checkbox-label return-damage-toggle">
         <input
           type="checkbox"
+          aria-labelledby="lost-return-damage-label"
           checked={damaged}
           disabled={locked}
           onChange={(event) => {
@@ -211,8 +212,8 @@ export function LostItemRecoveryDialog({
             onDirty();
           }}
         />
-        הוחזר פגום
-      </label>
+        <span id="lost-return-damage-label">הוחזר פגום</span>
+      </div>
       <label className="field-label">
         הערה (רשות)
         <textarea
