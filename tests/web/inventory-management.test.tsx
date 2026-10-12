@@ -813,6 +813,65 @@ const splitItem: Item = {
     { locationId: 2, available: 30, damaged: 6 },
   ],
 };
+it.each(['eligible', 'zero damaged', 'absent balance', 'no default', 'archived'] as const)(
+  'preselects only an eligible damaged-stock default (%s)',
+  async (scenario) => {
+    const save = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond({ eventId: 1 }, 201));
+    const user = userEvent.setup();
+    const locations = splitLocations.map((location) => ({
+      ...location,
+      isDefault: location.id === 2 && scenario !== 'no default',
+      archived: location.id === 2 && scenario === 'archived',
+    }));
+    const balances = splitItem.balances
+      .filter((balance) => scenario !== 'absent balance' || balance.locationId !== 2)
+      .map((balance) => ({
+        ...balance,
+        damaged: balance.locationId === 2 && scenario === 'zero damaged' ? 0 : balance.damaged,
+      }));
+    view(
+      true,
+      [{ ...splitItem, balances, damaged: balances.reduce((sum, b) => sum + b.damaged, 0) }],
+      locations,
+    );
+    await user.click(screen.getByRole('button', { name: 'טיפול בפגומים' }));
+    expect(screen.getByLabelText('מיקום הפגומים')).toHaveProperty(
+      'value',
+      scenario === 'eligible' ? '2' : '',
+    );
+    if (scenario !== 'eligible') {
+      await user.click(screen.getByRole('button', { name: 'שמירה' }));
+      expect(save).not.toHaveBeenCalled();
+      await user.selectOptions(screen.getByLabelText('מיקום הפגומים'), '1');
+    }
+    await user.click(screen.getByRole('button', { name: 'שמירה' }));
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(JSON.parse(String(save.mock.calls[0]?.[1]?.body))).toMatchObject({
+      locationId: scenario === 'eligible' ? 2 : 1,
+      resolution: 'repair',
+    });
+  },
+);
+it('allows overriding the damaged default and clears that choice for the next item', async () => {
+  const save = vi.spyOn(globalThis, 'fetch').mockResolvedValue(respond({ eventId: 1 }, 201));
+  const user = userEvent.setup();
+  const otherItem = {
+    ...item,
+    id: 2,
+    name: 'Saw',
+    balances: [{ locationId: 2, available: 20, damaged: 4 }],
+  };
+  view(true, [splitItem, otherItem], splitLocations);
+  await user.click(screen.getAllByRole('button', { name: 'טיפול בפגומים' })[0]!);
+  expect(screen.getByLabelText('מיקום הפגומים')).toHaveProperty('value', '1');
+  await user.selectOptions(screen.getByLabelText('מיקום הפגומים'), '2');
+  await user.click(screen.getByRole('button', { name: 'שמירה' }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(JSON.parse(String(save.mock.calls[0]?.[1]?.body))).toMatchObject({ locationId: 2 });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await user.click(screen.getAllByRole('button', { name: 'טיפול בפגומים' })[1]!);
+  expect(screen.getByLabelText('מיקום הפגומים')).toHaveProperty('value', '');
+});
 it.each([true, false])(
   'opens an existing balance and saves metadata without a stock adjustment (default has stock: %s)',
   async (defaultHasStock) => {

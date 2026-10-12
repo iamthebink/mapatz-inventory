@@ -221,7 +221,15 @@ export function InventoryManagement({
       setTransferCondition('usable');
     }
     if (next.kind === 'damage') {
-      setDamageLocationId('');
+      const defaultLocation = locations.find(
+        (location) =>
+          location.isDefault &&
+          !location.archived &&
+          next.item.balances.some(
+            (balance) => balance.locationId === location.id && balance.damaged > 0,
+          ),
+      );
+      setDamageLocationId(defaultLocation ? String(defaultLocation.id) : '');
       setDamageQuantity('1');
       setDamageNote('');
       setResolution('repair');
