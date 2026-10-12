@@ -79,10 +79,13 @@ process.parentPort.postMessage(restored.worksheets[0].getCell('A1').value); db.c
       });
     });
     expect(proof).toBe(9);
+    // Navigation precedes borrower recovery; graceful close is blocked until it settles.
+    await expect(page.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
     await finishApplication(application, true);
     application = await launch();
     const reopened = await application.firstWindow();
     await reopened.waitForURL(`${origin}/`);
+    await expect(reopened.getByRole('searchbox', { name: 'חיפוש שואל' })).toBeEnabled();
     await expect(reopened.locator('#password')).toHaveCount(0);
   } finally {
     await finishApplication(application);
@@ -1402,7 +1405,8 @@ test('storage-clear failure preserves database and offers retry that completes',
       });
     const { stat } = await import('node:fs/promises');
     expect((await stat(join(context.profile, 'inventory.sqlite'))).size).toBeGreaterThan(0);
-    expect(application.windows()).toHaveLength(0);
+    // Main-process destruction precedes Playwright receiving the page-close event.
+    await expect.poll(() => application.windows()).toHaveLength(0);
     const retryOpened = application.waitForEvent('window');
     await application.evaluate(() => {
       const state = globalThis as typeof globalThis & {
