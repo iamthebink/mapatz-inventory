@@ -20,7 +20,7 @@ import {
   parseResetWorkbook,
   parseBorrowerWorkbook,
 } from '../io/workbook.js';
-import { WORKBOOK_CONTRACT } from '../io/workbook-contract.js';
+import { WORKBOOK_CONTRACT, workbookFilename } from '../io/workbook-contract.js';
 import type { SessionStore } from './session.js';
 
 const positive = z.number().int().positive();
@@ -833,7 +833,7 @@ export function apiRouter(
           ? req.query.resetAllocationLocation
           : undefined,
       );
-      res.type(WORKBOOK_CONTRACT.mimeType).attachment(WORKBOOK_CONTRACT.filename).send(buffer);
+      res.type(WORKBOOK_CONTRACT.mimeType).attachment(workbookFilename()).send(buffer);
     }),
   );
   api.post(

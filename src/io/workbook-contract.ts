@@ -1,7 +1,6 @@
 export const WORKBOOK_CONTRACT = {
   version: 9,
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  filename: 'mapatz-inventory.xlsx',
   sheets: {
     resetLocations: {
       name: 'Reset Locations',
@@ -121,3 +120,13 @@ export const WORKBOOK_CONTRACT = {
 } as const;
 
 export type WorkbookSheetKey = keyof typeof WORKBOOK_CONTRACT.sheets;
+
+export function workbookFilename(date = new Date()): string {
+  const timestamp = [
+    String(date.getFullYear()).padStart(4, '0'),
+    ...[date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()].map((part) =>
+      String(part).padStart(2, '0'),
+    ),
+  ].join('-');
+  return `mapatz-inventory-${timestamp}.xlsx`;
+}

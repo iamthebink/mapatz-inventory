@@ -1,4 +1,5 @@
 import type { ResetOptions } from '../domain/import-export';
+import { workbookFilename } from '../io/workbook-contract.js';
 import {
   isBorrowerValidationEvidence,
   isValidBorrowerProfile,
@@ -685,7 +686,7 @@ export async function downloadInventoryWorkbook(
     return result === 'cancelled' ? 'cancelled' : undefined;
   }
   const disposition = response.headers.get('content-disposition') ?? '';
-  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? 'mapatz-inventory.xlsx';
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? workbookFilename();
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a');
   link.href = url;

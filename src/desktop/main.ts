@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { performSystemReset, removeOwnedSystemData, RESET_PHRASE } from './system-reset.js';
 import { markProfileInitialized, profilePort } from './profile.js';
+import { workbookFilename } from '../io/workbook-contract.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 app.setName('Mapatz Inventory');
@@ -400,7 +401,7 @@ else {
         if (!trusted(event) || !(data instanceof Uint8Array) || data.length > 100 * 1024 * 1024)
           throw new Error('Invalid workbook');
         const selected = await dialog.showSaveDialog(window!, {
-          defaultPath: 'mapatz-inventory.xlsx',
+          defaultPath: workbookFilename(),
           filters: [{ name: 'Excel', extensions: ['xlsx'] }],
         });
         if (selected.canceled || !selected.filePath) return 'cancelled';
