@@ -52,10 +52,10 @@ describe('outstanding loan status', () => {
       within(table)
         .getAllByRole('columnheader')
         .map((cell) => cell.textContent),
-    ).toEqual(['פריט', 'כמות', 'שואל', 'תאריך השאלה']);
+    ).toEqual(['שואל', 'פריט', 'כמות', 'תאריך השאלה']);
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
-    expect(rows.map((row) => within(row).getAllByRole('cell')[1]!.textContent)).toEqual([
+    expect(rows.map((row) => within(row).getAllByRole('cell')[2]!.textContent)).toEqual([
       '2',
       '2',
       '1',

@@ -90,16 +90,16 @@ for (const width of [1280, 320]) {
     const status = page.getByRole('region', { name: 'מצב השאלות' });
     await expect(status).toBeVisible();
     await expect(status.getByRole('columnheader')).toHaveText([
+      'שואל',
       'פריט',
       'כמות',
-      'שואל',
       'תאריך השאלה',
     ]);
     const search = status.getByRole('textbox', { name: 'סינון הטבלה' });
     await search.fill(seed.borrower.fullName);
     const row = status.getByRole('row').filter({ hasText: seed.item.name });
     await expect(row).toBeVisible();
-    await expect(row.getByRole('cell').nth(1)).toHaveText('2');
+    await expect(row.getByRole('cell').nth(2)).toHaveText('2');
     const date = await row.getByRole('cell').nth(3).innerText();
     await search.fill(seed.item.name);
     await expect(row).toBeVisible();
@@ -153,7 +153,7 @@ for (const width of [1280, 320]) {
     const borrower = row.getByRole('button', {
       name: `פתיחת כרטיס שואל — ${seed.borrower.fullName}`,
     });
-    await expect(row.getByRole('cell').nth(1)).toHaveText('2');
+    await expect(row.getByRole('cell').nth(2)).toHaveText('2');
 
     for (const remaining of [1, 0]) {
       await borrower.click();
@@ -174,7 +174,7 @@ for (const width of [1280, 320]) {
         'true',
       );
       if (remaining) {
-        await expect(row.getByRole('cell').nth(1)).toHaveText('1');
+        await expect(row.getByRole('cell').nth(2)).toHaveText('1');
         await expect(borrower).toBeFocused();
       } else {
         await expect(row).toHaveCount(0);

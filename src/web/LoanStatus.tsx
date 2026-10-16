@@ -65,13 +65,6 @@ export function LoanStatus({
   }, [state]);
 
   const columns: TableColumn<LoanRow>[] = [
-    { key: 'item', label: 'פריט', render: (row) => row.itemName, sortValue: (row) => row.itemName },
-    {
-      key: 'quantity',
-      label: 'כמות',
-      render: (row) => row.outstanding,
-      sortValue: (row) => row.outstanding,
-    },
     {
       key: 'borrower',
       label: 'שואל',
@@ -95,6 +88,13 @@ export function LoanStatus({
         </button>
       ),
       sortValue: (row) => row.borrowerName,
+    },
+    { key: 'item', label: 'פריט', render: (row) => row.itemName, sortValue: (row) => row.itemName },
+    {
+      key: 'quantity',
+      label: 'כמות',
+      render: (row) => row.outstanding,
+      sortValue: (row) => row.outstanding,
     },
     {
       key: 'date',
