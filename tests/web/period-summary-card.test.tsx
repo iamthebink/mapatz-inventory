@@ -72,7 +72,7 @@ describe('summary card entry', () => {
         <BorrowerWorkflow ref={ref} showToast={showToast} deskVisible={false} />
       </DialogStackProvider>,
     );
-    ref.current?.openFromSummary(borrower, returned);
+    ref.current?.openFromOverview(borrower, returned);
     expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() => expect(ref.current).not.toBeNull());
     await waitFor(() => expect(screen.getByText('חיפוש שואל')).toBeTruthy());
@@ -80,7 +80,7 @@ describe('summary card entry', () => {
     await waitFor(() =>
       expect(showToast).toHaveBeenCalledWith('פתיחת כרטיס שואל', expect.any(String), 'warning'),
     );
-    ref.current?.openFromSummary(borrower, returned);
+    ref.current?.openFromOverview(borrower, returned);
     const dialog = await screen.findByRole('dialog', { name: /כרטיס שואל/ });
     expect(dialog.textContent).toContain('אור');
     await userEvent.click(screen.getAllByRole('button', { name: 'סגירה' })[1]!);

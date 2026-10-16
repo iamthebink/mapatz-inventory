@@ -62,9 +62,11 @@ import {
 } from './borrower-workflow-recovery';
 import type { ToastTone } from './Toast';
 
+type BorrowerCardIdentity = Pick<Borrower, 'id' | 'fullName'> & Partial<Borrower>;
+
 export type BorrowerWorkflowHandle = {
   requestNavigation: (complete: () => void) => void;
-  openFromSummary: (borrower: Borrower, onReturn: () => void) => void;
+  openFromOverview: (borrower: Pick<Borrower, 'id' | 'fullName'>, onReturn: () => void) => void;
   retryStartup: () => void;
 };
 
@@ -202,7 +204,7 @@ export const BorrowerWorkflow = forwardRef<
     ReturnType<typeof fetchBorrowerSearch>
   > | null>(null);
   const [resolvedSearch, setResolvedSearch] = useState<string | null>(null);
-  const [selectedBorrower, setSelectedBorrower] = useState<Borrower | null>(null);
+  const [selectedBorrower, setSelectedBorrower] = useState<BorrowerCardIdentity | null>(null);
   const [cardLoadFailed, setCardLoadFailed] = useState(false);
   const [operation, setOperationState] = useState<OperationState | null>(null);
   const operationRef = useRef<OperationState | null>(null);
@@ -251,7 +253,7 @@ export const BorrowerWorkflow = forwardRef<
   const initiallyFocusedBorrowerRef = useRef<number | null>(null);
   const frozenAttemptRef = useRef<FrozenAttempt | null>(null);
   const navigationRef = useRef<(() => void) | null>(null);
-  const summaryReturnRef = useRef<(() => void) | null>(null);
+  const overviewReturnRef = useRef<(() => void) | null>(null);
   const sentinelRef = useRef(false);
   const suppressPopRef = useRef(false);
   const feedbackRef = useRef<WorkflowFeedback | null>(null);
@@ -464,13 +466,13 @@ export const BorrowerWorkflow = forwardRef<
 
   const closeCard = useCallback(
     (after?: () => void) => {
-      const returnToSummary = after ? null : summaryReturnRef.current;
-      summaryReturnRef.current = null;
+      const returnToOverview = after ? null : overviewReturnRef.current;
+      overviewReturnRef.current = null;
       resetCard();
       removeSentinel(() => {
         if (deskVisible) searchRef.current?.focus();
         after?.();
-        returnToSummary?.();
+        returnToOverview?.();
       });
     },
     [deskVisible, removeSentinel, resetCard],
@@ -525,7 +527,7 @@ export const BorrowerWorkflow = forwardRef<
         return;
       }
       if (
-        summaryReturnRef.current &&
+        overviewReturnRef.current &&
         operation?.phase.kind === 'refresh-required' &&
         operation.phase.intent === 'save-and-close'
       ) {
@@ -573,7 +575,7 @@ export const BorrowerWorkflow = forwardRef<
       }
       requestExit(null, complete);
     },
-    openFromSummary: (borrower, onReturn) => {
+    openFromOverview: (borrower, onReturn) => {
       if (startup !== 'ready') {
         showToast('פתיחת כרטיס שואל', 'יש להשלים את שחזור הפעולות לפני פתיחת כרטיס.', 'warning');
         return;
@@ -582,7 +584,7 @@ export const BorrowerWorkflow = forwardRef<
         showToast('פתיחת כרטיס שואל', 'יש להשלים את הפעולה הפעילה תחילה.', 'warning');
         return;
       }
-      summaryReturnRef.current = onReturn;
+      overviewReturnRef.current = onReturn;
       void openBorrower(borrower);
     },
     retryStartup: () => void initialize(),
@@ -600,7 +602,7 @@ export const BorrowerWorkflow = forwardRef<
       Boolean(operation?.staged.length) ||
       Boolean(operation && operationLocks(operation).exit) ||
       Boolean(
-        summaryReturnRef.current &&
+        overviewReturnRef.current &&
         operation?.phase.kind === 'refresh-required' &&
         operation.phase.intent === 'save-and-close',
       );
@@ -635,7 +637,7 @@ export const BorrowerWorkflow = forwardRef<
         Boolean(operation?.staged.length) ||
         Boolean(operation && operationLocks(operation).exit) ||
         Boolean(
-          summaryReturnRef.current &&
+          overviewReturnRef.current &&
           operation?.phase.kind === 'refresh-required' &&
           operation.phase.intent === 'save-and-close',
         ) ||
@@ -693,7 +695,7 @@ export const BorrowerWorkflow = forwardRef<
     return () => window.clearTimeout(timer);
   }, [operation]);
 
-  const openBorrower = async (borrower: Borrower) => {
+  const openBorrower = async (borrower: BorrowerCardIdentity) => {
     const requestId = ++cardLoadRequestRef.current;
     setSelectedBorrower(borrower);
     setCardLoadFailed(false);
@@ -1115,7 +1117,7 @@ export const BorrowerWorkflow = forwardRef<
           : { type: 'reload-failed', reloadId: requestId },
       );
       setOperation(failed);
-      if (!summaryReturnRef.current && !operationPresentation(failed).cardOpen) {
+      if (!overviewReturnRef.current && !operationPresentation(failed).cardOpen) {
         setSearch('');
         setSelectedBorrower(null);
         // Keep the history sentinel until durable verification ownership is released.
@@ -1620,7 +1622,7 @@ export const BorrowerWorkflow = forwardRef<
             !operation ||
             (!operationLocks(operation).exit &&
               !(
-                summaryReturnRef.current &&
+                overviewReturnRef.current &&
                 operation.phase.kind === 'refresh-required' &&
                 operation.phase.intent === 'save-and-close'
               ))
@@ -1637,7 +1639,7 @@ export const BorrowerWorkflow = forwardRef<
                   disabled={
                     operationLocks(operation).exit ||
                     Boolean(
-                      summaryReturnRef.current &&
+                      overviewReturnRef.current &&
                       operation.phase.kind === 'refresh-required' &&
                       operation.phase.intent === 'save-and-close',
                     )
@@ -1660,8 +1662,17 @@ export const BorrowerWorkflow = forwardRef<
           }
         >
           <p ref={cardOverviewRef} className="borrower-identity-meta" tabIndex={-1}>
-            <bdi>{selectedBorrower.playaName}</bdi> ·{' '}
-            <bdi dir="ltr">{selectedBorrower.phoneNumber}</bdi> · {selectedBorrower.campDepartment}
+            {selectedBorrower.playaName ||
+            selectedBorrower.phoneNumber ||
+            selectedBorrower.campDepartment ? (
+              <>
+                <bdi>{selectedBorrower.playaName}</bdi> ·{' '}
+                <bdi dir="ltr">{selectedBorrower.phoneNumber}</bdi> ·{' '}
+                {selectedBorrower.campDepartment}
+              </>
+            ) : (
+              selectedBorrower.fullName
+            )}
           </p>
           {cardLoadFailed ? (
             <div className="card-load-failure">

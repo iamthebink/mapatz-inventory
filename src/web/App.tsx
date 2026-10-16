@@ -1119,7 +1119,24 @@ export function App() {
         )}
         {tab === 'desk' && deskView === 'loans' && (
           <div id="desk-loans-panel">
-            <LoanStatus showToast={showToast} />
+            {workflowStartup === 'ready' ? (
+              <LoanStatus
+                showToast={showToast}
+                openCard={(borrower, onReturn) =>
+                  borrowerWorkflowRef.current?.openFromOverview(borrower, onReturn)
+                }
+              />
+            ) : workflowStartup === 'loading' ? (
+              <p role="status">בודק פעולות שמורות…</p>
+            ) : (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => borrowerWorkflowRef.current?.retryStartup()}
+              >
+                ניסיון טעינה מחדש
+              </button>
+            )}
           </div>
         )}
         {tab === 'desk' && (
@@ -1165,7 +1182,7 @@ export function App() {
           returnRevision={summaryReturnRevision}
           showToast={showToast}
           openCard={(borrower) =>
-            borrowerWorkflowRef.current?.openFromSummary(borrower, () =>
+            borrowerWorkflowRef.current?.openFromOverview(borrower, () =>
               setSummaryReturnRevision((value) => value + 1),
             )
           }

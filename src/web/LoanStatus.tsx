@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { Borrower } from '../domain/types';
 import { api } from './api';
 import { DataTable, type TableColumn } from './DataTable';
 import type { ToastTone } from './Toast';
@@ -6,13 +7,14 @@ import type { ToastTone } from './Toast';
 type Loan = {
   checkoutId: number;
   itemName: string;
+  borrowerId: number;
   borrowerName: string;
   outstanding: number;
   createdAt: string;
 };
 
 type LoanRow = Loan & { date: string; dateSearch: string; timestamp: number };
-type LoadState = { kind: 'loading' | 'ready' | 'failed'; rows: LoanRow[] };
+type LoadState = { kind: 'loading' | 'ready' | 'failed'; rows: LoanRow[]; revision: number };
 
 const dateFormat = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -39,29 +41,68 @@ function loanRow(loan: Loan): LoanRow {
   };
 }
 
-const columns: TableColumn<LoanRow>[] = [
-  { key: 'item', label: 'פריט', render: (row) => row.itemName, sortValue: (row) => row.itemName },
-  {
-    key: 'borrower',
-    label: 'שואל',
-    render: (row) => row.borrowerName,
-    sortValue: (row) => row.borrowerName,
-  },
-  {
-    key: 'date',
-    label: 'תאריך השאלה',
-    render: (row) => <bdi dir="ltr">{row.date}</bdi>,
-    sortValue: (row) => row.timestamp,
-  },
-];
-
 export function LoanStatus({
   showToast,
+  openCard,
 }: {
   showToast: (title: string, message: string, tone: ToastTone) => void;
+  openCard: (borrower: Pick<Borrower, 'id' | 'fullName'>, onReturn: () => void) => void;
 }) {
-  const [state, setState] = useState<LoadState>({ kind: 'loading', rows: [] });
+  const [state, setState] = useState<LoadState>({ kind: 'loading', rows: [], revision: -1 });
   const [revision, setRevision] = useState(0);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const borrowerNameRefs = useRef(new Map<number, HTMLButtonElement>());
+  const returnFocusRef = useRef<{ checkoutId: number; afterRevision: number } | null>(null);
+
+  useEffect(() => {
+    const pending = returnFocusRef.current;
+    // Restore only after the return-triggered refresh, never against the old rows.
+    if (state.kind === 'loading' || !pending || state.revision <= pending.afterRevision) return;
+    const { checkoutId } = pending;
+    returnFocusRef.current = null;
+    const trigger = state.kind === 'ready' ? borrowerNameRefs.current.get(checkoutId) : null;
+    (trigger ?? headingRef.current)?.focus();
+  }, [state]);
+
+  const columns: TableColumn<LoanRow>[] = [
+    { key: 'item', label: 'פריט', render: (row) => row.itemName, sortValue: (row) => row.itemName },
+    {
+      key: 'quantity',
+      label: 'כמות',
+      render: (row) => row.outstanding,
+      sortValue: (row) => row.outstanding,
+    },
+    {
+      key: 'borrower',
+      label: 'שואל',
+      render: (row) => (
+        <button
+          type="button"
+          className="borrower-directory-action"
+          aria-label={`פתיחת כרטיס שואל — ${row.borrowerName}`}
+          ref={(node) => {
+            if (node) borrowerNameRefs.current.set(row.checkoutId, node);
+            else borrowerNameRefs.current.delete(row.checkoutId);
+          }}
+          onClick={() =>
+            openCard({ id: row.borrowerId, fullName: row.borrowerName }, () => {
+              returnFocusRef.current = { checkoutId: row.checkoutId, afterRevision: revision };
+              setRevision((current) => current + 1);
+            })
+          }
+        >
+          {row.borrowerName}
+        </button>
+      ),
+      sortValue: (row) => row.borrowerName,
+    },
+    {
+      key: 'date',
+      label: 'תאריך השאלה',
+      render: (row) => <bdi dir="ltr">{row.date}</bdi>,
+      sortValue: (row) => row.timestamp,
+    },
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -72,11 +113,12 @@ export function LoanStatus({
         setState({
           kind: 'ready',
           rows: loans.filter((loan) => loan.outstanding > 0).map(loanRow),
+          revision,
         });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        setState((current) => ({ ...current, kind: 'failed' }));
+        setState((current) => ({ ...current, kind: 'failed', revision }));
         showToast(
           'טעינת מצב השאלות',
           error instanceof Error ? error.message : 'טעינת ההשאלות נכשלה',
@@ -91,7 +133,12 @@ export function LoanStatus({
   return (
     <section className="space-y-4" aria-labelledby="loan-status-heading">
       <div className="flex items-center justify-between gap-3">
-        <h2 id="loan-status-heading" className="text-xl font-bold text-ctp-text">
+        <h2
+          id="loan-status-heading"
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-xl font-bold text-ctp-text"
+        >
           מצב השאלות
         </h2>
         <button

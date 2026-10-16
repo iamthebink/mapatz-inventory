@@ -13,6 +13,7 @@ afterEach(() => {
 const loans = [
   {
     checkoutId: 1,
+    borrowerId: 11,
     itemName: 'פטיש',
     borrowerName: 'דנה',
     outstanding: 2,
@@ -20,6 +21,7 @@ const loans = [
   },
   {
     checkoutId: 2,
+    borrowerId: 12,
     itemName: 'אוהל',
     borrowerName: 'Alex',
     outstanding: 1,
@@ -27,6 +29,7 @@ const loans = [
   },
   {
     checkoutId: 3,
+    borrowerId: 13,
     itemName: 'אבוד בלבד',
     borrowerName: 'דן',
     outstanding: 0,
@@ -42,17 +45,22 @@ describe('outstanding loan status', () => {
       { ...loans[0], checkoutId: 4, createdAt: '2026-10-14 10:00:00' },
       { ...loans[0], checkoutId: 5, itemName: 'הוחזר', outstanding: 0 },
     ]);
-    render(<LoanStatus showToast={vi.fn()} />);
+    render(<LoanStatus openCard={vi.fn()} showToast={vi.fn()} />);
     expect(screen.getByRole('status').textContent).toContain('טוען');
     const table = await screen.findByRole('table');
     expect(
       within(table)
         .getAllByRole('columnheader')
         .map((cell) => cell.textContent),
-    ).toEqual(['פריט', 'שואל', 'תאריך השאלה']);
+    ).toEqual(['פריט', 'כמות', 'שואל', 'תאריך השאלה']);
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
-    expect(rows.map((row) => within(row).getAllByRole('cell')[2]!.textContent)).toEqual([
+    expect(rows.map((row) => within(row).getAllByRole('cell')[1]!.textContent)).toEqual([
+      '2',
+      '2',
+      '1',
+    ]);
+    expect(rows.map((row) => within(row).getAllByRole('cell')[3]!.textContent)).toEqual([
       '16.10.2026',
       '14.10.2026',
       '04.09.2026',
@@ -71,7 +79,7 @@ describe('outstanding loan status', () => {
     ['09.2026', 'Alex'],
   ])('filters by item, borrower, and local borrow date: %s', async (query, borrower) => {
     vi.mocked(api).mockResolvedValue(loans);
-    render(<LoanStatus showToast={vi.fn()} />);
+    render(<LoanStatus openCard={vi.fn()} showToast={vi.fn()} />);
     fireEvent.change(await screen.findByRole('textbox', { name: 'סינון הטבלה' }), {
       target: { value: query },
     });
@@ -85,7 +93,7 @@ describe('outstanding loan status', () => {
   it('reports a load failure through a toast and retries without pretending there are no loans', async () => {
     const showToast = vi.fn();
     vi.mocked(api).mockRejectedValueOnce(new Error('אין חיבור')).mockResolvedValueOnce([]);
-    render(<LoanStatus showToast={showToast} />);
+    render(<LoanStatus openCard={vi.fn()} showToast={showToast} />);
     const retry = await screen.findByRole('button', { name: 'ניסיון טעינה מחדש' });
     expect(showToast).toHaveBeenCalledWith('טעינת מצב השאלות', 'אין חיבור', 'error');
     expect(screen.queryByRole('table')).toBeNull();
@@ -99,19 +107,19 @@ describe('outstanding loan status', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce(loans);
     const showToast = vi.fn();
-    const view = render(<LoanStatus showToast={showToast} />);
+    const view = render(<LoanStatus openCard={vi.fn()} showToast={showToast} />);
     await screen.findByText('דנה');
     fireEvent.click(screen.getByRole('button', { name: 'רענון' }));
     await screen.findByText('לא נמצאו השאלות להצגה');
     view.unmount();
-    render(<LoanStatus showToast={showToast} />);
+    render(<LoanStatus openCard={vi.fn()} showToast={showToast} />);
     await screen.findByText('דנה');
     expect(api).toHaveBeenCalledTimes(3);
   });
 
   it('preserves the search, sorting, and page size through refresh', async () => {
     vi.mocked(api).mockResolvedValue(loans);
-    render(<LoanStatus showToast={vi.fn()} />);
+    render(<LoanStatus openCard={vi.fn()} showToast={vi.fn()} />);
     const search = await screen.findByRole('textbox', { name: 'סינון הטבלה' });
     fireEvent.change(search, { target: { value: 'דנה' } });
     fireEvent.click(screen.getByRole('button', { name: 'תאריך השאלה' }));
@@ -121,7 +129,7 @@ describe('outstanding loan status', () => {
     fireEvent.click(screen.getByRole('button', { name: 'רענון' }));
     await screen.findByRole('table');
     expect(screen.getByRole('textbox', { name: 'סינון הטבלה' })).toHaveProperty('value', 'דנה');
-    expect(screen.queryByRole('cell', { name: 'Alex' })).toBeNull();
+    expect(screen.queryByText('Alex')).toBeNull();
     expect(
       screen.getByRole('columnheader', { name: 'תאריך השאלה' }).getAttribute('aria-sort'),
     ).toBe('ascending');
@@ -136,9 +144,42 @@ describe('outstanding loan status', () => {
       }),
     );
     const showToast = vi.fn();
-    const view = render(<LoanStatus showToast={showToast} />);
+    const view = render(<LoanStatus openCard={vi.fn()} showToast={showToast} />);
     view.unmount();
     await act(async () => reject(new Error('late error')));
     expect(showToast).not.toHaveBeenCalled();
   });
+
+  it('opens the correct borrower by id and refreshes the filtered quantity on return', async () => {
+    vi.mocked(api)
+      .mockResolvedValueOnce(loans)
+      .mockResolvedValueOnce([{ ...loans[0], outstanding: 1 }]);
+    const openCard = vi.fn();
+    render(<LoanStatus openCard={openCard} showToast={vi.fn()} />);
+    const search = await screen.findByRole('textbox', { name: 'סינון הטבלה' });
+    fireEvent.change(search, { target: { value: 'דנה' } });
+    fireEvent.click(screen.getByRole('button', { name: 'פתיחת כרטיס שואל — דנה' }));
+    expect(openCard).toHaveBeenCalledWith({ id: 11, fullName: 'דנה' }, expect.any(Function));
+    act(() => openCard.mock.calls[0]![1]());
+    await screen.findByRole('table');
+    expect(search).toHaveProperty('value', 'דנה');
+    expect(screen.getByRole('cell', { name: '1' })).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'פתיחת כרטיס שואל — דנה' }),
+    );
+  });
+
+  it.each(['removed', 'failed'])(
+    'returns focus to the heading when the source row is %s',
+    async (result) => {
+      vi.mocked(api).mockResolvedValueOnce(loans);
+      if (result === 'removed') vi.mocked(api).mockResolvedValueOnce([]);
+      else vi.mocked(api).mockRejectedValueOnce(new Error('אין חיבור'));
+      const openCard = vi.fn();
+      render(<LoanStatus openCard={openCard} showToast={vi.fn()} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'פתיחת כרטיס שואל — דנה' }));
+      await act(async () => openCard.mock.calls[0]![1]());
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'מצב השאלות' }));
+    },
+  );
 });

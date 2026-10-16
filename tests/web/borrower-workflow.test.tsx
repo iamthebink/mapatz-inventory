@@ -254,7 +254,7 @@ it('returns to the originating summary once when an earlier history listener rer
     // own listener receives the same event. The pending completion must survive.
     rerenderWorkflow = () => flushSync(() => view.rerender(workflow(true)));
     await waitFor(() => expect(startupChanged).toHaveBeenLastCalledWith('ready'));
-    act(() => ref.current?.openFromSummary(borrower, returned));
+    act(() => ref.current?.openFromOverview(borrower, returned));
     const card = await screen.findByRole('dialog', { name: /כרטיס שואל/ });
     await userEvent.click(within(card).getAllByRole('button', { name: 'סגירה' }).at(-1)!);
     expect(history.back).toHaveBeenCalledOnce();
