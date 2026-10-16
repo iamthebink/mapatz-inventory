@@ -111,6 +111,7 @@ function setup(
     if (path === '/api/borrowers/search?q=')
       return response({ ledgerEpoch: 1, active: [], archivedMatches: [] });
     if (path === '/api/ledger') return response(ledgerEntries);
+    if (path === '/api/loans') return response([]);
     if (path === '/api/inventory/items' && method === 'POST') {
       if (currentRole !== 'admin')
         return response({ error: 'forbidden', message: 'אין הרשאה' }, 403);
@@ -399,47 +400,77 @@ describe('inventory management in App', () => {
     await user.click(screen.getByRole('button', { name: 'מחיקת טיוטה' }));
     expect(window.location.pathname).toBe('/summary');
   });
-  it('guards a dirty consumables draft when switching back to borrower work', async () => {
-    const tape: Item = {
-      ...hammer,
-      id: 20,
-      name: 'סרט',
-      kind: 'consumable',
-      available: 5,
-      borrowed: 0,
-      lost: 0,
-      damaged: 0,
-    };
-    const { user } = setup('operator', '/', [hammer, tape]);
-    await user.click(await screen.findByRole('button', { name: 'ציוד מתכלה' }));
-    await user.click(
-      within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
-    );
-    await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
+  it.each(['השאלות והחזרות', 'מצב השאלות'])(
+    'guards a dirty consumables draft when switching to %s',
+    async (destination) => {
+      const tape: Item = {
+        ...hammer,
+        id: 20,
+        name: 'סרט',
+        kind: 'consumable',
+        available: 5,
+        borrowed: 0,
+        lost: 0,
+        damaged: 0,
+      };
+      const { user } = setup('operator', '/', [hammer, tape]);
+      await user.click(await screen.findByRole('button', { name: 'ציוד מתכלה' }));
+      await user.click(
+        within(screen.getByRole('row', { name: /סרט/ })).getByRole('button', { name: 'ניפוק' }),
+      );
+      await user.click(screen.getByRole('button', { name: 'הוספה לעסקה' }));
+      await user.click(screen.getByRole('button', { name: destination }));
+      const discard = screen.getByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' });
+      expect(
+        within(discard)
+          .getByRole('button', { name: 'להמשיך לערוך' })
+          .classList.contains('secondary-button'),
+      ).toBe(true);
+      expect(
+        within(discard)
+          .getByRole('button', { name: 'מחיקת טיוטה' })
+          .classList.contains('danger-button'),
+      ).toBe(true);
+      expect(
+        document
+          .querySelector('[aria-controls="desk-consumables-panel"]')
+          ?.getAttribute('aria-pressed'),
+      ).toBe('true');
+      await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
+      expect(screen.getByText('× 1')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: destination }));
+      await user.click(screen.getByRole('button', { name: 'מחיקת טיוטה' }));
+      expect(screen.getByRole('button', { name: destination }).getAttribute('aria-pressed')).toBe(
+        'true',
+      );
+    },
+  );
+  it('opens loan status from the borrower desk and returns through either desk view', async () => {
+    const { user } = setup('operator', '/');
+    await screen.findByRole('searchbox', { name: 'חיפוש שואל' });
+    await user.click(screen.getByRole('button', { name: 'מצב השאלות' }));
+    expect(await screen.findByText('לא נמצאו השאלות להצגה')).toBeTruthy();
+    expect(screen.queryByRole('searchbox', { name: 'חיפוש שואל' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'ציוד מתכלה' }));
+    expect(screen.queryByRole('heading', { name: 'מצב השאלות' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'מצב השאלות' }));
+    await screen.findByText('לא נמצאו השאלות להצגה');
     await user.click(screen.getByRole('button', { name: 'השאלות והחזרות' }));
-    const discard = screen.getByRole('alertdialog', { name: 'מחיקת טיוטת ניפוק?' });
-    expect(
-      within(discard)
-        .getByRole('button', { name: 'להמשיך לערוך' })
-        .classList.contains('secondary-button'),
-    ).toBe(true);
-    expect(
-      within(discard)
-        .getByRole('button', { name: 'מחיקת טיוטה' })
-        .classList.contains('danger-button'),
-    ).toBe(true);
-    expect(
-      document
-        .querySelector('[aria-controls="desk-consumables-panel"]')
-        ?.getAttribute('aria-pressed'),
-    ).toBe('true');
+    expect(await screen.findByRole('searchbox', { name: 'חיפוש שואל' })).toBeTruthy();
+  });
+  it('keeps a dirty borrower draft until the loan-status navigation guard permits discard', async () => {
+    const { user } = setup('operator', '/');
+    await user.click(await screen.findByRole('button', { name: 'יצירת שואל חדש' }));
+    await user.type(screen.getByRole('textbox', { name: 'שם מלא' }), 'שואל חדש');
+    // Exercise the navigation handler directly while the dialog makes the desk inert.
+    fireEvent.click(screen.getByRole('button', { name: 'מצב השאלות', hidden: true }));
+    await screen.findByRole('alertdialog', { name: 'לבטל טיוטת שואל?' });
     await user.click(screen.getByRole('button', { name: 'להמשיך לערוך' }));
-    expect(screen.getByText('× 1')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'השאלות והחזרות' }));
+    expect(screen.getByRole('textbox', { name: 'שם מלא' })).toHaveProperty('value', 'שואל חדש');
+    expect(screen.queryByRole('heading', { name: 'מצב השאלות' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'מצב השאלות', hidden: true }));
     await user.click(screen.getByRole('button', { name: 'מחיקת טיוטה' }));
-    expect(
-      screen.getByRole('button', { name: 'השאלות והחזרות' }).getAttribute('aria-pressed'),
-    ).toBe('true');
+    expect(await screen.findByRole('heading', { name: 'מצב השאלות' })).toBeTruthy();
   });
   it('opens a restored uncertain batch in consumables and locks the view switch', async () => {
     const saved = JSON.stringify({

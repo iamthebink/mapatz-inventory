@@ -55,6 +55,7 @@ import {
 import { Toast, type ToastMessage, type ToastTone } from './Toast';
 import { BorrowerWorkflow, type BorrowerWorkflowHandle } from './BorrowerWorkflow';
 import { ConsumablesDesk } from './ConsumablesDesk';
+import { LoanStatus } from './LoanStatus';
 import { hasStoredConsumableAttempt } from './consumable-attempt-storage';
 import { PeriodSummary } from './PeriodSummary';
 import { InventoryManagement } from './InventoryManagement';
@@ -86,7 +87,7 @@ type LedgerEvent = {
 type Session = { role: Role; deadline: number | null };
 type Tab = 'desk' | 'summary' | 'catalogs' | 'ledger' | 'radios';
 type ManagementTab = 'inventory' | 'borrowers' | 'data' | 'access';
-type DeskView = 'borrowers' | 'consumables';
+type DeskView = 'borrowers' | 'consumables' | 'loans';
 type BorrowerDeletionStatus = {
   borrower: Borrower;
   outstanding: number;
@@ -280,7 +281,11 @@ export function App() {
       setDeskView(nextView);
       return;
     }
-    borrowerWorkflowRef.current?.requestNavigation(() => setDeskView(nextView));
+    if (deskView === 'borrowers') {
+      borrowerWorkflowRef.current?.requestNavigation(() => setDeskView(nextView));
+      return;
+    }
+    setDeskView(nextView);
   };
 
   const clearImportInput = useCallback((mode: 'reset' | 'recovery') => {
@@ -1102,6 +1107,19 @@ export function App() {
             >
               ציוד מתכלה
             </button>
+            <button
+              type="button"
+              aria-pressed={deskView === 'loans'}
+              aria-controls="desk-loans-panel"
+              onClick={() => selectDeskView('loans')}
+            >
+              מצב השאלות
+            </button>
+          </div>
+        )}
+        {tab === 'desk' && deskView === 'loans' && (
+          <div id="desk-loans-panel">
+            <LoanStatus showToast={showToast} />
           </div>
         )}
         {tab === 'desk' && (
